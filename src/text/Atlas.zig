@@ -7,7 +7,8 @@ bitmap: []u8,
 cursor_x: u32,
 cursor_y: u32,
 shelf_h: u32,
-dirty: bool,
+dirty_min_y: u32,
+dirty_max_y_excl: u32,
 allocator: std.mem.Allocator,
 
 const Atlas = @This();
@@ -22,9 +23,30 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !Atlas {
         .cursor_x = 0,
         .cursor_y = 0,
         .shelf_h = 0,
-        .dirty = true,
+        .dirty_min_y = 0,
+        .dirty_max_y_excl = height,
         .allocator = allocator,
     };
+}
+
+pub fn isDirty(self: *const Atlas) bool {
+    return self.dirty_min_y < self.dirty_max_y_excl;
+}
+
+pub fn markClean(self: *Atlas) void {
+    self.dirty_min_y = self.height;
+    self.dirty_max_y_excl = 0;
+}
+
+fn markDirtyRows(self: *Atlas, y0: u32, y1_excl: u32) void {
+    if (y0 >= y1_excl) return;
+    if (!self.isDirty()) {
+        self.dirty_min_y = y0;
+        self.dirty_max_y_excl = y1_excl;
+    } else {
+        self.dirty_min_y = @min(self.dirty_min_y, y0);
+        self.dirty_max_y_excl = @max(self.dirty_max_y_excl, y1_excl);
+    }
 }
 
 pub fn deinit(self: *Atlas) void {
@@ -61,11 +83,11 @@ pub fn pack(self: *Atlas, bitmap: []const u8, w: u32, h: u32) !glyph.Rect {
 
     self.cursor_x += w + padding;
     self.shelf_h = @max(self.shelf_h, h);
-    self.dirty = true;
+    self.markDirtyRows(self.cursor_y, self.cursor_y + h);
 
     return rect;
 }
 
 pub fn flush(self: *Atlas) void {
-    if (!self.dirty) return;
+    _ = self;
 }

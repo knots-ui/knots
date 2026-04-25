@@ -105,15 +105,15 @@ pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, dec
 }
 
 pub fn lineHeight(self: *UI, size: f32, font: ?[]const u8) !f32 {
-    const face = self.font.getFace(font);
+    const face = try self.font.getFace(font);
     const scale = self.content_scale;
     return (try face.lineHeight(size * scale)) / scale;
 }
 
 pub fn textDecoration(self: *UI, content: []const u8, size: f32, font: ?[]const u8) !Decoration {
-    const face = self.font.getFace(font);
+    const face = try self.font.getFace(font);
     const scale = self.content_scale;
-    const measured = try face.measure(self.allocator, content, size * scale);
+    const measured = try face.measure(content, size * scale);
     return .{ .text = .{
         .content = content,
         .size = size,
@@ -191,44 +191,23 @@ pub fn resolve(self: *UI) !void {
         .getFn = @ptrCast(&State.getScroll),
     });
     try self.layout_ctx.buildZOrder();
-    self.syncSelectAnchors();
-    self.syncSliderBounds();
-    self.syncMeasuredBounds();
-    self.syncTextSelectBounds();
+    self.syncStateBounds();
 }
 
-fn syncTextSelectBounds(self: *UI) void {
+fn syncStateBounds(self: *UI) void {
+    const root_box = self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
     for (self.layout_ctx.pool.elements.items) |el| {
-        if (self.state.get(.text_select, el.id)) |s| {
-            s.box = el.box;
-        }
-    }
-}
-
-fn syncSliderBounds(self: *UI) void {
-    for (self.layout_ctx.pool.elements.items) |el| {
-        if (self.state.get(.slider, el.id)) |s| {
-            s.bounds = el.box;
-        }
-    }
-}
-
-fn syncMeasuredBounds(self: *UI) void {
-    for (self.layout_ctx.pool.elements.items) |el| {
+        if (self.state.get(.text_select, el.id)) |s| s.box = el.box;
+        if (self.state.get(.slider, el.id)) |s| s.bounds = el.box;
         if (self.state.get(.measured, el.id)) |s| {
             s.width = el.box.w;
             s.height = el.box.h;
         }
-    }
-}
-
-fn syncSelectAnchors(self: *UI) void {
-    const root_box = self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
-    for (self.layout_ctx.pool.elements.items) |el| {
-        if (el.z_index != 0) continue;
-        if (self.state.get(.select_input, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
+        if (el.z_index == 0) {
+            if (self.state.get(.select_input, el.id)) |s| {
+                s.anchor_box = el.box;
+                s.viewport_box = root_box;
+            }
         }
     }
 }
@@ -263,15 +242,9 @@ pub fn clickedWithin(self: *UI, ancestor_id: Element.Id) bool {
 fn isDescendantOrSelf(self: *UI, descendant_id: Element.Id, ancestor_id: Element.Id) bool {
     if (descendant_id == Element.INVALID_ID) return false;
     if (descendant_id == ancestor_id) return true;
-    var ancestor_slot: ?Element.Slot = null;
-    var descendant_slot: ?Element.Slot = null;
-    for (self.layout_ctx.pool.elements.items, 0..) |el, i| {
-        if (el.id == ancestor_id) ancestor_slot = @intCast(i);
-        if (el.id == descendant_id) descendant_slot = @intCast(i);
-        if (ancestor_slot != null and descendant_slot != null) break;
-    }
-    if (ancestor_slot == null or descendant_slot == null) return false;
-    return self.layout_ctx.isDescendantOf(descendant_slot.?, ancestor_slot.?);
+    const ancestor_slot = self.layout_ctx.slotForId(ancestor_id) orelse return false;
+    const descendant_slot = self.layout_ctx.slotForId(descendant_id) orelse return false;
+    return self.layout_ctx.isDescendantOf(descendant_slot, ancestor_slot);
 }
 
 pub fn collectInput(self: *UI, input: Window.Input, now_ms: i64) !void {
@@ -293,7 +266,7 @@ pub fn collectInput(self: *UI, input: Window.Input, now_ms: i64) !void {
     }
     if (self.input.mouse_released) self.state.active = Element.INVALID_ID;
 
-    if (input.scroll_delta[0] != 0 or input.scroll_delta[1] != 0) {
+    if (self.layout_ctx.has_scroll and (input.scroll_delta[0] != 0 or input.scroll_delta[1] != 0)) {
         try self.routeScroll(self.layout_ctx.pool.elements.items, input);
     }
 
@@ -366,6 +339,7 @@ fn routeScroll(self: *UI, elements: []Element, input: Window.Input) !void {
 }
 
 pub fn tessellate(self: *UI, allocator: Allocator, draw_list: *DrawList) !void {
+    defer self.font.endFrame();
     var it = self.layout_ctx.z_used.iterator(.{});
     while (it.next()) |z| {
         draw_list.setLayer(@intCast(z));
@@ -425,56 +399,68 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                         continue;
                     };
 
-                const hw = el.box.w / 2.0;
-                const hh = el.box.h / 2.0;
-                const cx = el.box.x + hw;
-                const cy = el.box.y + hh;
-
-                const vertices = [4]gpu.Vertex{
-                    .{ .pos = .{ cx - hw, cy - hh }, .uv = .{ -hw, -hh }, .color = r.color, .corner_radius = r.corner_radius, .half_size = .{ hw, hh }, .border_width = r.border_width, .border_color = r.border_color, .prim_type = 0.0 },
-                    .{ .pos = .{ cx + hw, cy - hh }, .uv = .{ hw, -hh }, .color = r.color, .corner_radius = r.corner_radius, .half_size = .{ hw, hh }, .border_width = r.border_width, .border_color = r.border_color, .prim_type = 0.0 },
-                    .{ .pos = .{ cx + hw, cy + hh }, .uv = .{ hw, hh }, .color = r.color, .corner_radius = r.corner_radius, .half_size = .{ hw, hh }, .border_width = r.border_width, .border_color = r.border_color, .prim_type = 0.0 },
-                    .{ .pos = .{ cx - hw, cy + hh }, .uv = .{ -hw, hh }, .color = r.color, .corner_radius = r.corner_radius, .half_size = .{ hw, hh }, .border_width = r.border_width, .border_color = r.border_color, .prim_type = 0.0 },
+                const inst = gpu.Instance{
+                    .pos = .{ el.box.x, el.box.y },
+                    .size = .{ el.box.w, el.box.h },
+                    .uv0 = .{ 0, 0 },
+                    .uv1 = .{ 0, 0 },
+                    .color = r.color,
+                    .border_color = r.border_color,
+                    .corner_radius = r.corner_radius,
+                    .border_width = r.border_width,
+                    .prim_type = 0.0,
                 };
-                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
             },
-            .text => |t| {
-                const face = self.font.getFace(t.font);
-                const shaped = try face.shape(allocator, t.content, t.size * content_scale);
+            .text => |t| if (t.content.len > 0) {
+                const face = try self.font.getFace(t.font);
+                const shaped = try face.shape(t.content, t.size * content_scale);
                 const glyphs = shaped.glyphs;
-                defer allocator.free(glyphs);
-                const ascender = @as(f32, @floatFromInt(face.ft_face.*.size.*.metrics.ascender)) / 64.0 / content_scale;
-                const baseline = el.box.y + ascender;
-                const zero4 = [4]f32{ 0, 0, 0, 0 };
-                const zero2 = [2]f32{ 0, 0 };
+                if (glyphs.len > 0) {
+                    const ascender = shaped.ascender / content_scale;
+                    const baseline = el.box.y + ascender;
+                    const zero4 = [4]f32{ 0, 0, 0, 0 };
 
-                for (glyphs) |gl| {
-                    if (gl.metrics.rect.width == 0) continue;
+                    const inst_buf = try allocator.alloc(gpu.Instance, glyphs.len);
+                    var quad_count: u32 = 0;
 
-                    const gx = el.box.x + gl.x / content_scale;
-                    const gy = baseline - gl.metrics.bearing_y / content_scale;
-                    const gw = gl.metrics.rect.width / content_scale;
-                    const gh = gl.metrics.rect.height / content_scale;
+                    for (glyphs) |gl| {
+                        if (gl.metrics.rect.width == 0) continue;
 
-                    if (clip) |c| {
-                        if (gx >= c[0] + c[2] or
-                            gx + gw <= c[0] or
-                            gy >= c[1] + c[3] or
-                            gy + gh <= c[1]) continue;
+                        const gx = el.box.x + gl.x / content_scale;
+                        const gy = baseline - gl.metrics.bearing_y / content_scale;
+                        const gw = gl.metrics.rect.width / content_scale;
+                        const gh = gl.metrics.rect.height / content_scale;
+
+                        if (clip) |c| {
+                            if (gx >= c[0] + c[2] or
+                                gx + gw <= c[0] or
+                                gy >= c[1] + c[3] or
+                                gy + gh <= c[1]) continue;
+                        }
+
+                        const u = gl.metrics.rect.u;
+                        const v = gl.metrics.rect.v;
+                        const uw = gl.metrics.rect.uw;
+                        const uh = gl.metrics.rect.uh;
+
+                        inst_buf[quad_count] = .{
+                            .pos = .{ gx, gy },
+                            .size = .{ gw, gh },
+                            .uv0 = .{ u, v },
+                            .uv1 = .{ u + uw, v + uh },
+                            .color = t.color,
+                            .border_color = zero4,
+                            .corner_radius = 0,
+                            .border_width = 0,
+                            .prim_type = 1.0,
+                        };
+                        quad_count += 1;
                     }
 
-                    const u = gl.metrics.rect.u;
-                    const v = gl.metrics.rect.v;
-                    const uw = gl.metrics.rect.uw;
-                    const uh = gl.metrics.rect.uh;
-
-                    const vertices = [4]gpu.Vertex{
-                        .{ .pos = .{ gx, gy }, .uv = .{ u, v }, .color = t.color, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 1.0 },
-                        .{ .pos = .{ gx + gw, gy }, .uv = .{ u + uw, v }, .color = t.color, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 1.0 },
-                        .{ .pos = .{ gx + gw, gy + gh }, .uv = .{ u + uw, v + uh }, .color = t.color, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 1.0 },
-                        .{ .pos = .{ gx, gy + gh }, .uv = .{ u, v + uh }, .color = t.color, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 1.0 },
-                    };
-                    try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                    if (quad_count > 0) {
+                        try draw_list.pushInstances(inst_buf[0..quad_count], null, clip);
+                    }
                 }
             },
             .canvas => |c| {
@@ -486,17 +472,18 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                 for (c.cmds) |cmd| {
                     switch (cmd) {
                         .fill_rect => |fr| {
-                            const hw = fr.w / 2.0;
-                            const hh = fr.h / 2.0;
-                            const fcx = ox + fr.x + hw;
-                            const fcy = oy + fr.y + hh;
-                            const vertices = [4]gpu.Vertex{
-                                .{ .pos = .{ fcx - hw, fcy - hh }, .uv = .{ -hw, -hh }, .color = fr.color, .corner_radius = fr.corner_radius, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ fcx + hw, fcy - hh }, .uv = .{ hw, -hh }, .color = fr.color, .corner_radius = fr.corner_radius, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ fcx + hw, fcy + hh }, .uv = .{ hw, hh }, .color = fr.color, .corner_radius = fr.corner_radius, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ fcx - hw, fcy + hh }, .uv = .{ -hw, hh }, .color = fr.color, .corner_radius = fr.corner_radius, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
+                            const inst = gpu.Instance{
+                                .pos = .{ ox + fr.x, oy + fr.y },
+                                .size = .{ fr.w, fr.h },
+                                .uv0 = .{ 0, 0 },
+                                .uv1 = .{ 0, 0 },
+                                .color = fr.color,
+                                .border_color = zero4,
+                                .corner_radius = fr.corner_radius,
+                                .border_width = 0,
+                                .prim_type = 0.0,
                             };
-                            try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                            try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
                         },
                         .fill_rect_gradient => |fr| {
                             const hw = fr.w / 2.0;
@@ -512,43 +499,48 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                             try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
                         },
                         .stroke_rect => |sr| {
-                            const hw = sr.w / 2.0;
-                            const hh = sr.h / 2.0;
-                            const scx = ox + sr.x + hw;
-                            const scy = oy + sr.y + hh;
-                            const transparent = [4]f32{ 0, 0, 0, 0 };
-                            const vertices = [4]gpu.Vertex{
-                                .{ .pos = .{ scx - hw, scy - hh }, .uv = .{ -hw, -hh }, .color = transparent, .corner_radius = sr.corner_radius, .half_size = .{ hw, hh }, .border_width = sr.thickness, .border_color = sr.color, .prim_type = 0.0 },
-                                .{ .pos = .{ scx + hw, scy - hh }, .uv = .{ hw, -hh }, .color = transparent, .corner_radius = sr.corner_radius, .half_size = .{ hw, hh }, .border_width = sr.thickness, .border_color = sr.color, .prim_type = 0.0 },
-                                .{ .pos = .{ scx + hw, scy + hh }, .uv = .{ hw, hh }, .color = transparent, .corner_radius = sr.corner_radius, .half_size = .{ hw, hh }, .border_width = sr.thickness, .border_color = sr.color, .prim_type = 0.0 },
-                                .{ .pos = .{ scx - hw, scy + hh }, .uv = .{ -hw, hh }, .color = transparent, .corner_radius = sr.corner_radius, .half_size = .{ hw, hh }, .border_width = sr.thickness, .border_color = sr.color, .prim_type = 0.0 },
+                            const inst = gpu.Instance{
+                                .pos = .{ ox + sr.x, oy + sr.y },
+                                .size = .{ sr.w, sr.h },
+                                .uv0 = .{ 0, 0 },
+                                .uv1 = .{ 0, 0 },
+                                .color = zero4,
+                                .border_color = sr.color,
+                                .corner_radius = sr.corner_radius,
+                                .border_width = sr.thickness,
+                                .prim_type = 0.0,
                             };
-                            try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                            try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
                         },
                         .fill_circle => |fc| {
                             const cr = fc.radius;
-                            const ccx = ox + fc.cx;
-                            const ccy = oy + fc.cy;
-                            const vertices = [4]gpu.Vertex{
-                                .{ .pos = .{ ccx - cr, ccy - cr }, .uv = .{ -cr, -cr }, .color = fc.color, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx + cr, ccy - cr }, .uv = .{ cr, -cr }, .color = fc.color, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx + cr, ccy + cr }, .uv = .{ cr, cr }, .color = fc.color, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx - cr, ccy + cr }, .uv = .{ -cr, cr }, .color = fc.color, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
+                            const inst = gpu.Instance{
+                                .pos = .{ ox + fc.cx - cr, oy + fc.cy - cr },
+                                .size = .{ cr * 2, cr * 2 },
+                                .uv0 = .{ 0, 0 },
+                                .uv1 = .{ 0, 0 },
+                                .color = fc.color,
+                                .border_color = zero4,
+                                .corner_radius = cr,
+                                .border_width = 0,
+                                .prim_type = 0.0,
                             };
-                            try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                            try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
                         },
                         .stroke_circle => |sc| {
                             const cr = sc.radius;
-                            const ccx = ox + sc.cx;
-                            const ccy = oy + sc.cy;
-                            const transparent = [4]f32{ 0, 0, 0, 0 };
-                            const vertices = [4]gpu.Vertex{
-                                .{ .pos = .{ ccx - cr, ccy - cr }, .uv = .{ -cr, -cr }, .color = transparent, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = sc.thickness, .border_color = sc.color, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx + cr, ccy - cr }, .uv = .{ cr, -cr }, .color = transparent, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = sc.thickness, .border_color = sc.color, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx + cr, ccy + cr }, .uv = .{ cr, cr }, .color = transparent, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = sc.thickness, .border_color = sc.color, .prim_type = 0.0 },
-                                .{ .pos = .{ ccx - cr, ccy + cr }, .uv = .{ -cr, cr }, .color = transparent, .corner_radius = cr, .half_size = .{ cr, cr }, .border_width = sc.thickness, .border_color = sc.color, .prim_type = 0.0 },
+                            const inst = gpu.Instance{
+                                .pos = .{ ox + sc.cx - cr, oy + sc.cy - cr },
+                                .size = .{ cr * 2, cr * 2 },
+                                .uv0 = .{ 0, 0 },
+                                .uv1 = .{ 0, 0 },
+                                .color = zero4,
+                                .border_color = sc.color,
+                                .corner_radius = cr,
+                                .border_width = sc.thickness,
+                                .prim_type = 0.0,
                             };
-                            try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                            try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
                         },
                         .line => |l| {
                             const dx = l.to[0] - l.from[0];
@@ -602,14 +594,18 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
             },
             .image => |img| {
                 const zero4 = [4]f32{ 0, 0, 0, 0 };
-                const zero2 = [2]f32{ 0, 0 };
-                const vertices = [4]gpu.Vertex{
-                    .{ .pos = .{ el.box.x, el.box.y }, .uv = .{ 0, 0 }, .color = img.tint, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 2.0 },
-                    .{ .pos = .{ el.box.x + el.box.w, el.box.y }, .uv = .{ 1, 0 }, .color = img.tint, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 2.0 },
-                    .{ .pos = .{ el.box.x + el.box.w, el.box.y + el.box.h }, .uv = .{ 1, 1 }, .color = img.tint, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 2.0 },
-                    .{ .pos = .{ el.box.x, el.box.y + el.box.h }, .uv = .{ 0, 1 }, .color = img.tint, .corner_radius = 0, .half_size = zero2, .border_width = 0, .border_color = zero4, .prim_type = 2.0 },
+                const inst = gpu.Instance{
+                    .pos = .{ el.box.x, el.box.y },
+                    .size = .{ el.box.w, el.box.h },
+                    .uv0 = .{ 0, 0 },
+                    .uv1 = .{ 1, 1 },
+                    .color = img.tint,
+                    .border_color = zero4,
+                    .corner_radius = 0,
+                    .border_width = 0,
+                    .prim_type = 2.0,
                 };
-                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, img.texture_id, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.texture_id, clip);
             },
             .slider => |s| {
                 const bx = el.box.x;
@@ -619,35 +615,32 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                 const cr = s.corner_radius;
                 const zero4 = [4]f32{ 0, 0, 0, 0 };
 
-                // Track background
-                {
-                    const hw = bw / 2.0;
-                    const hh = bh / 2.0;
-                    const cx = bx + hw;
-                    const cy = by + hh;
-                    const vtx = [4]gpu.Vertex{
-                        .{ .pos = .{ cx - hw, cy - hh }, .uv = .{ -hw, -hh }, .color = s.track_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx + hw, cy - hh }, .uv = .{ hw, -hh }, .color = s.track_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx + hw, cy + hh }, .uv = .{ hw, hh }, .color = s.track_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx - hw, cy + hh }, .uv = .{ -hw, hh }, .color = s.track_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                    };
-                    try draw_list.push(&vtx, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
-                }
+                const track = gpu.Instance{
+                    .pos = .{ bx, by },
+                    .size = .{ bw, bh },
+                    .uv0 = .{ 0, 0 },
+                    .uv1 = .{ 0, 0 },
+                    .color = s.track_color,
+                    .border_color = zero4,
+                    .corner_radius = cr,
+                    .border_width = 0,
+                    .prim_type = 0.0,
+                };
+                try draw_list.pushInstances(&[_]gpu.Instance{track}, null, clip);
 
-                // Fill
                 if (s.progress > 0) {
-                    const fw = bw * s.progress;
-                    const hw = fw / 2.0;
-                    const hh = bh / 2.0;
-                    const cx = bx + hw;
-                    const cy = by + hh;
-                    const vtx = [4]gpu.Vertex{
-                        .{ .pos = .{ cx - hw, cy - hh }, .uv = .{ -hw, -hh }, .color = s.fill_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx + hw, cy - hh }, .uv = .{ hw, -hh }, .color = s.fill_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx + hw, cy + hh }, .uv = .{ hw, hh }, .color = s.fill_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
-                        .{ .pos = .{ cx - hw, cy + hh }, .uv = .{ -hw, hh }, .color = s.fill_color, .corner_radius = cr, .half_size = .{ hw, hh }, .border_width = 0, .border_color = zero4, .prim_type = 0.0 },
+                    const fill = gpu.Instance{
+                        .pos = .{ bx, by },
+                        .size = .{ bw * s.progress, bh },
+                        .uv0 = .{ 0, 0 },
+                        .uv1 = .{ 0, 0 },
+                        .color = s.fill_color,
+                        .border_color = zero4,
+                        .corner_radius = cr,
+                        .border_width = 0,
+                        .prim_type = 0.0,
                     };
-                    try draw_list.push(&vtx, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                    try draw_list.pushInstances(&[_]gpu.Instance{fill}, null, clip);
                 }
             },
         }
@@ -696,6 +689,7 @@ test "scroll routing uses previous frame elements" {
         .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
+        .super_held = false,
     }, 0);
     ui.reset();
 

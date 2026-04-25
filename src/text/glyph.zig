@@ -17,9 +17,22 @@ pub const Shaped = struct {
     cluster: u32, // byte offset into source UTF-8 text
 };
 
-pub const ShapedText = struct {
+pub const ShapedKey = struct {
+    text: []const u8,
+    size_q: u32,
+};
+
+pub const ShapedEntry = struct {
     glyphs: []Shaped,
     width: f32,
+    ascender: f32,
+    last_used_frame: u32,
+};
+
+pub const ShapedView = struct {
+    glyphs: []const Shaped,
+    width: f32,
+    ascender: f32,
 };
 
 pub const TextMetrics = struct {

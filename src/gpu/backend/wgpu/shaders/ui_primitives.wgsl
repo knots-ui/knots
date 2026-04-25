@@ -49,6 +49,52 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
+struct InstanceInput {
+    @location(0) pos: vec2f,
+    @location(1) size: vec2f,
+    @location(2) uv0: vec2f,
+    @location(3) uv1: vec2f,
+    @location(4) color: vec4f,
+    @location(5) border_color: vec4f,
+    @location(6) corner_radius: f32,
+    @location(7) border_width: f32,
+    @location(8) prim_type: f32,
+    @location(9) _pad: f32,
+}
+
+@vertex
+fn vs_instance_main(@builtin(vertex_index) vid: u32, inst: InstanceInput) -> VertexOutput {
+    var corners = array<vec2f, 4>(
+        vec2f(0.0, 0.0),
+        vec2f(1.0, 0.0),
+        vec2f(1.0, 1.0),
+        vec2f(0.0, 1.0),
+    );
+    let corner = corners[vid];
+
+    let world = inst.pos + inst.size * corner;
+    let ndc = (world / viewport.size) * 2.0 - 1.0;
+
+    var out: VertexOutput;
+    out.clip_pos = vec4f(ndc.x, -ndc.y, 0.0, 1.0);
+    out.color = inst.color;
+    out.border_color = inst.border_color;
+    out.corner_radius = inst.corner_radius;
+    out.border_width = inst.border_width;
+    out.prim_type = inst.prim_type;
+
+    if inst.prim_type < 0.5 {
+        // SDF rect/circle: signed centered coords + half_size for sdRoundedBox.
+        out.half_size = inst.size * 0.5;
+        out.uv = inst.size * (corner - vec2f(0.5, 0.5));
+    } else {
+        // Text/image: atlas UV interpolated across the quad.
+        out.half_size = vec2f(0.0, 0.0);
+        out.uv = mix(inst.uv0, inst.uv1, corner);
+    }
+    return out;
+}
+
 fn sdRoundedBox(p: vec2f, half_size: vec2f, radius: f32) -> f32 {
     let q = abs(p) - half_size + radius;
     return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - radius;

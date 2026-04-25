@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const DrawList = @import("DrawList.zig");
 
 const INIT_VERTEX_BYTES = 256 * 1024;
+const INIT_INSTANCE_BYTES = 64 * 1024;
 const INIT_INDEX_COUNT = 64 * 1024;
 const MAX_TEXTURES = 16;
 
@@ -48,8 +49,11 @@ window: Window,
 cfg: Config,
 ctx: gpu.Context,
 pipeline: gpu.Pipeline,
+instance_pipeline: gpu.Pipeline,
 vertex_buf: gpu.Buffer,
 index_buf: gpu.Buffer,
+instance_buf: gpu.Buffer,
+unit_index_buf: gpu.Buffer,
 atlas_texture: gpu.Texture,
 atlas_sampler: gpu.Sampler,
 frame: gpu.Frame,
@@ -72,11 +76,17 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     const ctx = try cfg.gpu_backend.init(allocator, window.getWindowHandle(), ctx_cfg);
     errdefer ctx.deinit();
 
-    const pipeline = try ctx.createPipeline(.{});
+    const pipeline = try ctx.createPipeline(.{ .kind = .vertex });
     errdefer pipeline.deinit();
+
+    const instance_pipeline = try ctx.createPipeline(.{ .kind = .instance });
+    errdefer instance_pipeline.deinit();
 
     const vertex_buf = try ctx.createBuffer(INIT_VERTEX_BYTES, .{ .vertex = true, .copy_dst = true });
     errdefer vertex_buf.deinit();
+
+    const instance_buf = try ctx.createBuffer(INIT_INSTANCE_BYTES, .{ .vertex = true, .copy_dst = true });
+    errdefer instance_buf.deinit();
 
     const atlas_texture = try ctx.createTexture(.{
         .width = 1024,
@@ -95,14 +105,22 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     const index_buf = try ctx.createBuffer(INIT_INDEX_COUNT * @sizeOf(u32), .{ .index = true, .copy_dst = true });
     errdefer index_buf.deinit();
 
+    const unit_index_buf = try ctx.createBuffer(6 * @sizeOf(u32), .{ .index = true, .copy_dst = true });
+    errdefer unit_index_buf.deinit();
+    const unit_indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
+    unit_index_buf.load(u32, &unit_indices);
+
     return .{
         .allocator = allocator,
         .window = window,
         .cfg = cfg,
         .ctx = ctx,
         .pipeline = pipeline,
+        .instance_pipeline = instance_pipeline,
         .vertex_buf = vertex_buf,
         .index_buf = index_buf,
+        .instance_buf = instance_buf,
+        .unit_index_buf = unit_index_buf,
         .atlas_texture = atlas_texture,
         .atlas_sampler = atlas_sampler,
         .frame = try ctx.createFrame(),
@@ -118,8 +136,11 @@ pub fn deinit(self: *Renderer) void {
         }
     }
     self.pipeline.deinit();
+    self.instance_pipeline.deinit();
     self.vertex_buf.deinit();
     self.index_buf.deinit();
+    self.instance_buf.deinit();
+    self.unit_index_buf.deinit();
     self.atlas_texture.deinit();
     self.atlas_sampler.deinit();
     self.ctx.deinit();
@@ -141,9 +162,9 @@ pub fn createTexture(self: *Renderer, width: u32, height: u32, format: gpu.Textu
     return id;
 }
 
-pub fn writeTexture(self: *Renderer, id: u32, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) void {
+pub fn writeTexture(self: *Renderer, id: u32, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) !void {
     if (self.registered_textures[id]) |reg| {
-        reg.texture.write(data, len, width, height, bytes_per_row);
+        try reg.texture.write(data, len, 0, 0, width, height, bytes_per_row);
     }
 }
 
@@ -178,7 +199,7 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
 
     try self.frame.waitForFence();
 
-    self.syncAtlas(atlas);
+    try self.syncAtlas(atlas);
     if (!self.atlas_texture.isReady()) return;
 
     // Vertex coords are in logical pixels; surface/scissor are in physical pixels.
@@ -188,6 +209,7 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
     const logical_h: u32 = @intFromFloat(@as(f32, @floatFromInt(self.ctx.cfg.window_height)) / content_scale);
     if (logical_w != self.cached_vp_width or logical_h != self.cached_vp_height) {
         self.pipeline.updateViewport(logical_w, logical_h);
+        self.instance_pipeline.updateViewport(logical_w, logical_h);
         self.cached_vp_width = logical_w;
         self.cached_vp_height = logical_h;
     }
@@ -197,26 +219,49 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
         try ensureBufferCapacity(&self.vertex_buf, verts.len);
         self.vertex_buf.load(u8, verts);
     }
-    try ensureBufferCapacity(&self.index_buf, dl.indices.items.len * @sizeOf(u32));
-    self.index_buf.load(u32, dl.indices.items);
+    const insts = dl.instances.items;
+    if (insts.len > 0) {
+        try ensureBufferCapacity(&self.instance_buf, insts.len);
+        self.instance_buf.load(u8, insts);
+    }
+    if (dl.indices.items.len > 0) {
+        try ensureBufferCapacity(&self.index_buf, dl.indices.items.len * @sizeOf(u32));
+        self.index_buf.load(u32, dl.indices.items);
+    }
 
     var pass = try self.frame.beginRenderPass(.{ .color_attachment = .{} });
-    pass.setIndexBuffer(&self.index_buf, 0, dl.indices.items.len * @sizeOf(u32));
-    pass.bindPipeline(&self.pipeline);
-    pass.setVertexBuffer(0, &self.vertex_buf, 0, verts.len);
 
     const vw: f32 = @floatFromInt(self.ctx.cfg.window_width);
     const vh: f32 = @floatFromInt(self.ctx.cfg.window_height);
     var current_clip: ?[4]f32 = .{ 0, 0, 0, 0 };
     var current_texture: ?u32 = null;
+    var current_kind: ?DrawList.CommandKind = null;
     for (dl.cmds.items) |cmd| {
+        if (current_kind != cmd.kind) {
+            switch (cmd.kind) {
+                .vertex => {
+                    pass.bindPipeline(&self.pipeline);
+                    pass.setVertexBuffer(0, &self.vertex_buf, 0, verts.len);
+                    pass.setIndexBuffer(&self.index_buf, 0, dl.indices.items.len * @sizeOf(u32));
+                },
+                .instance => {
+                    pass.bindPipeline(&self.instance_pipeline);
+                    pass.setVertexBuffer(0, &self.instance_buf, 0, insts.len);
+                    pass.setIndexBuffer(&self.unit_index_buf, 0, 6 * @sizeOf(u32));
+                },
+            }
+            current_texture = null;
+            current_kind = cmd.kind;
+        }
         if (cmd.texture != current_texture) {
             if (cmd.texture) |tex_id| {
                 if (self.registered_textures[tex_id]) |*reg| {
                     self.pipeline.bindTexture(&reg.texture, &reg.sampler);
+                    self.instance_pipeline.bindTexture(&reg.texture, &reg.sampler);
                 }
             } else {
                 self.pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
+                self.instance_pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
             }
             pass.rebindTextureSet();
             current_texture = cmd.texture;
@@ -232,19 +277,29 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
 
             current_clip = cmd.clip_rect;
         }
-        pass.drawIndexed(cmd.index_count, 1, cmd.index_offset, 0, 0);
+        switch (cmd.kind) {
+            .vertex => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
+            .instance => pass.drawIndexed(6, cmd.count, 0, 0, cmd.offset),
+        }
     }
     pass.end();
     try self.frame.submit();
 }
 
-fn syncAtlas(self: *Renderer, atlas: *text.Atlas) void {
-    if (atlas.dirty) {
-        self.atlas_texture.write(atlas.bitmap.ptr, atlas.bitmap.len, atlas.width, atlas.height, null);
-        atlas.dirty = false;
+fn syncAtlas(self: *Renderer, atlas: *text.Atlas) !void {
+    if (atlas.isDirty()) {
+        const y0 = atlas.dirty_min_y;
+        const y1 = atlas.dirty_max_y_excl;
+        const row_h = y1 - y0;
+        const stride = atlas.width;
+        const offset = y0 * stride;
+        const len = row_h * stride;
+        try self.atlas_texture.write(atlas.bitmap.ptr + offset, len, 0, y0, atlas.width, row_h, null);
+        atlas.markClean();
     }
     // Ensure current_texture_ds is valid for the initial bindPipeline call
     self.pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
+    self.instance_pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
 }
 
 fn ensureBufferCapacity(buf: *gpu.Buffer, required: usize) !void {

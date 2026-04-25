@@ -25,7 +25,7 @@ vtable: *const VTable,
 
 pub const VTable = struct {
     deinit: *const fn (ptr: *anyopaque) void,
-    write: *const fn (ptr: *anyopaque, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) void,
+    write: *const fn (ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) anyerror!void,
     is_ready: *const fn (ptr: *anyopaque) bool,
     nativeHandle: *const fn (ptr: *anyopaque) *anyopaque,
 };
@@ -34,8 +34,8 @@ pub inline fn deinit(self: *const Texture) void {
     self.vtable.deinit(self.ptr);
 }
 
-pub inline fn write(self: *const Texture, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) void {
-    self.vtable.write(self.ptr, data, len, width, height, bytes_per_row);
+pub inline fn write(self: *const Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
+    return self.vtable.write(self.ptr, data, len, x, y, width, height, bytes_per_row);
 }
 
 pub inline fn isReady(self: *const Texture) bool {

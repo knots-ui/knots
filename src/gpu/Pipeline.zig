@@ -3,7 +3,11 @@ const Sampler = @import("Sampler.zig");
 
 const Pipeline = @This();
 
-pub const Desc = struct {};
+pub const Kind = enum { vertex, instance };
+
+pub const Desc = struct {
+    kind: Kind = .vertex,
+};
 
 ptr: *anyopaque,
 vtable: *const VTable,

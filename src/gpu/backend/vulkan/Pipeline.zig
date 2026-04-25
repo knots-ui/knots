@@ -6,8 +6,10 @@ const Texture = @import("Texture.zig");
 const Sampler = @import("Sampler.zig");
 
 const ui_primitives_vert_spv align(@alignOf(u32)) = @embedFile("ui_primitives_vertex_shader").*;
+const ui_primitives_instance_vert_spv align(@alignOf(u32)) = @embedFile("ui_primitives_instance_vertex_shader").*;
 const ui_primitives_frag_spv align(@alignOf(u32)) = @embedFile("ui_primitives_fragment_shader").*;
-const ui_primitives_attributes = toVkAttributes(gpu.Vertex);
+const ui_primitives_vertex_attributes = toVkAttributes(gpu.Vertex);
+const ui_primitives_instance_attributes = toVkAttributes(gpu.Instance);
 
 const vtable = gpu.Pipeline.VTable{
     .deinit = &deinit,
@@ -29,7 +31,7 @@ device: vk.Device,
 
 const Pipeline = @This();
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, _: gpu.Pipeline.Desc) !gpu.Pipeline {
+pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
     const vkd = ctx.vkd;
     const device = ctx.device;
 
@@ -106,11 +108,28 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, _: gpu.Pipeline.Desc)
     }, null);
     errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
 
+    const vert_spv: []align(@alignOf(u32)) const u8 = switch (desc.kind) {
+        .vertex => &ui_primitives_vert_spv,
+        .instance => &ui_primitives_instance_vert_spv,
+    };
     const vert_module = try vkd.createShaderModule(device, &.{
-        .code_size = ui_primitives_vert_spv.len,
-        .p_code = @ptrCast(@alignCast(&ui_primitives_vert_spv)),
+        .code_size = vert_spv.len,
+        .p_code = @ptrCast(@alignCast(vert_spv.ptr)),
     }, null);
     defer vkd.destroyShaderModule(device, vert_module, null);
+
+    const vk_vertex_stride: u32 = switch (desc.kind) {
+        .vertex => @sizeOf(gpu.Vertex),
+        .instance => @sizeOf(gpu.Instance),
+    };
+    const vk_input_rate: vk.VertexInputRate = switch (desc.kind) {
+        .vertex => .vertex,
+        .instance => .instance,
+    };
+    const vk_attributes: []const vk.VertexInputAttributeDescription = switch (desc.kind) {
+        .vertex => &ui_primitives_vertex_attributes,
+        .instance => &ui_primitives_instance_attributes,
+    };
 
     const frag_module = try vkd.createShaderModule(device, &.{
         .code_size = ui_primitives_frag_spv.len,
@@ -142,11 +161,11 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, _: gpu.Pipeline.Desc)
             .vertex_binding_description_count = 1,
             .p_vertex_binding_descriptions = &[_]vk.VertexInputBindingDescription{.{
                 .binding = 0,
-                .stride = @sizeOf(gpu.Vertex),
-                .input_rate = .vertex,
+                .stride = vk_vertex_stride,
+                .input_rate = vk_input_rate,
             }},
-            .vertex_attribute_description_count = @intCast(ui_primitives_attributes.len),
-            .p_vertex_attribute_descriptions = &ui_primitives_attributes,
+            .vertex_attribute_description_count = @intCast(vk_attributes.len),
+            .p_vertex_attribute_descriptions = vk_attributes.ptr,
         },
         .p_input_assembly_state = &.{ .topology = .triangle_list, .primitive_restart_enable = .false },
         .p_viewport_state = &.{ .viewport_count = 1, .scissor_count = 1 },

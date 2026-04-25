@@ -44,18 +44,28 @@ pub const Anim = struct {
     initialized: bool = false,
 };
 
-/// Double-buffered flat array of (id, T) pairs.
+// Element.Id is already the truncated Wyhash output of a Key (see Key.hash),
+// so it is well-distributed and identity-hashing is correct here.
+const IdContext = struct {
+    pub fn hash(_: IdContext, id: Element.Id) u64 {
+        return id;
+    }
+    pub fn eql(_: IdContext, a: Element.Id, b: Element.Id) bool {
+        return a == b;
+    }
+};
+
+/// Double-buffered hash map of (id, T) pairs.
 /// During a frame, `getOrCreate` migrates entries from `current` into `next`.
-/// At end-of-frame, swap + clear so unmigrated state is evicted in O(1).
+/// At end-of-frame, swap + clear so unmigrated state is evicted in O(N) over
+/// the previous frame's distinct ids, but per-id access is O(1).
 fn Pool(comptime T: type) type {
     return struct {
-        const Entry = struct {
-            id: Element.Id,
-            value: T,
-        };
+        pub const Value = T;
+        const Map = std.HashMapUnmanaged(Element.Id, T, IdContext, std.hash_map.default_max_load_percentage);
 
-        current: std.ArrayList(Entry) = .empty,
-        next: std.ArrayList(Entry) = .empty,
+        current: Map = .empty,
+        next: Map = .empty,
 
         const Self = @This();
 
@@ -65,42 +75,25 @@ fn Pool(comptime T: type) type {
         }
 
         pub fn get(self: *Self, id: Element.Id) ?*T {
-            for (self.next.items) |*e| {
-                if (e.id == id) return &e.value;
-            }
-            for (self.current.items) |*e| {
-                if (e.id == id) return &e.value;
-            }
+            if (self.next.getPtr(id)) |p| return p;
+            if (self.current.getPtr(id)) |p| return p;
             return null;
         }
 
         pub fn getOrCreate(self: *Self, allocator: std.mem.Allocator, id: Element.Id) !*T {
-            for (self.next.items) |*e| {
-                if (e.id == id) return &e.value;
+            const gop = try self.next.getOrPutContext(allocator, id, .{});
+            if (gop.found_existing) return gop.value_ptr;
+            if (self.current.fetchRemove(id)) |kv| {
+                gop.value_ptr.* = kv.value;
+            } else {
+                gop.value_ptr.* = .{};
             }
-            for (self.current.items) |e| {
-                if (e.id == id) {
-                    try self.next.append(allocator, e);
-                    return &self.next.items[self.next.items.len - 1].value;
-                }
-            }
-            try self.next.append(allocator, .{ .id = id, .value = .{} });
-            return &self.next.items[self.next.items.len - 1].value;
+            return gop.value_ptr;
         }
 
         pub fn remove(self: *Self, id: Element.Id) void {
-            for (self.next.items, 0..) |e, i| {
-                if (e.id == id) {
-                    _ = self.next.swapRemove(i);
-                    return;
-                }
-            }
-            for (self.current.items, 0..) |e, i| {
-                if (e.id == id) {
-                    _ = self.current.swapRemove(i);
-                    return;
-                }
-            }
+            if (self.next.remove(id)) return;
+            _ = self.current.remove(id);
         }
 
         pub fn swap(self: *Self) void {
@@ -113,7 +106,7 @@ fn Pool(comptime T: type) type {
 }
 
 fn PoolValueType(comptime PoolT: type) type {
-    return @FieldType(PoolT.Entry, "value");
+    return PoolT.Value;
 }
 
 pub const Storage = struct {
@@ -164,8 +157,13 @@ pub const Storage = struct {
         comptime f: fn (@TypeOf(ctx), Element.Id, *PoolValueType(@FieldType(StoragePools, @tagName(name)))) void,
     ) void {
         const pool = self.poolFor(name);
-        for (pool.current.items) |*e| f(ctx, e.id, &e.value);
-        for (pool.next.items) |*e| f(ctx, e.id, &e.value);
+        var next_it = pool.next.iterator();
+        while (next_it.next()) |kv| f(ctx, kv.key_ptr.*, kv.value_ptr);
+        var cur_it = pool.current.iterator();
+        while (cur_it.next()) |kv| {
+            if (pool.next.containsContext(kv.key_ptr.*, .{})) continue;
+            f(ctx, kv.key_ptr.*, kv.value_ptr);
+        }
     }
 };
 
@@ -312,6 +310,32 @@ test "remove deletes entry" {
     _ = try state.getOrCreate(.text_input, testing.allocator, 10);
     state.remove(.text_input, 10);
     try testing.expectEqual(state.get(.text_input, 10), null);
+}
+
+test "forEach visits each id at most once across current and next" {
+    var state = init(testing.allocator);
+    defer state.deinit();
+
+    _ = try state.getOrCreate(.text_input, testing.allocator, 1);
+    _ = try state.getOrCreate(.text_input, testing.allocator, 2);
+    state.endFrame();
+    _ = try state.getOrCreate(.text_input, testing.allocator, 1);
+
+    const Counter = struct {
+        seen: *std.AutoHashMap(Element.Id, u32),
+        fn cb(self: @This(), id: Element.Id, _: *TextInput) void {
+            const gop = self.seen.getOrPut(id) catch return;
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+    };
+
+    var seen: std.AutoHashMap(Element.Id, u32) = .init(testing.allocator);
+    defer seen.deinit();
+    state.forEach(.text_input, Counter{ .seen = &seen }, Counter.cb);
+
+    try testing.expectEqual(@as(?u32, 1), seen.get(1));
+    try testing.expectEqual(@as(?u32, 1), seen.get(2));
 }
 
 test "pools are independent per type" {

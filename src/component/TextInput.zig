@@ -73,9 +73,8 @@ pub fn close(self: *const TextInput, ui: *UI) !void {
         const has_sel = sel_lo != sel_hi;
         const scale = ui.content_scale;
 
-        const face = ui.font.getFace(null);
-        const shaped = try face.shape(ui.allocator, items, self.size * scale);
-        defer ui.allocator.free(shaped.glyphs);
+        const face = try ui.font.getFace(null);
+        const shaped = try face.shape(items, self.size * scale);
         const line_h = (try face.lineHeight(self.size * scale)) / scale;
 
         if (has_sel) {

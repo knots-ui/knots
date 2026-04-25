@@ -259,7 +259,8 @@ fn handleRendererReconfigure(self: *App) !void {
 
     try self.renderer.reconfigure(new_cfg);
 
-    self.ui.font.atlas.dirty = true;
+    self.ui.font.atlas.dirty_min_y = 0;
+    self.ui.font.atlas.dirty_max_y_excl = self.ui.font.atlas.height;
     if (self.cfg.onReconfigure) |cb| try cb(self);
 }
 

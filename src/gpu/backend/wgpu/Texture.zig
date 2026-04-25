@@ -67,12 +67,12 @@ fn deinit(ptr: *anyopaque) void {
     self.allocator.destroy(self);
 }
 
-fn write(ptr: *anyopaque, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) void {
+fn write(ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
     const self: *Texture = @ptrCast(@alignCast(ptr));
     const bpr = bytes_per_row orelse width * bytesPerPixel(self.format);
     self.queue.writeTexture(
         u8,
-        .{ .texture = self.texture },
+        .{ .texture = self.texture, .origin = .{ .x = x, .y = y, .z = 0 } },
         data[0..len],
         .{ .bytes_per_row = bpr, .rows_per_image = height },
         .{ .width = width, .height = height, .depth_or_array_layers = 1 },

@@ -18,7 +18,6 @@ queue: wgpu.Queue,
 device: wgpu.Device,
 
 pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
-    _ = desc;
     const self = try allocator.create(Pipeline);
     errdefer allocator.destroy(self);
 
@@ -57,21 +56,38 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     const pipeline_layout = try ctx.device.createPipelineLayout("unified_pipeline_layout", &.{bgl});
     defer pipeline_layout.deinit();
 
-    const attributes = toAttributes(gpu.Vertex);
+    const vertex_attributes = toAttributes(gpu.Vertex);
+    const instance_attributes = toAttributes(gpu.Instance);
+
+    const vertex_buffers: []const wgpu.RenderPipeline.VertexBufferLayout = switch (desc.kind) {
+        .vertex => &.{
+            .{
+                .array_stride = @sizeOf(gpu.Vertex),
+                .step_mode = .vertex,
+                .attributes = &vertex_attributes,
+            },
+        },
+        .instance => &.{
+            .{
+                .array_stride = @sizeOf(gpu.Instance),
+                .step_mode = .instance,
+                .attributes = &instance_attributes,
+            },
+        },
+    };
+
+    const vs_entry: []const u8 = switch (desc.kind) {
+        .vertex => "vs_main",
+        .instance => "vs_instance_main",
+    };
 
     const pipeline = try ctx.device.createRenderPipeline(.{
         .label = "unified_pipeline",
         .layout = pipeline_layout,
         .vertex = .{
             .module = shader_module,
-            .entry_point = "vs_main",
-            .buffers = &.{
-                .{
-                    .array_stride = @sizeOf(gpu.Vertex),
-                    .step_mode = .vertex,
-                    .attributes = &attributes,
-                },
-            },
+            .entry_point = vs_entry,
+            .buffers = vertex_buffers,
         },
         .fragment = .{
             .module = shader_module,

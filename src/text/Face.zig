@@ -9,9 +9,32 @@ hb_font: *hb.hb_font_t,
 hb_buf: *hb.hb_buffer_t,
 atlas: *Atlas,
 cache: std.AutoHashMap(glyph.Key, glyph.Metrics),
+shaped_cache: ShapedMap,
+current_frame: u32,
+last_size_q: u32,
 allocator: std.mem.Allocator,
 
 const Face = @This();
+
+const SHAPED_EVICT_AGE: u32 = 2;
+
+const ShapedContext = struct {
+    pub fn hash(_: ShapedContext, k: glyph.ShapedKey) u64 {
+        var h = std.hash.Wyhash.init(k.size_q);
+        h.update(k.text);
+        return h.final();
+    }
+    pub fn eql(_: ShapedContext, a: glyph.ShapedKey, b: glyph.ShapedKey) bool {
+        return a.size_q == b.size_q and std.mem.eql(u8, a.text, b.text);
+    }
+};
+
+const ShapedMap = std.HashMapUnmanaged(
+    glyph.ShapedKey,
+    glyph.ShapedEntry,
+    ShapedContext,
+    std.hash_map.default_max_load_percentage,
+);
 
 pub fn init(allocator: std.mem.Allocator, ft_lib: ft.FT_Library, font_data: []const u8, atlas: *Atlas) !Face {
     var ft_face: ft.FT_Face = undefined;
@@ -27,11 +50,20 @@ pub fn init(allocator: std.mem.Allocator, ft_lib: ft.FT_Library, font_data: []co
         .hb_buf = hb_buf,
         .atlas = atlas,
         .cache = .init(allocator),
+        .shaped_cache = .empty,
+        .current_frame = 0,
+        .last_size_q = 0,
         .allocator = allocator,
     };
 }
 
 pub fn deinit(self: *Face) void {
+    var it = self.shaped_cache.iterator();
+    while (it.next()) |kv| {
+        self.allocator.free(kv.key_ptr.text);
+        self.allocator.free(kv.value_ptr.glyphs);
+    }
+    self.shaped_cache.deinit(self.allocator);
     self.cache.deinit();
     hb.hb_buffer_destroy(self.hb_buf);
     hb.hb_font_destroy(self.hb_font);
@@ -77,16 +109,38 @@ fn rasterizeGlyph(self: *Face, codepoint: u32, size_px: f32) !glyph.Metrics {
     return metrics;
 }
 
-pub fn shape(self: *Face, allocator: std.mem.Allocator, text: []const u8, size_px: f32) !glyph.ShapedText {
-    try self.setSize(size_px);
+/// Shape `text` as a single line at `size_px`. The result is cached and
+/// returned by value as a `ShapedView` whose `glyphs` slice borrows from
+/// the cache. The slice is stable for the rest of the frame; `endFrame`
+/// is the only point at which entries are freed.
+pub fn shape(self: *Face, text: []const u8, size_px: f32) !glyph.ShapedView {
+    const size_q: u32 = @intFromFloat(size_px * 64);
+    const probe = glyph.ShapedKey{ .text = text, .size_q = size_q };
+
+    const gop = try self.shaped_cache.getOrPutContext(self.allocator, probe, .{});
+    if (gop.found_existing) {
+        gop.value_ptr.last_used_frame = self.current_frame;
+        return .{
+            .glyphs = gop.value_ptr.glyphs,
+            .width = gop.value_ptr.width,
+            .ascender = gop.value_ptr.ascender,
+        };
+    }
+    errdefer _ = self.shaped_cache.removeContext(probe, .{});
+
+    const text_copy = try self.allocator.dupe(u8, text);
+    errdefer self.allocator.free(text_copy);
+    gop.key_ptr.* = .{ .text = text_copy, .size_q = size_q };
+
+    try self.setSizeQ(size_q);
     self.shapeText(text);
 
     var glyph_count: u32 = 0;
     const glyph_infos = hb.hb_buffer_get_glyph_infos(self.hb_buf, &glyph_count);
     const glyph_positions = hb.hb_buffer_get_glyph_positions(self.hb_buf, &glyph_count);
 
-    var result = try std.ArrayList(glyph.Shaped).initCapacity(allocator, glyph_count);
-    errdefer result.deinit(allocator);
+    const out = try self.allocator.alloc(glyph.Shaped, glyph_count);
+    errdefer self.allocator.free(out);
     var pen_x: f32 = 0;
 
     for (0..glyph_count) |i| {
@@ -95,26 +149,33 @@ pub fn shape(self: *Face, allocator: std.mem.Allocator, text: []const u8, size_p
         const x_offset = @as(f32, @floatFromInt(glyph_positions[i].x_offset)) / 64.0;
         const y_offset = @as(f32, @floatFromInt(glyph_positions[i].y_offset)) / 64.0;
 
-        result.appendAssumeCapacity(.{
+        out[i] = .{
             .metrics = metrics,
             .x = @round(pen_x + x_offset + metrics.bearing_x),
             .y = y_offset,
             .cluster = glyph_infos[i].cluster,
-        });
+        };
 
         pen_x += @as(f32, @floatFromInt(glyph_positions[i].x_advance)) / 64.0;
     }
 
-    return .{
-        .glyphs = try result.toOwnedSlice(allocator),
+    const ascender = @as(f32, @floatFromInt(self.ft_face.*.size.*.metrics.ascender)) / 64.0;
+
+    gop.value_ptr.* = .{
+        .glyphs = out,
         .width = pen_x,
+        .ascender = ascender,
+        .last_used_frame = self.current_frame,
     };
+    return .{ .glyphs = out, .width = pen_x, .ascender = ascender };
 }
 
-fn setSize(self: *Face, size_px: f32) !void {
-    if (ft.FT_Set_Char_Size(self.ft_face, 0, @intFromFloat(size_px * 64), 96, 96) != 0)
+fn setSizeQ(self: *Face, size_q: u32) !void {
+    if (self.last_size_q == size_q) return;
+    if (ft.FT_Set_Char_Size(self.ft_face, 0, @intCast(size_q), 96, 96) != 0)
         return error.SetSizeFailed;
     hb.hb_ft_font_changed(self.hb_font);
+    self.last_size_q = size_q;
 }
 
 fn shapeText(self: *Face, text: []const u8) void {
@@ -124,28 +185,13 @@ fn shapeText(self: *Face, text: []const u8) void {
     hb.hb_shape(self.hb_font, self.hb_buf, null, 0);
 }
 
-fn measureLineWidth(self: *Face, text: []const u8, size_px: f32) !f32 {
-    try self.setSize(size_px);
-    self.shapeText(text);
-
-    var glyph_count: u32 = 0;
-    const glyph_positions = hb.hb_buffer_get_glyph_positions(self.hb_buf, &glyph_count);
-
-    var pen_x: f32 = 0;
-    for (0..glyph_count) |i| {
-        pen_x += @as(f32, @floatFromInt(glyph_positions[i].x_advance)) / 64.0;
-    }
-
-    return pen_x;
-}
-
 pub fn lineHeight(self: *Face, size_px: f32) !f32 {
-    try self.setSize(size_px);
+    try self.setSizeQ(@intFromFloat(size_px * 64));
     return @as(f32, @floatFromInt(self.ft_face.*.size.*.metrics.height)) / 64.0;
 }
 
-pub fn measure(self: *Face, _: std.mem.Allocator, text: []const u8, size_px: f32) !glyph.TextMetrics {
-    const line_height = try self.lineHeight(size_px);
+pub fn measure(self: *Face, text: []const u8, size_px: f32) !glyph.TextMetrics {
+    const line_h = try self.lineHeight(size_px);
 
     var max_line_width: f32 = 0;
     var line_count: u32 = 1;
@@ -157,7 +203,8 @@ pub fn measure(self: *Face, _: std.mem.Allocator, text: []const u8, size_px: f32
             const line = text[line_start..line_end];
 
             if (line.len > 0) {
-                max_line_width = @max(max_line_width, try self.measureLineWidth(line, size_px));
+                const entry = try self.shape(line, size_px);
+                max_line_width = @max(max_line_width, entry.width);
             }
 
             if (byte == '\n') {
@@ -169,7 +216,30 @@ pub fn measure(self: *Face, _: std.mem.Allocator, text: []const u8, size_px: f32
 
     return .{
         .width = max_line_width,
-        .height = line_height * @as(f32, @floatFromInt(line_count)),
+        .height = line_h * @as(f32, @floatFromInt(line_count)),
         .line_count = line_count,
     };
+}
+
+/// Advance the frame counter and evict shaped entries that have not been
+/// touched in the last `SHAPED_EVICT_AGE` frames. Callers must invoke this
+/// once per frame after all shape() calls for the frame are done.
+pub fn endFrame(self: *Face) void {
+    const cur = self.current_frame;
+    var stale: std.ArrayList(glyph.ShapedKey) = .empty;
+    defer stale.deinit(self.allocator);
+
+    var it = self.shaped_cache.iterator();
+    while (it.next()) |kv| {
+        if (cur -% kv.value_ptr.last_used_frame > SHAPED_EVICT_AGE) {
+            stale.append(self.allocator, kv.key_ptr.*) catch break;
+        }
+    }
+    for (stale.items) |k| {
+        if (self.shaped_cache.fetchRemoveContext(k, .{})) |kv| {
+            self.allocator.free(kv.key.text);
+            self.allocator.free(kv.value.glyphs);
+        }
+    }
+    self.current_frame +%= 1;
 }

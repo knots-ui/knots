@@ -2,6 +2,24 @@ const std = @import("std");
 const Element = @import("Element.zig");
 const ElementPool = @import("ElementPool.zig");
 
+// Element.Id is already a well-distributed Wyhash output (see Key.hash),
+// so identity-hashing is correct here.
+const IdContext = struct {
+    pub fn hash(_: IdContext, id: Element.Id) u64 {
+        return id;
+    }
+    pub fn eql(_: IdContext, a: Element.Id, b: Element.Id) bool {
+        return a == b;
+    }
+};
+
+const IdToSlotMap = std.HashMapUnmanaged(
+    Element.Id,
+    Element.Slot,
+    IdContext,
+    std.hash_map.default_max_load_percentage,
+);
+
 const AxisInfo = struct {
     is_row: bool,
     main_size: f32,
@@ -84,6 +102,8 @@ root_slot: Element.Slot = Element.INVALID_SLOT,
 z_used: std.StaticBitSet(256),
 z_slots: std.ArrayList(Element.Slot) = .empty,
 z_offsets: [257]u32 = [_]u32{0} ** 257,
+id_to_slot: IdToSlotMap = .empty,
+has_scroll: bool = false,
 
 const Context = @This();
 
@@ -99,19 +119,23 @@ pub fn init(allocator: std.mem.Allocator) Context {
 
 pub fn deinit(self: *Context) void {
     self.z_slots.deinit(self.allocator);
+    self.id_to_slot.deinit(self.allocator);
     self.pool.deinit(self.allocator);
 }
 
 pub fn reset(self: *Context) void {
     self.pool.reset();
     self.z_slots.clearRetainingCapacity();
+    self.id_to_slot.clearRetainingCapacity();
     self.stack_top = 0;
     self.root_slot = Element.INVALID_SLOT;
     self.z_used = .initEmpty();
+    self.has_scroll = false;
 }
 
 pub fn open(self: *Context, id: Element.Id, config: Element.Config) !Element.Slot {
     const slot = try self.pool.append(self.allocator, id, config.toElement());
+    try self.id_to_slot.putContext(self.allocator, id, slot, .{});
 
     if (self.stack_top > 0) {
         const parent_slot = self.stack[self.stack_top - 1];
@@ -129,9 +153,12 @@ pub fn open(self: *Context, id: Element.Id, config: Element.Config) !Element.Slo
         if (parent.z_index > child.z_index) child.z_index = parent.z_index;
         self.z_used.set(child.z_index);
         parent.child_count += 1;
+        if (child.overflow.isScroll()) self.has_scroll = true;
     } else {
         self.root_slot = slot;
-        self.z_used.set(self.pool.get(slot).z_index);
+        const root = self.pool.get(slot);
+        self.z_used.set(root.z_index);
+        if (root.overflow.isScroll()) self.has_scroll = true;
     }
     self.stack[self.stack_top] = slot;
     self.stack_top += 1;
@@ -140,7 +167,10 @@ pub fn open(self: *Context, id: Element.Id, config: Element.Config) !Element.Slo
 
 pub fn openRoot(self: *Context, id: Element.Id, config: Element.Config) !Element.Slot {
     const slot = try self.pool.append(self.allocator, id, config.toElement());
-    self.z_used.set(self.pool.get(slot).z_index);
+    try self.id_to_slot.putContext(self.allocator, id, slot, .{});
+    const el = self.pool.get(slot);
+    self.z_used.set(el.z_index);
+    if (el.overflow.isScroll()) self.has_scroll = true;
     self.stack[self.stack_top] = slot;
     self.stack_top += 1;
     return slot;
@@ -149,6 +179,12 @@ pub fn openRoot(self: *Context, id: Element.Id, config: Element.Config) !Element
 pub fn close(self: *Context) void {
     std.debug.assert(self.stack_top > 0);
     self.stack_top -= 1;
+    const slot = self.stack[self.stack_top];
+    self.pool.get(slot).subtree_end = @intCast(self.pool.elements.items.len);
+}
+
+pub fn slotForId(self: *const Context, id: Element.Id) ?Element.Slot {
+    return self.id_to_slot.getContext(id, .{});
 }
 
 pub fn buildZOrder(self: *Context) !void {
@@ -183,14 +219,13 @@ pub fn intersectClip(a: [4]f32, b: [4]f32) [4]f32 {
     return .{ x, y, @max(0, x2 - x), @max(0, y2 - y) };
 }
 
-pub fn isDescendantOf(self: *Context, slot: Element.Slot, ancestor: Element.Slot) bool {
-    var current = slot;
-    while (current != Element.INVALID_SLOT) {
-        const el = self.pool.get(current);
-        if (el.parent == ancestor) return true;
-        current = el.parent;
-    }
-    return false;
+/// Returns true iff `slot` is in the subtree rooted at `ancestor`.
+/// Uses the pre-order (= insertion order) and `subtree_end` set in `close()`:
+/// `slot` is a strict descendant iff `ancestor < slot < subtree_end(ancestor)`.
+pub fn isDescendantOf(self: *const Context, slot: Element.Slot, ancestor: Element.Slot) bool {
+    if (slot == Element.INVALID_SLOT or ancestor == Element.INVALID_SLOT) return false;
+    if (slot <= ancestor) return false;
+    return slot < self.pool.elements.items[ancestor].subtree_end;
 }
 
 pub fn computeSizes(self: *Context) void {

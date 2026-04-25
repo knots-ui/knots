@@ -43,14 +43,17 @@ pub fn addFace(self: *Font, key: []const u8, data: []const u8) !void {
     try self.faces.append(self.allocator, .{ key, try .init(self.allocator, self.ft_lib, data, self.atlas) });
 }
 
-pub fn getFace(self: *Font, key: ?[]const u8) *Face {
-    if (key) |k| {
-        for (self.faces.items) |*face|
-            if (std.mem.eql(u8, k, face.@"0"))
-                return &face.@"1";
-    } else return &self.faces.items[0].@"1";
+pub fn getFace(self: *Font, key: ?[]const u8) !*Face {
+    const k = key orelse return &self.faces.items[0].@"1";
+    for (self.faces.items) |*face|
+        if (k.ptr == face.@"0".ptr and k.len == face.@"0".len) return &face.@"1";
+    for (self.faces.items) |*face|
+        if (std.mem.eql(u8, k, face.@"0")) return &face.@"1";
+    return error.UnknownFont;
+}
 
-    unreachable;
+pub fn endFrame(self: *Font) void {
+    for (self.faces.items) |*face| face.@"1".endFrame();
 }
 
 pub fn deinit(self: *Font) void {

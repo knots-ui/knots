@@ -136,12 +136,12 @@ fn deinit(ptr: *anyopaque) void {
     self.allocator.destroy(self);
 }
 
-fn write(ptr: *anyopaque, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) void {
+fn write(ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
     const self: *Texture = @ptrCast(@alignCast(ptr));
-    writeImpl(self, data, len, width, height, bytes_per_row) catch |e| std.log.err("Vulkan texture write failed: {}", .{e});
+    try writeImpl(self, data, len, x, y, width, height, bytes_per_row);
 }
 
-fn writeImpl(self: *Texture, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) !void {
+fn writeImpl(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
     const ctx = self.ctx;
 
     const staging_buffer = try ctx.vkd.createBuffer(ctx.device, &.{
@@ -182,7 +182,7 @@ fn writeImpl(self: *Texture, data: [*]const u8, len: usize, width: u32, height: 
         .buffer_row_length = row_length,
         .buffer_image_height = 0,
         .image_subresource = .{ .aspect_mask = .{ .color_bit = true }, .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
-        .image_offset = .{ .x = 0, .y = 0, .z = 0 },
+        .image_offset = .{ .x = @intCast(x), .y = @intCast(y), .z = 0 },
         .image_extent = .{ .width = width, .height = height, .depth = 1 },
     }});
 

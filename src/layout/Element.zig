@@ -133,6 +133,7 @@ intrinsic_w: f32 = 0,
 intrinsic_h: f32 = 0,
 content_w: f32 = 0,
 content_h: f32 = 0,
+subtree_end: Slot = INVALID_SLOT,
 
 const Element = @This();
 

@@ -1,10 +1,15 @@
 const std = @import("std");
 const gpu = @import("gpu");
 
+pub const CommandKind = enum { vertex, instance };
+
 pub const Command = struct {
+    kind: CommandKind,
     texture: ?u32,
-    index_offset: u32,
-    index_count: u32,
+    // .vertex   -> offset/count are index_offset/index_count into `indices`
+    // .instance -> offset/count are first_instance/instance_count into `instances`
+    offset: u32,
+    count: u32,
     clip_rect: ?[4]f32,
 };
 
@@ -13,6 +18,7 @@ const LayerRange = struct { start: u32 = 0, len: u32 = 0 };
 allocator: std.mem.Allocator,
 vertices: std.ArrayList(u8),
 indices: std.ArrayList(u32),
+instances: std.ArrayList(u8),
 cmds: std.ArrayList(Command),
 layer_cmds: std.ArrayList(Command),
 layer_ranges: [256]LayerRange,
@@ -26,6 +32,7 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
         .cmds = .empty,
         .indices = .empty,
         .vertices = .empty,
+        .instances = .empty,
         .layer_cmds = .empty,
         .layer_ranges = [_]LayerRange{.{}} ** 256,
         .current_layer = 0,
@@ -35,6 +42,7 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
 pub fn deinit(self: *DrawList) void {
     self.vertices.deinit(self.allocator);
     self.indices.deinit(self.allocator);
+    self.instances.deinit(self.allocator);
     self.cmds.deinit(self.allocator);
     self.layer_cmds.deinit(self.allocator);
 }
@@ -42,6 +50,7 @@ pub fn deinit(self: *DrawList) void {
 pub fn reset(self: *DrawList) void {
     self.vertices.clearRetainingCapacity();
     self.indices.clearRetainingCapacity();
+    self.instances.clearRetainingCapacity();
     self.cmds.clearRetainingCapacity();
     self.layer_cmds.clearRetainingCapacity();
     self.layer_ranges = [_]LayerRange{.{}} ** 256;
@@ -52,25 +61,36 @@ pub fn setLayer(self: *DrawList, layer: u8) void {
     self.current_layer = layer;
 }
 
-pub fn push(self: *DrawList, vertices: []const gpu.Vertex, indices: []const u32, texture: ?u32, clip: ?[4]f32) !void {
-    const range = &self.layer_ranges[self.current_layer];
-    const needs_new_command = blk: {
-        if (range.len == 0) break :blk true;
-        const last = &self.layer_cmds.items[range.start + range.len - 1];
-        break :blk last.texture != texture or !std.meta.eql(last.clip_rect, clip);
-    };
+fn lastCmdMatches(self: *const DrawList, kind: CommandKind, texture: ?u32, clip: ?[4]f32) bool {
+    const range = self.layer_ranges[self.current_layer];
+    if (range.len == 0) return false;
+    const last = &self.layer_cmds.items[range.start + range.len - 1];
+    if (last.kind != kind) return false;
+    if (last.texture != texture) return false;
+    const a = last.clip_rect orelse return clip == null;
+    const c = clip orelse return false;
+    return std.mem.eql(f32, &a, &c);
+}
 
-    if (needs_new_command) {
-        if (range.len == 0) range.start = @intCast(self.layer_cmds.items.len);
-        try self.layer_cmds.append(self.allocator, .{
-            .texture = texture,
-            .index_offset = @intCast(self.indices.items.len),
-            .index_count = 0,
-            .clip_rect = clip,
-        });
-        range.len += 1;
+fn beginCommand(self: *DrawList, kind: CommandKind, texture: ?u32, clip: ?[4]f32, offset: u32) !void {
+    const range = &self.layer_ranges[self.current_layer];
+    if (range.len == 0) range.start = @intCast(self.layer_cmds.items.len);
+    try self.layer_cmds.append(self.allocator, .{
+        .kind = kind,
+        .texture = texture,
+        .offset = offset,
+        .count = 0,
+        .clip_rect = clip,
+    });
+    range.len += 1;
+}
+
+pub fn push(self: *DrawList, vertices: []const gpu.Vertex, indices: []const u32, texture: ?u32, clip: ?[4]f32) !void {
+    if (!self.lastCmdMatches(.vertex, texture, clip)) {
+        try self.beginCommand(.vertex, texture, clip, @intCast(self.indices.items.len));
     }
 
+    const range = self.layer_ranges[self.current_layer];
     const vertex_base: u32 = @intCast(self.vertices.items.len / @sizeOf(gpu.Vertex));
     try self.indices.ensureUnusedCapacity(self.allocator, indices.len);
     for (indices) |idx| {
@@ -78,7 +98,19 @@ pub fn push(self: *DrawList, vertices: []const gpu.Vertex, indices: []const u32,
     }
 
     try self.vertices.appendSlice(self.allocator, std.mem.sliceAsBytes(vertices));
-    self.layer_cmds.items[range.start + range.len - 1].index_count += @intCast(indices.len);
+    self.layer_cmds.items[range.start + range.len - 1].count += @intCast(indices.len);
+}
+
+pub fn pushInstances(self: *DrawList, insts: []const gpu.Instance, texture: ?u32, clip: ?[4]f32) !void {
+    if (insts.len == 0) return;
+    if (!self.lastCmdMatches(.instance, texture, clip)) {
+        const first_instance: u32 = @intCast(self.instances.items.len / @sizeOf(gpu.Instance));
+        try self.beginCommand(.instance, texture, clip, first_instance);
+    }
+
+    const range = self.layer_ranges[self.current_layer];
+    try self.instances.appendSlice(self.allocator, std.mem.sliceAsBytes(insts));
+    self.layer_cmds.items[range.start + range.len - 1].count += @intCast(insts.len);
 }
 
 pub fn finalize(self: *DrawList) !void {

@@ -72,9 +72,8 @@ fn closeSlow(
     press_here: bool,
 ) !void {
     const scale = ui.content_scale;
-    const face = ui.font.getFace(self.font);
-    const shaped = try face.shape(ui.allocator, self.content, self.size * scale);
-    defer ui.allocator.free(shaped.glyphs);
+    const face = try ui.font.getFace(self.font);
+    const shaped = try face.shape(self.content, self.size * scale);
     const line_h = (try face.lineHeight(self.size * scale)) / scale;
 
     if (need_hit_test) {
