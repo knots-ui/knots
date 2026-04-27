@@ -96,8 +96,7 @@ const Measurement = struct {
 
 allocator: std.mem.Allocator,
 pool: ElementPool,
-stack: [512]Element.Slot, // parent stack
-stack_top: u16,
+stack: std.ArrayList(Element.Slot) = .empty,
 root_slot: Element.Slot = Element.INVALID_SLOT,
 z_used: std.StaticBitSet(256),
 z_slots: std.ArrayList(Element.Slot) = .empty,
@@ -111,13 +110,12 @@ pub fn init(allocator: std.mem.Allocator) Context {
     return .{
         .allocator = allocator,
         .pool = .{},
-        .stack = undefined,
-        .stack_top = 0,
         .z_used = .initEmpty(),
     };
 }
 
 pub fn deinit(self: *Context) void {
+    self.stack.deinit(self.allocator);
     self.z_slots.deinit(self.allocator);
     self.id_to_slot.deinit(self.allocator);
     self.pool.deinit(self.allocator);
@@ -125,9 +123,9 @@ pub fn deinit(self: *Context) void {
 
 pub fn reset(self: *Context) void {
     self.pool.reset();
+    self.stack.clearRetainingCapacity();
     self.z_slots.clearRetainingCapacity();
     self.id_to_slot.clearRetainingCapacity();
-    self.stack_top = 0;
     self.root_slot = Element.INVALID_SLOT;
     self.z_used = .initEmpty();
     self.has_scroll = false;
@@ -137,8 +135,8 @@ pub fn open(self: *Context, id: Element.Id, config: Element.Config) !Element.Slo
     const slot = try self.pool.append(self.allocator, id, config.toElement());
     try self.id_to_slot.putContext(self.allocator, id, slot, .{});
 
-    if (self.stack_top > 0) {
-        const parent_slot = self.stack[self.stack_top - 1];
+    if (self.stack.items.len > 0) {
+        const parent_slot = self.stack.items[self.stack.items.len - 1];
         const parent = self.pool.get(parent_slot);
 
         if (parent.first_child == Element.INVALID_SLOT) {
@@ -160,8 +158,7 @@ pub fn open(self: *Context, id: Element.Id, config: Element.Config) !Element.Slo
         self.z_used.set(root.z_index);
         if (root.overflow.isScroll()) self.has_scroll = true;
     }
-    self.stack[self.stack_top] = slot;
-    self.stack_top += 1;
+    try self.stack.append(self.allocator, slot);
     return slot;
 }
 
@@ -171,15 +168,13 @@ pub fn openRoot(self: *Context, id: Element.Id, config: Element.Config) !Element
     const el = self.pool.get(slot);
     self.z_used.set(el.z_index);
     if (el.overflow.isScroll()) self.has_scroll = true;
-    self.stack[self.stack_top] = slot;
-    self.stack_top += 1;
+    try self.stack.append(self.allocator, slot);
     return slot;
 }
 
 pub fn close(self: *Context) void {
-    std.debug.assert(self.stack_top > 0);
-    self.stack_top -= 1;
-    const slot = self.stack[self.stack_top];
+    std.debug.assert(self.stack.items.len > 0);
+    const slot = self.stack.pop().?;
     self.pool.get(slot).subtree_end = @intCast(self.pool.elements.items.len);
 }
 
