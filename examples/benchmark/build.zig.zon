@@ -1,0 +1,14 @@
+.{
+    .name = .benchmark,
+    .version = "0.0.0",
+    .fingerprint = 0xb70c48fee7e259b7,
+    .minimum_zig_version = "0.17.0-dev.56+a8226cd53",
+    .dependencies = .{
+        .knots = .{ .path = "../../" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
