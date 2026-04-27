@@ -2,7 +2,7 @@ const std = @import("std");
 const Element = @import("layout").Element;
 
 const Type = union(enum) {
-    src: std.builtin.SourceLocation,
+    src: u64,
     str: []const u8,
 };
 
@@ -11,9 +11,16 @@ index: usize,
 
 const Key = @This();
 
-pub inline fn src(src_: std.builtin.SourceLocation) Key {
+pub inline fn src(comptime src_: std.builtin.SourceLocation) Key {
+    const seed = comptime blk: {
+        var h = std.hash.Wyhash.init(0);
+        h.update(src_.file);
+        h.update(std.mem.asBytes(&src_.line));
+        h.update(std.mem.asBytes(&src_.column));
+        break :blk h.final();
+    };
     return Key{
-        .key = .{ .src = src_ },
+        .key = .{ .src = seed },
         .index = 0,
     };
 }
@@ -39,16 +46,23 @@ pub fn fmt(comptime format: []const u8, args: anytype) Element.Id {
 }
 
 pub fn hash(self: Key) Element.Id {
-    var hasher = std.hash.Wyhash.init(0);
-    switch (self.key) {
-        inline .src => |s| {
-            hasher.update(s.file);
-            hasher.update(std.mem.asBytes(&s.line));
-            hasher.update(std.mem.asBytes(&s.column));
+    const final: u64 = switch (self.key) {
+        .src => |seed| mixIndex(seed, self.index),
+        .str => |s| blk: {
+            var hasher = std.hash.Wyhash.init(0);
+            hasher.update(s);
+            hasher.update(std.mem.asBytes(&self.index));
+            break :blk hasher.final();
         },
-        inline .str => |s| hasher.update(s),
-    }
-    hasher.update(std.mem.asBytes(&self.index));
-    const result: Element.Id = @truncate(hasher.final());
+    };
+    const result: Element.Id = @truncate(final);
     return if (result == Element.INVALID_ID) result -% 1 else result;
+}
+
+/// Wyhash-style finalizer applied to (seed, index). Cheap, well-distributed.
+inline fn mixIndex(seed: u64, index: usize) u64 {
+    var x: u64 = seed ^ @as(u64, index);
+    x = (x ^ (x >> 32)) *% 0x9E3779B97F4A7C15;
+    x = (x ^ (x >> 32)) *% 0xBF58476D1CE4E5B9;
+    return x ^ (x >> 32);
 }
