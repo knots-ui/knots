@@ -28,7 +28,7 @@ pub fn SelectInput(comptime T: type) type {
     return struct {
         labels: []const []const u8 = default_labels,
         values: []const T = default_values,
-        selected_idx: *usize,
+        initial_selected: ?u32 = null,
         key: Key,
 
         placeholder: []const u8 = "Select...",
@@ -41,15 +41,18 @@ pub fn SelectInput(comptime T: type) type {
         focused_style: Style = .{ .color = .elevated, .border_color = .primary, .border_width = 1 },
         option_style: Style = .{ .color = .elevated },
         option_hover_color: Color.Input = .toned,
-        onSelect: ?*const fn (*App, T, usize) anyerror!void = null,
+        onSelect: ?*const fn (*App, T, u32) anyerror!void = null,
 
         const Self = @This();
 
-        pub fn open(self: *const Self, ui: *UI) !Element.Id {
+        pub fn open(self: *const Self, app: *App) !Element.Id {
             std.debug.assert(self.labels.len == self.values.len);
+            const ui = &app.ui;
 
             const id = self.key.hash();
+            const existed = ui.state.get(.select_input, id) != null;
             const s = try ui.state.getOrCreate(.select_input, ui.allocator, id);
+            if (!existed) s.selected = self.initial_selected;
 
             if (ui.clicked(id)) s.open = !s.open;
 
@@ -57,10 +60,10 @@ pub fn SelectInput(comptime T: type) type {
                 for (self.labels, 0..) |_, i| {
                     const opt_id = self.key.indexed(4 + i).hash();
                     if (ui.clicked(opt_id)) {
-                        self.selected_idx.* = i;
+                        const idx_u32: u32 = @intCast(i);
+                        s.selected = idx_u32;
                         s.open = false;
-                        const app: *App = @alignCast(@fieldParentPtr("ui", ui));
-                        if (self.onSelect) |cb| try cb(app, self.values[i], i);
+                        if (self.onSelect) |cb| try cb(app, self.values[i], idx_u32);
                         break;
                     }
                 }
@@ -92,12 +95,16 @@ pub fn SelectInput(comptime T: type) type {
             }, decoration);
         }
 
-        pub fn close(self: *const Self, ui: *UI) !void {
+        pub fn close(self: *const Self, app: *App) !void {
+            const ui = &app.ui;
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.select_input, ui.allocator, id);
 
-            const display_text, const text_color = if (self.selected_idx.* < self.labels.len)
-                .{ self.labels[self.selected_idx.*], self.color.resolve() }
+            const display_text, const text_color = if (s.selected) |sel|
+                if (sel < self.labels.len)
+                    .{ self.labels[sel], self.color.resolve() }
+                else
+                    .{ self.placeholder, self.placeholder_color.resolve() }
             else
                 .{ self.placeholder, self.placeholder_color.resolve() };
 
@@ -147,7 +154,7 @@ pub fn SelectInput(comptime T: type) type {
                     const opt_key = self.key.indexed(4 + i);
                     const opt_id = opt_key.hash();
                     const is_hovered = ui.hovering(opt_id);
-                    const is_selected = self.selected_idx.* == i;
+                    const is_selected = if (s.selected) |sel| sel == i else false;
 
                     const opt_bg: Decoration = if (is_hovered or is_selected)
                         .{ .rect = .{ .color = self.option_hover_color.resolve() } }

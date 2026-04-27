@@ -21,6 +21,7 @@ pub const Scroll = struct {
 
 pub const SelectInput = struct {
     open: bool = false,
+    selected: ?u32 = null,
     anchor_box: Element.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     viewport_box: Element.Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
 };
