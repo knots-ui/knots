@@ -101,7 +101,10 @@ fn workerFn(
             queue: *std.Io.Queue(Completion),
         ) std.Io.Cancelable!void {
             ctx.result = @call(.auto, func, args);
-            queue.putOneUncancelable(io, ctx.completion) catch unreachable;
+            queue.putOne(io, ctx.completion) catch |err| switch (err) {
+                error.Closed => unreachable,
+                error.Canceled => return error.Canceled,
+            };
         }
     }.run;
 }
