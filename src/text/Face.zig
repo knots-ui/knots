@@ -10,6 +10,7 @@ hb_buf: *hb.hb_buffer_t,
 atlas: *Atlas,
 cache: std.AutoHashMap(glyph.Key, glyph.Metrics),
 shaped_cache: ShapedMap,
+stale_buf: std.ArrayList(glyph.ShapedKey),
 current_frame: u32,
 last_size_q: u32,
 allocator: std.mem.Allocator,
@@ -51,6 +52,7 @@ pub fn init(allocator: std.mem.Allocator, ft_lib: ft.FT_Library, font_data: []co
         .atlas = atlas,
         .cache = .init(allocator),
         .shaped_cache = .empty,
+        .stale_buf = .empty,
         .current_frame = 0,
         .last_size_q = 0,
         .allocator = allocator,
@@ -64,6 +66,7 @@ pub fn deinit(self: *Face) void {
         self.allocator.free(kv.value_ptr.glyphs);
     }
     self.shaped_cache.deinit(self.allocator);
+    self.stale_buf.deinit(self.allocator);
     self.cache.deinit();
     hb.hb_buffer_destroy(self.hb_buf);
     hb.hb_font_destroy(self.hb_font);
@@ -226,16 +229,15 @@ pub fn measure(self: *Face, text: []const u8, size_px: f32) !glyph.TextMetrics {
 /// once per frame after all shape() calls for the frame are done.
 pub fn endFrame(self: *Face) void {
     const cur = self.current_frame;
-    var stale: std.ArrayList(glyph.ShapedKey) = .empty;
-    defer stale.deinit(self.allocator);
+    self.stale_buf.clearRetainingCapacity();
 
     var it = self.shaped_cache.iterator();
     while (it.next()) |kv| {
         if (cur -% kv.value_ptr.last_used_frame > SHAPED_EVICT_AGE) {
-            stale.append(self.allocator, kv.key_ptr.*) catch break;
+            self.stale_buf.append(self.allocator, kv.key_ptr.*) catch break;
         }
     }
-    for (stale.items) |k| {
+    for (self.stale_buf.items) |k| {
         if (self.shaped_cache.fetchRemoveContext(k, .{})) |kv| {
             self.allocator.free(kv.key.text);
             self.allocator.free(kv.value.glyphs);
