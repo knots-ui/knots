@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const App = @import("knots").App;
 const UI = @import("ui").UI;
 
 samples: [60]f32 = [_]f32{0} ** 60,
@@ -9,14 +10,14 @@ fps_buf: []u8,
 
 const Perf = @This();
 
-pub fn open(self: *const Perf, ui: *UI) !u32 {
-    var deco = try ui.textDecoration(self.fps_label, 8, null);
+pub fn open(self: *const Perf, app: *App) !u32 {
+    var deco = try app.ui.textDecoration(self.fps_label, 8, null);
     deco.text.color = .{ 1.0, 0.0, 0.0, 1.0 };
-    return try ui.openRoot(.src(@src()), 0, 0, .{ .z_index = 255 }, deco);
+    return try app.ui.openRoot(.src(@src()), 0, 0, .{ .z_index = 255 }, deco);
 }
 
-pub fn close(_: *const Perf, ui: *UI) !void {
-    ui.close();
+pub fn close(_: *const Perf, app: *App) !void {
+    app.ui.close();
 }
 
 pub fn updateFps(self: *Perf, duration: std.Io.Duration) !void {

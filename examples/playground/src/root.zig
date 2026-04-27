@@ -40,7 +40,6 @@ counter_items: std.ArrayList(isize) = .empty,
 show_details: bool = true,
 details_tween_h: f32 = 0,
 name_buf: std.ArrayList(u8),
-selected_idx: usize = 0,
 grid_cmds: std.ArrayList(Canvas.DrawCmd),
 
 const Self = @This();
@@ -722,7 +721,7 @@ fn renderSectionInputs(app: *knots.App) !void {
             .placeholder = "Start typing...",
         },
         Spacer{ .height = .fixed(8), .key = .src(@src()) },
-        SelectInput(Fruit){ .key = .src(@src()), .selected_idx = &self.selected_idx },
+        SelectInput(Fruit){ .key = .src(@src()) },
     });
 }
 
@@ -798,7 +797,7 @@ fn drawGrid(app: *knots.App, painter: *Canvas.Painter) !void {
         }
     }
 
-    app.signal(.redraw);
+    try app.signal(.redraw);
 }
 
 fn increment(app: *knots.App) !void {
@@ -814,7 +813,7 @@ fn decrement(app: *knots.App) !void {
 }
 
 fn exit(app: *knots.App) !void {
-    app.signal(.exit);
+    try app.signal(.exit);
 }
 
 fn sleep(app: *knots.App) !void {

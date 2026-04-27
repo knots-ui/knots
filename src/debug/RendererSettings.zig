@@ -17,9 +17,9 @@ const If = knots.control.If;
 const present_modes = std.enums.values(PresentMode);
 
 const State = struct {
-    backend_idx: usize,
-    present_mode_idx: usize,
-    show_fps_idx: usize = 0,
+    backend_idx: u32,
+    present_mode_idx: u32,
+    show_fps_idx: u32 = 0,
     perf: Perf = .{ .fps_buf = &.{} },
     fps_buf: [128]u8 = undefined,
 
@@ -33,10 +33,10 @@ onClick: ?*const fn (*knots.App) anyerror!void = null,
 
 const RendererSettings = @This();
 
-fn mustFindIdx(slice: anytype, needle: anytype) usize {
+fn mustFindIdx(slice: anytype, needle: anytype) u32 {
     for (slice, 0..) |be, i| {
         if (needle == be) {
-            return i;
+            return @intCast(i);
         }
     }
 
@@ -66,8 +66,18 @@ pub fn deinit(self: *const RendererSettings, allocator: std.mem.Allocator) void 
 }
 
 const apply_key: knots.ui.Key = .str("renderer_settings_apply");
+const backend_key: knots.ui.Key = .str("renderer_settings_backend");
+const present_mode_key: knots.ui.Key = .str("renderer_settings_present_mode");
+const fps_key: knots.ui.Key = .str("renderer_settings_fps");
+
+fn selectedIdx(app: *knots.App, key: knots.ui.Key, fallback: u32) u32 {
+    const s = app.ui.state.get(.select_input, key.hash()) orelse return fallback;
+    return s.selected orelse fallback;
+}
 
 pub fn render(self: *const RendererSettings, app: *knots.App) anyerror!void {
+    self.state.show_fps_idx = selectedIdx(app, fps_key, self.state.show_fps_idx);
+
     if (self.state.show_fps_idx == 1) {
         self.state.perf.updateFps(app.timer.delta) catch {};
     }
@@ -75,22 +85,22 @@ pub fn render(self: *const RendererSettings, app: *knots.App) anyerror!void {
     try app.e(.{
         Text{ .content = "GPU API", .size = 12, .key = .src(@src()) },
         SelectInput(GPUBackend){
-            .key = .src(@src()),
-            .selected_idx = &self.state.backend_idx,
+            .key = backend_key,
+            .initial_selected = self.state.backend_idx,
             .width = .fixed(100),
             .labels = enumTagNames(GPUBackend, GPUBackend.availableSlice()),
             .values = GPUBackend.availableSlice(),
         },
         Text{ .content = "Present mode", .size = 12, .key = .src(@src()) },
         SelectInput(PresentMode){
-            .key = .src(@src()),
-            .selected_idx = &self.state.present_mode_idx,
+            .key = present_mode_key,
+            .initial_selected = self.state.present_mode_idx,
             .width = .fixed(120),
         },
         Text{ .content = "FPS", .size = 12, .key = .src(@src()) },
         SelectInput(FpsToggle){
-            .key = .src(@src()),
-            .selected_idx = &self.state.show_fps_idx,
+            .key = fps_key,
+            .initial_selected = self.state.show_fps_idx,
             .width = .fixed(60),
         },
         Button{
@@ -106,9 +116,13 @@ pub fn render(self: *const RendererSettings, app: *knots.App) anyerror!void {
     });
 
     if (app.ui.clicked(apply_key.hash())) {
-        app.reconfigureRenderer(.{
-            .gpu_backend = GPUBackend.availableSlice()[self.state.backend_idx],
-            .present_mode = present_modes[self.state.present_mode_idx],
+        const backend_idx = selectedIdx(app, backend_key, self.state.backend_idx);
+        const present_mode_idx = selectedIdx(app, present_mode_key, self.state.present_mode_idx);
+        self.state.backend_idx = backend_idx;
+        self.state.present_mode_idx = present_mode_idx;
+        try app.reconfigureRenderer(.{
+            .gpu_backend = GPUBackend.availableSlice()[backend_idx],
+            .present_mode = present_modes[present_mode_idx],
         });
     }
 
