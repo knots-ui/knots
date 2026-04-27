@@ -1,4 +1,4 @@
-const Decoration = @import("Decoration.zig").Decoration;
+const Decoration = @import("decoration.zig").Decoration;
 const Theme = @import("Theme.zig");
 const Color = @import("Color.zig");
 const Radius = Theme.Radius;

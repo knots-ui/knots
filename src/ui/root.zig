@@ -1,5 +1,5 @@
 pub const UI = @import("UI.zig");
-pub const Decoration = @import("Decoration.zig").Decoration;
+pub const Decoration = @import("decoration.zig").Decoration;
 pub const Style = @import("Style.zig");
 pub const Input = @import("Input.zig");
 pub const Key = @import("Key.zig");

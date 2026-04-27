@@ -11,7 +11,7 @@ const State = @import("State.zig");
 const Input = @import("Input.zig");
 const animation = @import("animation.zig");
 
-pub const Decoration = @import("Decoration.zig").Decoration;
+pub const Decoration = @import("decoration.zig").Decoration;
 pub const Key = @import("Key.zig");
 pub const Style = @import("Style.zig");
 
