@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const App = @import("knots").App;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Style = @import("ui").Style;
@@ -26,7 +27,8 @@ key: Key,
 
 const TextInput = @This();
 
-pub fn open(self: *const TextInput, ui: *UI) !Element.Id {
+pub fn open(self: *const TextInput, app: *App) !Element.Id {
+    const ui = &app.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);
 
@@ -55,7 +57,19 @@ pub fn open(self: *const TextInput, ui: *UI) !Element.Id {
     }, decoration);
 }
 
-pub fn close(self: *const TextInput, ui: *UI) !void {
+// Subkey indices under `self.key`.
+const SubKey = enum(usize) {
+    body = 1,
+    cur_overlay = 2,
+    cur_spacer = 3,
+    cur_rect = 4,
+    hl_overlay = 5,
+    hl_spacer = 6,
+    hl_rect = 7,
+};
+
+pub fn close(self: *const TextInput, app: *App) !void {
+    const ui = &app.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     const items = self.buf.items;
@@ -86,19 +100,17 @@ pub fn close(self: *const TextInput, ui: *UI) !void {
             };
             const x_lo = xAtByte(shaped.glyphs, sel_lo, scale);
             const x_hi = xAtByte(shaped.glyphs, sel_hi, scale);
-            try emitOverlayRect(ui, id, "hl", x_lo, x_hi - x_lo, line_h, sel_color);
+            try self.emitOverlayRect(ui, .hl_overlay, .hl_spacer, .hl_rect, x_lo, x_hi - x_lo, line_h, sel_color);
         } else {
             const cx = xAtByte(shaped.glyphs, s.cursor, scale);
-            try emitOverlayRect(ui, id, "cur", cx, 1, line_h, resolved_color);
+            try self.emitOverlayRect(ui, .cur_overlay, .cur_spacer, .cur_rect, cx, 1, line_h, resolved_color);
         }
     }
 
-    var buf: [64]u8 = undefined;
-    const text_key = std.fmt.bufPrint(&buf, "__ti_body_{}", .{id}) catch buf[0..];
     if (display.len > 0) {
         var deco = try ui.textDecoration(display, self.size, null);
         deco.text.color = color;
-        _ = try ui.open(.str(text_key), .{ .width = .fit(), .height = .fit() }, deco);
+        _ = try ui.open(self.key.indexed(@intFromEnum(SubKey.body)), .{ .width = .fit(), .height = .fit() }, deco);
         ui.close();
     }
 
@@ -106,33 +118,28 @@ pub fn close(self: *const TextInput, ui: *UI) !void {
 }
 
 fn emitOverlayRect(
+    self: *const TextInput,
     ui: *UI,
-    id: u64,
-    comptime tag: []const u8,
+    overlay: SubKey,
+    spacer: SubKey,
+    rect: SubKey,
     x: f32,
     w: f32,
     h: f32,
     color: [4]f32,
 ) !void {
-    var buf: [64]u8 = undefined;
-    var buf2: [64]u8 = undefined;
-    var buf3: [64]u8 = undefined;
-    const overlay_key = std.fmt.bufPrint(&buf, "__ti_" ++ tag ++ "_{}", .{id}) catch buf[0..];
-    const spacer_key = std.fmt.bufPrint(&buf2, "__ti_" ++ tag ++ "_sp_{}", .{id}) catch buf2[0..];
-    const rect_key = std.fmt.bufPrint(&buf3, "__ti_" ++ tag ++ "_r_{}", .{id}) catch buf3[0..];
-
-    _ = try ui.open(.str(overlay_key), .{
+    _ = try ui.open(self.key.indexed(@intFromEnum(overlay)), .{
         .width = .grow(),
         .height = .grow(),
         .position = .absolute,
         .direction = .row,
     }, .none);
-    _ = try ui.open(.str(spacer_key), .{
+    _ = try ui.open(self.key.indexed(@intFromEnum(spacer)), .{
         .width = .fixed(x),
         .height = .fixed(0),
     }, .none);
     ui.close();
-    _ = try ui.open(.str(rect_key), .{
+    _ = try ui.open(self.key.indexed(@intFromEnum(rect)), .{
         .width = .fixed(w),
         .height = .fixed(h),
     }, .{ .rect = .{ .color = color } });

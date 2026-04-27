@@ -55,12 +55,12 @@ pub const Painter = struct {
     }
 };
 
-pub fn open(self: *const Canvas, ui: *UI) !Element.Id {
+pub fn open(self: *const Canvas, app: *App) !Element.Id {
     const decoration: Decoration = if (self.style.hasDecoration())
         .{ .rect = self.style.toRect() }
     else
         .none;
-    return try ui.open(self.key, .{
+    return try app.ui.open(self.key, .{
         .width = self.width,
         .height = self.height,
         .overflow = .hidden,
@@ -68,8 +68,8 @@ pub fn open(self: *const Canvas, ui: *UI) !Element.Id {
     }, decoration);
 }
 
-pub fn close(self: *const Canvas, ui: *UI) !void {
-    const app: *App = @alignCast(@fieldParentPtr("ui", ui));
+pub fn close(self: *const Canvas, app: *App) !void {
+    const ui = &app.ui;
 
     self.cmds.clearRetainingCapacity();
     var painter = Painter{ .cmds = self.cmds, .allocator = ui.allocator };

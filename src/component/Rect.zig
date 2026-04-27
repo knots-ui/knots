@@ -1,3 +1,4 @@
+const App = @import("knots").App;
 const UI = @import("ui").UI;
 const Style = @import("ui").Style;
 const Element = @import("layout").Element;
@@ -16,12 +17,12 @@ key: UI.Key,
 
 const Rect = @This();
 
-pub fn open(self: *const Rect, ui: *UI) !Element.Id {
+pub fn open(self: *const Rect, app: *App) !Element.Id {
     const decoration: @import("ui").UI.Decoration = if (self.style.hasDecoration())
         .{ .rect = self.style.toRect() }
     else
         .none;
-    return try ui.open(self.key, .{
+    return try app.ui.open(self.key, .{
         .alignment = self.@"align",
         .justify = self.justify,
         .width = self.width,
@@ -34,6 +35,6 @@ pub fn open(self: *const Rect, ui: *UI) !Element.Id {
     }, decoration);
 }
 
-pub fn close(_: *const Rect, ui: *UI) !void {
-    ui.close();
+pub fn close(_: *const Rect, app: *App) !void {
+    app.ui.close();
 }

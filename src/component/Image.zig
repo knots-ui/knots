@@ -1,3 +1,4 @@
+const App = @import("knots").App;
 const UI = @import("ui").UI;
 const Element = @import("layout").Element;
 
@@ -10,8 +11,8 @@ key: UI.Key,
 
 const Image = @This();
 
-pub fn open(self: *const Image, ui: *UI) !Element.Id {
-    return try ui.open(self.key, .{
+pub fn open(self: *const Image, app: *App) !Element.Id {
+    return try app.ui.open(self.key, .{
         .width = self.width,
         .height = self.height,
         .position = self.position,
@@ -22,6 +23,6 @@ pub fn open(self: *const Image, ui: *UI) !Element.Id {
     } });
 }
 
-pub fn close(_: *const Image, ui: *UI) !void {
-    ui.close();
+pub fn close(_: *const Image, app: *App) !void {
+    app.ui.close();
 }

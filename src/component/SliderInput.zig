@@ -20,7 +20,8 @@ key: UI.Key,
 
 const SliderInput = @This();
 
-pub fn open(self: *const SliderInput, ui: *UI) !Element.Id {
+pub fn open(self: *const SliderInput, app: *App) !Element.Id {
+    const ui = &app.ui;
     const id = self.key.hash();
 
     const slider_state = try ui.state.getOrCreate(.slider, ui.allocator, id);
@@ -33,10 +34,7 @@ pub fn open(self: *const SliderInput, ui: *UI) !Element.Id {
             const new_value = self.min + t * (self.max - self.min);
             if (new_value != self.value.*) {
                 self.value.* = new_value;
-                if (self.onChange) |cb| {
-                    const app: *App = @alignCast(@fieldParentPtr("ui", ui));
-                    try cb(app);
-                }
+                if (self.onChange) |cb| try cb(app);
             }
         }
     }
@@ -56,6 +54,6 @@ pub fn open(self: *const SliderInput, ui: *UI) !Element.Id {
     } });
 }
 
-pub fn close(_: *const SliderInput, ui: *UI) !void {
-    ui.close();
+pub fn close(_: *const SliderInput, app: *App) !void {
+    app.ui.close();
 }

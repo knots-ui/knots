@@ -1,3 +1,4 @@
+const App = @import("knots").App;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Color = @import("ui").Color;
@@ -17,7 +18,8 @@ key: Key,
 
 const Text = @This();
 
-pub fn open(self: *const Text, ui: *UI) !Element.Id {
+pub fn open(self: *const Text, app: *App) !Element.Id {
+    const ui = &app.ui;
     if (!self.selectable) {
         var decoration = try ui.textDecoration(self.content, self.size, self.font);
         decoration.text.color = self.color.resolve();
@@ -34,7 +36,8 @@ pub fn open(self: *const Text, ui: *UI) !Element.Id {
     }, .none);
 }
 
-pub fn close(self: *const Text, ui: *UI) !void {
+pub fn close(self: *const Text, app: *App) !void {
+    const ui = &app.ui;
     if (!self.selectable) {
         ui.close();
         return;

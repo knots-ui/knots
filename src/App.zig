@@ -203,8 +203,8 @@ pub fn e(self: *App, tree: anytype) !void {
     if (comptime isControlFlow(T)) {
         try tree.eval(self);
     } else if (comptime isComponent(T)) {
-        _ = try tree.open(&self.ui);
-        try tree.close(&self.ui);
+        _ = try tree.open(self);
+        try tree.close(self);
     } else switch (@typeInfo(T)) {
         inline .@"fn" => try @call(.always_inline, tree, .{self}),
         inline .@"struct" => |s| if (comptime isRenderable(T))
@@ -214,9 +214,9 @@ pub fn e(self: *App, tree: anytype) !void {
             inline while (i < s.fields.len) : (i += 1) {
                 const val = @field(tree, s.fields[i].name);
                 if (comptime isComponent(@TypeOf(val)) and i + 1 < s.fields.len and isChildren(s.fields[i + 1].type)) {
-                    _ = try val.open(&self.ui);
+                    _ = try val.open(self);
                     try self.e(@field(tree, s.fields[i + 1].name));
-                    try val.close(&self.ui);
+                    try val.close(self);
                     i += 1;
                 } else try self.e(val);
             }

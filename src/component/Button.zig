@@ -37,7 +37,8 @@ pub const ButtonText = struct {
 
 const Button = @This();
 
-pub fn open(self: *const Button, ui: *UI) !Element.Id {
+pub fn open(self: *const Button, app: *App) !Element.Id {
+    const ui = &app.ui;
     const id = self.key.hash();
     const is_hovered = ui.hovering(id);
 
@@ -73,12 +74,10 @@ pub fn open(self: *const Button, ui: *UI) !Element.Id {
     }, .{ .rect = deco_rect });
 
     if (self.onClick) |cb|
-        if (ui.clickedWithin(rect))
-            try cb(@alignCast(@fieldParentPtr("ui", ui)));
+        if (ui.clickedWithin(rect)) try cb(app);
 
     if (self.onHover) |cb|
-        if (is_hovered)
-            try cb(@alignCast(@fieldParentPtr("ui", ui)));
+        if (is_hovered) try cb(app);
 
     if (self.text) |text| {
         const txt = Text{
@@ -88,13 +87,13 @@ pub fn open(self: *const Button, ui: *UI) !Element.Id {
             .selectable = false,
             .size = text.size,
         };
-        _ = try txt.open(ui);
-        try txt.close(ui);
+        _ = try txt.open(app);
+        try txt.close(app);
     }
 
     return rect;
 }
 
-pub fn close(_: *const Button, ui: *UI) !void {
-    ui.close();
+pub fn close(_: *const Button, app: *App) !void {
+    app.ui.close();
 }
