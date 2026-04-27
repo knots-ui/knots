@@ -163,18 +163,17 @@ pub fn createTexture(self: *Renderer, width: u32, height: u32, format: gpu.Textu
 }
 
 pub fn writeTexture(self: *Renderer, id: u32, data: [*]const u8, len: usize, width: u32, height: u32, bytes_per_row: ?u32) !void {
-    if (self.registered_textures[id]) |reg| {
-        try reg.texture.write(data, len, 0, 0, width, height, bytes_per_row);
-    }
+    if (id >= MAX_TEXTURES) return error.InvalidTextureId;
+    const reg = self.registered_textures[id] orelse return error.InvalidTextureId;
+    try reg.texture.write(data, len, 0, 0, width, height, bytes_per_row);
 }
 
-pub fn destroyTexture(self: *Renderer, id: u32) void {
-    if (id >= MAX_TEXTURES) return;
-    if (self.registered_textures[id]) |*reg| {
-        reg.texture.deinit();
-        reg.sampler.deinit();
-        self.registered_textures[id] = null;
-    }
+pub fn destroyTexture(self: *Renderer, id: u32) !void {
+    if (id >= MAX_TEXTURES) return error.InvalidTextureId;
+    const reg = &(self.registered_textures[id] orelse return error.InvalidTextureId);
+    reg.texture.deinit();
+    reg.sampler.deinit();
+    self.registered_textures[id] = null;
 }
 
 pub fn resize(self: *Renderer, width: u32, height: u32) !void {
@@ -215,14 +214,16 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
     }
 
     const verts = dl.vertices.items;
+    const verts_bytes = verts.len * @sizeOf(gpu.Vertex);
     if (verts.len > 0) {
-        try ensureBufferCapacity(&self.vertex_buf, verts.len);
-        self.vertex_buf.load(u8, verts);
+        try ensureBufferCapacity(&self.vertex_buf, verts_bytes);
+        self.vertex_buf.load(gpu.Vertex, verts);
     }
     const insts = dl.instances.items;
+    const insts_bytes = insts.len * @sizeOf(gpu.Instance);
     if (insts.len > 0) {
-        try ensureBufferCapacity(&self.instance_buf, insts.len);
-        self.instance_buf.load(u8, insts);
+        try ensureBufferCapacity(&self.instance_buf, insts_bytes);
+        self.instance_buf.load(gpu.Instance, insts);
     }
     if (dl.indices.items.len > 0) {
         try ensureBufferCapacity(&self.index_buf, dl.indices.items.len * @sizeOf(u32));
@@ -241,12 +242,12 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
             switch (cmd.kind) {
                 .vertex => {
                     pass.bindPipeline(&self.pipeline);
-                    pass.setVertexBuffer(0, &self.vertex_buf, 0, verts.len);
+                    pass.setVertexBuffer(0, &self.vertex_buf, 0, verts_bytes);
                     pass.setIndexBuffer(&self.index_buf, 0, dl.indices.items.len * @sizeOf(u32));
                 },
                 .instance => {
                     pass.bindPipeline(&self.instance_pipeline);
-                    pass.setVertexBuffer(0, &self.instance_buf, 0, insts.len);
+                    pass.setVertexBuffer(0, &self.instance_buf, 0, insts_bytes);
                     pass.setIndexBuffer(&self.unit_index_buf, 0, 6 * @sizeOf(u32));
                 },
             }
