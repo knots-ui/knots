@@ -169,7 +169,9 @@ const EmscriptenContext = struct {
 
 fn emscriptenMain(ud: ?*anyopaque) callconv(.c) void {
     const ctx: *EmscriptenContext = @ptrCast(@alignCast(ud orelse return));
-    ctx.app.tickFrame(ctx.frameCb) catch {};
+    ctx.app.tickFrame(ctx.frameCb) catch |err| {
+        std.os.emscripten.emscripten_log(std.os.emscripten.LOG.ERROR, "error in presenting frame: %s", (@errorName(err)).ptr);
+    };
 }
 
 /// Queue a frame signal, `.redraw` or `.exit`.
