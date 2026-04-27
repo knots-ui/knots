@@ -128,7 +128,8 @@ pub fn setDecoration(self: *UI, slot: Element.Slot, decoration: Decoration) void
 }
 
 pub fn currentSlot(self: *UI) Element.Slot {
-    return self.layout_ctx.stack[self.layout_ctx.stack_top - 1];
+    const stack = self.layout_ctx.stack.items;
+    return stack[stack.len - 1];
 }
 
 pub fn reset(self: *UI) void {
@@ -353,20 +354,19 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
     const content_scale = self.content_scale;
     const elements = self.layout_ctx.pool.elements.items;
 
-    var clip_rects: [64][4]f32 = undefined;
-    var clip_owners: [64]Element.Slot = undefined;
-    var clip_top: u8 = 0;
+    var clip_rects: std.ArrayList([4]f32) = .empty;
+    var clip_owners: std.ArrayList(Element.Slot) = .empty;
 
     for (slots) |slot| {
         const el = &elements[slot];
 
-        // Pop clips whose owner is not an ancestor of the current element.
-        while (clip_top > 0) {
-            if (self.layout_ctx.isDescendantOf(slot, clip_owners[clip_top - 1])) break;
-            clip_top -= 1;
+        while (clip_owners.items.len > 0) {
+            if (self.layout_ctx.isDescendantOf(slot, clip_owners.items[clip_owners.items.len - 1])) break;
+            _ = clip_owners.pop();
+            _ = clip_rects.pop();
         }
 
-        const clip: ?[4]f32 = if (clip_top > 0) clip_rects[clip_top - 1] else null;
+        const clip: ?[4]f32 = if (clip_rects.items.len > 0) clip_rects.items[clip_rects.items.len - 1] else null;
 
         if (el.interactive) {
             try self.hit_records.append(self.allocator, .{
@@ -389,12 +389,12 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                         el.box.y + el.box.h <= c[1])
                     {
                         if (el.overflow != .visible) {
-                            clip_rects[clip_top] = if (clip_top > 0)
-                                layout.Context.intersectClip(clip_rects[clip_top - 1], .{ el.box.x, el.box.y, el.box.w, el.box.h })
+                            const new_clip: [4]f32 = if (clip_rects.items.len > 0)
+                                layout.Context.intersectClip(clip_rects.items[clip_rects.items.len - 1], .{ el.box.x, el.box.y, el.box.w, el.box.h })
                             else
                                 .{ el.box.x, el.box.y, el.box.w, el.box.h };
-                            clip_owners[clip_top] = slot;
-                            clip_top += 1;
+                            try clip_rects.append(allocator, new_clip);
+                            try clip_owners.append(allocator, slot);
                         }
                         continue;
                     };
@@ -646,13 +646,13 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
         }
 
         if (el.overflow != .visible) {
-            const new_clip = [4]f32{ el.box.x, el.box.y, el.box.w, el.box.h };
-            clip_rects[clip_top] = if (clip_top > 0)
-                layout.Context.intersectClip(clip_rects[clip_top - 1], new_clip)
+            const child_clip = [4]f32{ el.box.x, el.box.y, el.box.w, el.box.h };
+            const new_clip: [4]f32 = if (clip_rects.items.len > 0)
+                layout.Context.intersectClip(clip_rects.items[clip_rects.items.len - 1], child_clip)
             else
-                new_clip;
-            clip_owners[clip_top] = slot;
-            clip_top += 1;
+                child_clip;
+            try clip_rects.append(allocator, new_clip);
+            try clip_owners.append(allocator, slot);
         }
     }
 }
