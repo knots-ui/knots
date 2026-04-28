@@ -104,7 +104,22 @@ pub fn build(b: *std.Build) void {
             }
             unreachable;
         },
-        .windows, .linux, .emscripten => {
+        .windows => {
+            if (b.lazyDependency("win32", .{})) |win32_dep| {
+                const m = b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                    .root_source_file = b.path("src/window/backend/windows/root.zig"),
+                    .imports = &.{
+                        .{ .name = "win32", .module = win32_dep.module("win32") },
+                        .{ .name = "gpu", .module = gpu_mod },
+                    },
+                });
+                break :blk m;
+            }
+            unreachable;
+        },
+        .linux, .emscripten => {
             const m = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
