@@ -1,13 +1,14 @@
 const std = @import("std");
 const gpu = @import("gpu");
 
-pub const CommandKind = enum { vertex, instance };
+pub const CommandKind = enum { vertex, instance, text };
 
 pub const Command = struct {
     kind: CommandKind,
     texture: ?u32,
     // .vertex   -> offset/count are index_offset/index_count into `indices`
     // .instance -> offset/count are first_instance/instance_count into `instances`
+    // .text     -> offset/count are index_offset/index_count into `text_indices`
     offset: u32,
     count: u32,
     clip_rect: ?[4]f32,
@@ -19,6 +20,8 @@ allocator: std.mem.Allocator,
 vertices: std.ArrayList(gpu.Vertex),
 indices: std.ArrayList(u32),
 instances: std.ArrayList(gpu.Instance),
+text_vertices: std.ArrayList(gpu.SlugVertex),
+text_indices: std.ArrayList(u32),
 cmds: std.ArrayList(Command),
 layer_cmds: std.ArrayList(Command),
 layer_ranges: [256]LayerRange,
@@ -34,6 +37,8 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
         .indices = .empty,
         .vertices = .empty,
         .instances = .empty,
+        .text_vertices = .empty,
+        .text_indices = .empty,
         .layer_cmds = .empty,
         .layer_ranges = [_]LayerRange{.{}} ** 256,
         .layers_dirty = .initEmpty(),
@@ -45,6 +50,8 @@ pub fn deinit(self: *DrawList) void {
     self.vertices.deinit(self.allocator);
     self.indices.deinit(self.allocator);
     self.instances.deinit(self.allocator);
+    self.text_vertices.deinit(self.allocator);
+    self.text_indices.deinit(self.allocator);
     self.cmds.deinit(self.allocator);
     self.layer_cmds.deinit(self.allocator);
 }
@@ -53,6 +60,8 @@ pub fn reset(self: *DrawList) void {
     self.vertices.clearRetainingCapacity();
     self.indices.clearRetainingCapacity();
     self.instances.clearRetainingCapacity();
+    self.text_vertices.clearRetainingCapacity();
+    self.text_indices.clearRetainingCapacity();
     self.cmds.clearRetainingCapacity();
     self.layer_cmds.clearRetainingCapacity();
     var it = self.layers_dirty.iterator(.{});
@@ -118,6 +127,22 @@ pub fn pushInstances(self: *DrawList, insts: []const gpu.Instance, texture: ?u32
     const range = self.layer_ranges[self.current_layer];
     try self.instances.appendSlice(self.allocator, insts);
     self.layer_cmds.items[range.start + range.len - 1].count += @intCast(insts.len);
+}
+
+pub fn pushText(self: *DrawList, verts: []const gpu.SlugVertex, indices: []const u32, clip: ?[4]f32) !void {
+    if (verts.len == 0 or indices.len == 0) return;
+    if (!self.lastCmdMatches(.text, null, clip)) {
+        try self.beginCommand(.text, null, clip, @intCast(self.text_indices.items.len));
+    }
+
+    const range = self.layer_ranges[self.current_layer];
+    const vertex_base: u32 = @intCast(self.text_vertices.items.len);
+    try self.text_indices.ensureUnusedCapacity(self.allocator, indices.len);
+    for (indices) |idx| {
+        self.text_indices.appendAssumeCapacity(idx + vertex_base);
+    }
+    try self.text_vertices.appendSlice(self.allocator, verts);
+    self.layer_cmds.items[range.start + range.len - 1].count += @intCast(indices.len);
 }
 
 pub fn finalize(self: *DrawList) !void {
