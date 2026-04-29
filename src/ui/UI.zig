@@ -345,7 +345,6 @@ pub fn tessellate(self: *UI, allocator: Allocator, draw_list: *DrawList) !void {
         try self.tessellateLayer(allocator, draw_list, self.layout_ctx.zSlots(@intCast(z)), @intCast(z));
     }
     try draw_list.finalize();
-    self.font.atlas.flush();
 }
 
 fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots: []const Element.Slot, layer: u8) !void {
@@ -417,47 +416,103 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                 if (glyphs.len > 0) {
                     const ascender = shaped.ascender / content_scale;
                     const baseline = el.box.y + ascender;
-                    const zero4 = [4]f32{ 0, 0, 0, 0 };
+                    const size_logical = t.size; // logical px
 
-                    const inst_buf = try allocator.alloc(gpu.Instance, glyphs.len);
+                    const inv_size = 1.0 / size_logical;
+                    const jac = [4]f32{ inv_size, 0, 0, -inv_size };
+
+                    const verts_buf = try allocator.alloc(gpu.SlugVertex, glyphs.len * 4);
+                    const idx_buf = try allocator.alloc(u32, glyphs.len * 6);
                     var quad_count: u32 = 0;
 
+                    const inv_sqrt2: f32 = 0.70710677;
+                    const NORMALS = [4][2]f32{
+                        .{ -inv_sqrt2, -inv_sqrt2 }, // tl
+                        .{ inv_sqrt2, -inv_sqrt2 }, // tr
+                        .{ inv_sqrt2, inv_sqrt2 }, // br
+                        .{ -inv_sqrt2, inv_sqrt2 }, // bl
+                    };
+
                     for (glyphs) |gl| {
-                        if (gl.metrics.rect.width == 0) continue;
+                        const rec = gl.record;
+                        if (rec.is_empty) continue;
 
-                        const gx = el.box.x + gl.x / content_scale;
-                        const gy = baseline - gl.metrics.bearing_y / content_scale;
-                        const gw = gl.metrics.rect.width / content_scale;
-                        const gh = gl.metrics.rect.height / content_scale;
+                        const em_corners = [4][2]f32{
+                            .{ rec.em_min[0], rec.em_max[1] }, // tl
+                            .{ rec.em_max[0], rec.em_max[1] }, // tr
+                            .{ rec.em_max[0], rec.em_min[1] }, // br
+                            .{ rec.em_min[0], rec.em_min[1] }, // bl
+                        };
 
-                        if (clip) |c| {
-                            if (gx >= c[0] + c[2] or
-                                gx + gw <= c[0] or
-                                gy >= c[1] + c[3] or
-                                gy + gh <= c[1]) continue;
+                        const origin_x = el.box.x + gl.x / content_scale;
+
+                        var screen_corners: [4][2]f32 = undefined;
+                        var min_sx: f32 = std.math.inf(f32);
+                        var max_sx: f32 = -std.math.inf(f32);
+                        var min_sy: f32 = std.math.inf(f32);
+                        var max_sy: f32 = -std.math.inf(f32);
+                        for (em_corners, 0..) |em, ci| {
+                            const sx = origin_x + em[0] * size_logical;
+                            const sy = baseline - em[1] * size_logical;
+                            screen_corners[ci] = .{ sx, sy };
+                            min_sx = @min(min_sx, sx);
+                            max_sx = @max(max_sx, sx);
+                            min_sy = @min(min_sy, sy);
+                            max_sy = @max(max_sy, sy);
                         }
 
-                        const u = gl.metrics.rect.u;
-                        const v = gl.metrics.rect.v;
-                        const uw = gl.metrics.rect.uw;
-                        const uh = gl.metrics.rect.uh;
+                        if (clip) |c| {
+                            if (min_sx >= c[0] + c[2] or
+                                max_sx <= c[0] or
+                                min_sy >= c[1] + c[3] or
+                                max_sy <= c[1]) continue;
+                        }
 
-                        inst_buf[quad_count] = .{
-                            .pos = .{ gx, gy },
-                            .size = .{ gw, gh },
-                            .uv0 = .{ u, v },
-                            .uv1 = .{ u + uw, v + uh },
-                            .color = t.color,
-                            .border_color = zero4,
-                            .corner_radius = 0,
-                            .border_width = 0,
-                            .prim_type = 1.0,
+                        // Bit-packed glyph data for tex.zw.
+                        const tex_z_bits: u32 =
+                            @as(u32, rec.glyph_loc_x) | (@as(u32, rec.glyph_loc_y) << 16);
+                        const tex_w_bits: u32 =
+                            @as(u32, rec.band_max_x) |
+                            (@as(u32, rec.band_max_y) << 16) |
+                            (@as(u32, rec.flags) << 24);
+                        const tex_z: f32 = @bitCast(tex_z_bits);
+                        const tex_w: f32 = @bitCast(tex_w_bits);
+
+                        const bnd = [4]f32{
+                            rec.band_scale[0],  rec.band_scale[1],
+                            rec.band_offset[0], rec.band_offset[1],
                         };
+
+                        const v_base = quad_count * 4;
+                        for (0..4) |ci| {
+                            verts_buf[v_base + ci] = .{
+                                .pos = .{
+                                    screen_corners[ci][0],
+                                    screen_corners[ci][1],
+                                    NORMALS[ci][0],
+                                    NORMALS[ci][1],
+                                },
+                                .tex = .{ em_corners[ci][0], em_corners[ci][1], tex_z, tex_w },
+                                .jac = jac,
+                                .bnd = bnd,
+                                .col = t.color,
+                            };
+                        }
+                        idx_buf[quad_count * 6 + 0] = v_base + 0;
+                        idx_buf[quad_count * 6 + 1] = v_base + 1;
+                        idx_buf[quad_count * 6 + 2] = v_base + 2;
+                        idx_buf[quad_count * 6 + 3] = v_base + 0;
+                        idx_buf[quad_count * 6 + 4] = v_base + 2;
+                        idx_buf[quad_count * 6 + 5] = v_base + 3;
                         quad_count += 1;
                     }
 
                     if (quad_count > 0) {
-                        try draw_list.pushInstances(inst_buf[0..quad_count], null, clip);
+                        try draw_list.pushText(
+                            verts_buf[0 .. quad_count * 4],
+                            idx_buf[0 .. quad_count * 6],
+                            clip,
+                        );
                     }
                 }
             },
