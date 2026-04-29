@@ -256,15 +256,18 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{ .root_module = mod });
     const layout_tests = b.addTest(.{ .root_module = layout_mod });
     const ui_tests = b.addTest(.{ .root_module = ui_mod });
+    const text_tests = b.addTest(.{ .root_module = text_mod });
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const run_layout_tests = b.addRunArtifact(layout_tests);
     const run_ui_tests = b.addRunArtifact(ui_tests);
+    const run_text_tests = b.addRunArtifact(text_tests);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_layout_tests.step);
     test_step.dependOn(&run_ui_tests.step);
+    test_step.dependOn(&run_text_tests.step);
 }
 
 fn embedSpirV(b: *std.Build, mod: *std.Build.Module, comptime name: []const u8, path: std.Build.LazyPath) void {
