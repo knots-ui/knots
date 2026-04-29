@@ -89,6 +89,7 @@ fn bytesPerPixel(format: gpu.Texture.Format) u32 {
     return switch (format) {
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .r8 => 1,
+        .rgba32f, .rgba32u => 16,
     };
 }
 
@@ -99,6 +100,8 @@ fn toWgpuFormat(format: gpu.Texture.Format) wgpu.Texture.Format {
         .bgra8 => .bgra8_unorm,
         .bgra8_srgb => .bgra8_unorm_srgb,
         .r8 => .r8_unorm,
+        .rgba32f => .rgba32_float,
+        .rgba32u => .rgba32_uint,
     };
 }
 

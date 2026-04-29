@@ -2,7 +2,7 @@ const Sampler = @import("Sampler.zig");
 
 const Texture = @This();
 
-pub const Format = enum { rgba8, rgba8_srgb, bgra8, bgra8_srgb, r8 };
+pub const Format = enum { rgba8, rgba8_srgb, bgra8, bgra8_srgb, r8, rgba32f, rgba32u };
 
 pub const Usage = struct {
     texture_binding: bool = false,
