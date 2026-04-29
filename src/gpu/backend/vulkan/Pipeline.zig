@@ -8,39 +8,71 @@ const Sampler = @import("Sampler.zig");
 const ui_primitives_vert_spv align(@alignOf(u32)) = @embedFile("ui_primitives_vertex_shader").*;
 const ui_primitives_instance_vert_spv align(@alignOf(u32)) = @embedFile("ui_primitives_instance_vertex_shader").*;
 const ui_primitives_frag_spv align(@alignOf(u32)) = @embedFile("ui_primitives_fragment_shader").*;
+const slug_vert_spv align(@alignOf(u32)) = @embedFile("slug_vertex_shader").*;
+const slug_frag_spv align(@alignOf(u32)) = @embedFile("slug_fragment_shader").*;
+
 const ui_primitives_vertex_attributes = toVkAttributes(gpu.Vertex);
 const ui_primitives_instance_attributes = toVkAttributes(gpu.Instance);
+const slug_attributes = toVkAttributes(gpu.SlugVertex);
+
+const SlugUniforms = extern struct {
+    mvp_row0: [4]f32,
+    mvp_row1: [4]f32,
+    mvp_row2: [4]f32,
+    mvp_row3: [4]f32,
+    viewport: [4]f32,
+};
 
 const vtable = gpu.Pipeline.VTable{
     .deinit = &deinit,
     .updateViewport = &updateViewport,
     .bindTexture = &bindTexture,
+    .bindCurveBand = &bindCurveBand,
+};
+
+const Pipeline = @This();
+
+const SlugDescriptors = struct {
+    set_layout: vk.DescriptorSetLayout,
+    descriptor_set: vk.DescriptorSet,
+    bound: bool,
 };
 
 allocator: std.mem.Allocator,
+kind: gpu.Pipeline.Kind,
 pipeline: vk.Pipeline,
 pipeline_layout: vk.PipelineLayout,
 uniform_descriptor_set_layout: vk.DescriptorSetLayout,
 uniform_descriptor_sets: []vk.DescriptorSet,
 uniform_buffers: []vk.Buffer,
 uniform_memories: []vk.DeviceMemory,
-uniform_mapped: []*[2]f32,
+uniform_mapped: []*anyopaque,
+uniform_size: usize,
 current_texture_ds: vk.DescriptorSet,
+slug_descriptors: ?SlugDescriptors,
+ctx: *Context,
 vkd: Context.DeviceDispatch,
 device: vk.Device,
 
-const Pipeline = @This();
-
 pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
+    return switch (desc.kind) {
+        .vertex, .instance => createPrimitives(allocator, ctx, desc),
+        .text => createSlug(allocator, ctx),
+    };
+}
+
+fn createPrimitives(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
     const vkd = ctx.vkd;
     const device = ctx.device;
 
     const frame_count = ctx.swapchain_images.len;
+    const uniform_size: usize = @sizeOf([2]f32);
+
     const uniform_buffers = try allocator.alloc(vk.Buffer, frame_count);
     errdefer allocator.free(uniform_buffers);
     const uniform_memories = try allocator.alloc(vk.DeviceMemory, frame_count);
     errdefer allocator.free(uniform_memories);
-    const uniform_mapped = try allocator.alloc(*[2]f32, frame_count);
+    const uniform_mapped = try allocator.alloc(*anyopaque, frame_count);
     errdefer allocator.free(uniform_mapped);
     var ub_created: usize = 0;
     errdefer {
@@ -51,7 +83,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     }
     for (0..frame_count) |i| {
         uniform_buffers[i] = try vkd.createBuffer(device, &.{
-            .size = @sizeOf([2]f32),
+            .size = uniform_size,
             .usage = .{ .uniform_buffer_bit = true },
             .sharing_mode = .exclusive,
         }, null);
@@ -61,7 +93,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
             .memory_type_index = try ctx.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible_bit = true, .host_coherent_bit = true }),
         }, null);
         try vkd.bindBufferMemory(device, uniform_buffers[i], uniform_memories[i], 0);
-        uniform_mapped[i] = @ptrCast(@alignCast(try vkd.mapMemory(device, uniform_memories[i], 0, @sizeOf([2]f32), .{})));
+        uniform_mapped[i] = (try vkd.mapMemory(device, uniform_memories[i], 0, uniform_size, .{})).?;
         ub_created += 1;
     }
 
@@ -87,11 +119,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
             .dst_array_element = 0,
             .descriptor_count = 1,
             .descriptor_type = .uniform_buffer,
-            .p_buffer_info = &[_]vk.DescriptorBufferInfo{.{
-                .buffer = uniform_buffers[i],
-                .offset = 0,
-                .range = @sizeOf([2]f32),
-            }},
+            .p_buffer_info = &[_]vk.DescriptorBufferInfo{.{ .buffer = uniform_buffers[i], .offset = 0, .range = uniform_size }},
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
         }}, null);
@@ -111,6 +139,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     const vert_spv: []align(@alignOf(u32)) const u8 = switch (desc.kind) {
         .vertex => &ui_primitives_vert_spv,
         .instance => &ui_primitives_instance_vert_spv,
+        .text => unreachable,
     };
     const vert_module = try vkd.createShaderModule(device, &.{
         .code_size = vert_spv.len,
@@ -121,14 +150,17 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     const vk_vertex_stride: u32 = switch (desc.kind) {
         .vertex => @sizeOf(gpu.Vertex),
         .instance => @sizeOf(gpu.Instance),
+        .text => unreachable,
     };
     const vk_input_rate: vk.VertexInputRate = switch (desc.kind) {
         .vertex => .vertex,
         .instance => .instance,
+        .text => unreachable,
     };
     const vk_attributes: []const vk.VertexInputAttributeDescription = switch (desc.kind) {
         .vertex => &ui_primitives_vertex_attributes,
         .instance => &ui_primitives_instance_attributes,
+        .text => unreachable,
     };
 
     const frag_module = try vkd.createShaderModule(device, &.{
@@ -138,11 +170,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     defer vkd.destroyShaderModule(device, frag_module, null);
 
     const apply_srgb_encode: u32 = if (ctx.swapchain_is_srgb) 0 else 1;
-    const spec_map = [_]vk.SpecializationMapEntry{.{
-        .constant_id = 0,
-        .offset = 0,
-        .size = @sizeOf(u32),
-    }};
+    const spec_map = [_]vk.SpecializationMapEntry{.{ .constant_id = 0, .offset = 0, .size = @sizeOf(u32) }};
     const frag_spec_info = vk.SpecializationInfo{
         .map_entry_count = spec_map.len,
         .p_map_entries = &spec_map,
@@ -150,22 +178,204 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
         .p_data = &apply_srgb_encode,
     };
 
+    const pipeline = try createGraphicsPipeline(
+        ctx,
+        pipeline_layout,
+        vert_module,
+        frag_module,
+        &frag_spec_info,
+        vk_vertex_stride,
+        vk_input_rate,
+        vk_attributes,
+    );
+
+    const self = try allocator.create(Pipeline);
+    self.* = .{
+        .allocator = allocator,
+        .kind = desc.kind,
+        .pipeline = pipeline,
+        .pipeline_layout = pipeline_layout,
+        .uniform_descriptor_set_layout = uniform_descriptor_set_layout,
+        .uniform_descriptor_sets = uniform_descriptor_sets,
+        .uniform_buffers = uniform_buffers,
+        .uniform_memories = uniform_memories,
+        .uniform_mapped = uniform_mapped,
+        .uniform_size = uniform_size,
+        .current_texture_ds = .null_handle,
+        .slug_descriptors = null,
+        .ctx = ctx,
+        .vkd = vkd,
+        .device = device,
+    };
+    return .{ .ptr = self, .vtable = &vtable };
+}
+
+fn createSlug(allocator: std.mem.Allocator, ctx: *Context) !gpu.Pipeline {
+    const vkd = ctx.vkd;
+    const device = ctx.device;
+
+    const frame_count = ctx.swapchain_images.len;
+    const uniform_size: usize = @sizeOf(SlugUniforms);
+
+    const uniform_buffers = try allocator.alloc(vk.Buffer, frame_count);
+    errdefer allocator.free(uniform_buffers);
+    const uniform_memories = try allocator.alloc(vk.DeviceMemory, frame_count);
+    errdefer allocator.free(uniform_memories);
+    const uniform_mapped = try allocator.alloc(*anyopaque, frame_count);
+    errdefer allocator.free(uniform_mapped);
+    var ub_created: usize = 0;
+    errdefer {
+        for (0..ub_created) |i| {
+            vkd.destroyBuffer(device, uniform_buffers[i], null);
+            vkd.freeMemory(device, uniform_memories[i], null);
+        }
+    }
+    for (0..frame_count) |i| {
+        uniform_buffers[i] = try vkd.createBuffer(device, &.{
+            .size = uniform_size,
+            .usage = .{ .uniform_buffer_bit = true },
+            .sharing_mode = .exclusive,
+        }, null);
+        const mem_reqs = vkd.getBufferMemoryRequirements(device, uniform_buffers[i]);
+        uniform_memories[i] = try vkd.allocateMemory(device, &.{
+            .allocation_size = mem_reqs.size,
+            .memory_type_index = try ctx.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible_bit = true, .host_coherent_bit = true }),
+        }, null);
+        try vkd.bindBufferMemory(device, uniform_buffers[i], uniform_memories[i], 0);
+        uniform_mapped[i] = (try vkd.mapMemory(device, uniform_memories[i], 0, uniform_size, .{})).?;
+        ub_created += 1;
+    }
+
+    const uniform_descriptor_set_layout = try vkd.createDescriptorSetLayout(device, &.{
+        .binding_count = 1,
+        .p_bindings = &[_]vk.DescriptorSetLayoutBinding{.{
+            .binding = 0,
+            .descriptor_type = .uniform_buffer,
+            .descriptor_count = 1,
+            .stage_flags = .{ .vertex_bit = true, .fragment_bit = true },
+            .p_immutable_samplers = null,
+        }},
+    }, null);
+    errdefer vkd.destroyDescriptorSetLayout(device, uniform_descriptor_set_layout, null);
+
+    const uniform_descriptor_sets = try allocator.alloc(vk.DescriptorSet, frame_count);
+    errdefer allocator.free(uniform_descriptor_sets);
+    for (0..frame_count) |i| {
+        uniform_descriptor_sets[i] = try ctx.allocateDescriptorSet(uniform_descriptor_set_layout);
+        vkd.updateDescriptorSets(device, &.{.{
+            .dst_set = uniform_descriptor_sets[i],
+            .dst_binding = 0,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .uniform_buffer,
+            .p_buffer_info = &[_]vk.DescriptorBufferInfo{.{ .buffer = uniform_buffers[i], .offset = 0, .range = uniform_size }},
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        }}, null);
+    }
+
+    const slug_set_layout = try vkd.createDescriptorSetLayout(device, &.{
+        .binding_count = 2,
+        .p_bindings = &[_]vk.DescriptorSetLayoutBinding{
+            .{ .binding = 0, .descriptor_type = .sampled_image, .descriptor_count = 1, .stage_flags = .{ .fragment_bit = true }, .p_immutable_samplers = null },
+            .{ .binding = 1, .descriptor_type = .sampled_image, .descriptor_count = 1, .stage_flags = .{ .fragment_bit = true }, .p_immutable_samplers = null },
+        },
+    }, null);
+    errdefer vkd.destroyDescriptorSetLayout(device, slug_set_layout, null);
+
+    const slug_descriptor_set = try ctx.allocateDescriptorSet(slug_set_layout);
+
+    const pipeline_layout = try vkd.createPipelineLayout(device, &.{
+        .set_layout_count = 2,
+        .p_set_layouts = &[_]vk.DescriptorSetLayout{ uniform_descriptor_set_layout, slug_set_layout },
+        .push_constant_range_count = 0,
+        .p_push_constant_ranges = null,
+    }, null);
+    errdefer vkd.destroyPipelineLayout(device, pipeline_layout, null);
+
+    const vert_module = try vkd.createShaderModule(device, &.{
+        .code_size = slug_vert_spv.len,
+        .p_code = @ptrCast(@alignCast(&slug_vert_spv)),
+    }, null);
+    defer vkd.destroyShaderModule(device, vert_module, null);
+
+    const frag_module = try vkd.createShaderModule(device, &.{
+        .code_size = slug_frag_spv.len,
+        .p_code = @ptrCast(@alignCast(&slug_frag_spv)),
+    }, null);
+    defer vkd.destroyShaderModule(device, frag_module, null);
+
+    const apply_srgb_encode: u32 = if (ctx.swapchain_is_srgb) 0 else 1;
+    const spec_map = [_]vk.SpecializationMapEntry{.{ .constant_id = 0, .offset = 0, .size = @sizeOf(u32) }};
+    const frag_spec_info = vk.SpecializationInfo{
+        .map_entry_count = spec_map.len,
+        .p_map_entries = &spec_map,
+        .data_size = @sizeOf(u32),
+        .p_data = &apply_srgb_encode,
+    };
+
+    const pipeline = try createGraphicsPipeline(
+        ctx,
+        pipeline_layout,
+        vert_module,
+        frag_module,
+        &frag_spec_info,
+        @sizeOf(gpu.SlugVertex),
+        .vertex,
+        &slug_attributes,
+    );
+
+    const self = try allocator.create(Pipeline);
+    self.* = .{
+        .allocator = allocator,
+        .kind = .text,
+        .pipeline = pipeline,
+        .pipeline_layout = pipeline_layout,
+        .uniform_descriptor_set_layout = uniform_descriptor_set_layout,
+        .uniform_descriptor_sets = uniform_descriptor_sets,
+        .uniform_buffers = uniform_buffers,
+        .uniform_memories = uniform_memories,
+        .uniform_mapped = uniform_mapped,
+        .uniform_size = uniform_size,
+        .current_texture_ds = .null_handle,
+        .slug_descriptors = .{
+            .set_layout = slug_set_layout,
+            .descriptor_set = slug_descriptor_set,
+            .bound = false,
+        },
+        .ctx = ctx,
+        .vkd = vkd,
+        .device = device,
+    };
+    return .{ .ptr = self, .vtable = &vtable };
+}
+
+fn createGraphicsPipeline(
+    ctx: *Context,
+    pipeline_layout: vk.PipelineLayout,
+    vert_module: vk.ShaderModule,
+    frag_module: vk.ShaderModule,
+    frag_spec_info: *const vk.SpecializationInfo,
+    vertex_stride: u32,
+    input_rate: vk.VertexInputRate,
+    attributes: []const vk.VertexInputAttributeDescription,
+) !vk.Pipeline {
     var vk_pipeline: [1]vk.Pipeline = undefined;
-    _ = try vkd.createGraphicsPipelines(device, .null_handle, &.{.{
+    _ = try ctx.vkd.createGraphicsPipelines(ctx.device, .null_handle, &.{.{
         .stage_count = 2,
         .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
             .{ .stage = .{ .vertex_bit = true }, .module = vert_module, .p_name = "main" },
-            .{ .stage = .{ .fragment_bit = true }, .module = frag_module, .p_name = "main", .p_specialization_info = &frag_spec_info },
+            .{ .stage = .{ .fragment_bit = true }, .module = frag_module, .p_name = "main", .p_specialization_info = frag_spec_info },
         },
         .p_vertex_input_state = &.{
             .vertex_binding_description_count = 1,
             .p_vertex_binding_descriptions = &[_]vk.VertexInputBindingDescription{.{
                 .binding = 0,
-                .stride = vk_vertex_stride,
-                .input_rate = vk_input_rate,
+                .stride = vertex_stride,
+                .input_rate = input_rate,
             }},
-            .vertex_attribute_description_count = @intCast(vk_attributes.len),
-            .p_vertex_attribute_descriptions = vk_attributes.ptr,
+            .vertex_attribute_description_count = @intCast(attributes.len),
+            .p_vertex_attribute_descriptions = attributes.ptr,
         },
         .p_input_assembly_state = &.{ .topology = .triangle_list, .primitive_restart_enable = .false },
         .p_viewport_state = &.{ .viewport_count = 1, .scissor_count = 1 },
@@ -214,22 +424,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
         .subpass = 0,
         .base_pipeline_index = -1,
     }}, null, vk_pipeline[0..1]);
-
-    const self = try allocator.create(Pipeline);
-    self.* = .{
-        .allocator = allocator,
-        .pipeline = vk_pipeline[0],
-        .pipeline_layout = pipeline_layout,
-        .uniform_descriptor_set_layout = uniform_descriptor_set_layout,
-        .uniform_descriptor_sets = uniform_descriptor_sets,
-        .uniform_buffers = uniform_buffers,
-        .uniform_memories = uniform_memories,
-        .uniform_mapped = uniform_mapped,
-        .current_texture_ds = .null_handle,
-        .vkd = vkd,
-        .device = device,
-    };
-    return .{ .ptr = self, .vtable = &vtable };
+    return vk_pipeline[0];
 }
 
 fn deinit(ptr: *anyopaque) void {
@@ -237,6 +432,9 @@ fn deinit(ptr: *anyopaque) void {
     self.vkd.destroyPipeline(self.device, self.pipeline, null);
     self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
     self.vkd.destroyDescriptorSetLayout(self.device, self.uniform_descriptor_set_layout, null);
+    if (self.slug_descriptors) |sd| {
+        self.vkd.destroyDescriptorSetLayout(self.device, sd.set_layout, null);
+    }
     for (self.uniform_buffers, self.uniform_memories) |buf, mem| {
         self.vkd.destroyBuffer(self.device, buf, null);
         self.vkd.freeMemory(self.device, mem, null);
@@ -250,13 +448,36 @@ fn deinit(ptr: *anyopaque) void {
 
 fn updateViewport(ptr: *anyopaque, width: u32, height: u32) void {
     const self: *Pipeline = @ptrCast(@alignCast(ptr));
-    for (self.uniform_mapped) |mapped| {
-        mapped.* = .{ @floatFromInt(width), @floatFromInt(height) };
+    const w_f: f32 = @floatFromInt(width);
+    const h_f: f32 = @floatFromInt(height);
+    switch (self.kind) {
+        .vertex, .instance => {
+            for (self.uniform_mapped) |mapped| {
+                const dst: *[2]f32 = @ptrCast(@alignCast(mapped));
+                dst.* = .{ w_f, h_f };
+            }
+        },
+        .text => {
+            // Vulkan clip space is y-down, so the y row stays positive; pos.xy
+            // is already in screen px, so this is a screen→clip ortho.
+            const u = SlugUniforms{
+                .mvp_row0 = .{ 2.0 / w_f, 0, 0, -1 },
+                .mvp_row1 = .{ 0, 2.0 / h_f, 0, -1 },
+                .mvp_row2 = .{ 0, 0, 1, 0 },
+                .mvp_row3 = .{ 0, 0, 0, 1 },
+                .viewport = .{ w_f, h_f, 0, 0 },
+            };
+            for (self.uniform_mapped) |mapped| {
+                const dst: *SlugUniforms = @ptrCast(@alignCast(mapped));
+                dst.* = u;
+            }
+        },
     }
 }
 
 fn bindTexture(ptr: *anyopaque, texture: *gpu.Texture, sampler: *gpu.Sampler) void {
     const self: *Pipeline = @ptrCast(@alignCast(ptr));
+    if (self.kind == .text) return;
     const vk_texture: *Texture = @ptrCast(@alignCast(texture.ptr));
     const vk_sampler: *Sampler = @ptrCast(@alignCast(sampler.ptr));
     if (!vk_texture.sampler_bound) {
@@ -264,6 +485,48 @@ fn bindTexture(ptr: *anyopaque, texture: *gpu.Texture, sampler: *gpu.Sampler) vo
         vk_texture.sampler_bound = true;
     }
     self.current_texture_ds = vk_texture.descriptor_set;
+}
+
+fn bindCurveBand(ptr: *anyopaque, curve_tex: *gpu.Texture, band_tex: *gpu.Texture) void {
+    const self: *Pipeline = @ptrCast(@alignCast(ptr));
+    const sd = if (self.slug_descriptors) |*p| p else return;
+
+    const ctex: *Texture = @ptrCast(@alignCast(curve_tex.ptr));
+    const btex: *Texture = @ptrCast(@alignCast(band_tex.ptr));
+
+    self.vkd.updateDescriptorSets(self.device, &.{
+        .{
+            .dst_set = sd.descriptor_set,
+            .dst_binding = 0,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .sampled_image,
+            .p_image_info = &[_]vk.DescriptorImageInfo{.{
+                .sampler = .null_handle,
+                .image_view = ctex.image_view,
+                .image_layout = .shader_read_only_optimal,
+            }},
+            .p_buffer_info = undefined,
+            .p_texel_buffer_view = undefined,
+        },
+        .{
+            .dst_set = sd.descriptor_set,
+            .dst_binding = 1,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .sampled_image,
+            .p_image_info = &[_]vk.DescriptorImageInfo{.{
+                .sampler = .null_handle,
+                .image_view = btex.image_view,
+                .image_layout = .shader_read_only_optimal,
+            }},
+            .p_buffer_info = undefined,
+            .p_texel_buffer_view = undefined,
+        },
+    }, null);
+
+    self.current_texture_ds = sd.descriptor_set;
+    sd.bound = true;
 }
 
 fn toVkAttributes(comptime T: type) [@typeInfo(T).@"struct".fields.len]vk.VertexInputAttributeDescription {

@@ -211,10 +211,11 @@ fn createDescriptorPool(vkd: DeviceDispatch, device: vk.Device) !vk.DescriptorPo
     return vkd.createDescriptorPool(device, &.{
         .flags = .{ .free_descriptor_set_bit = true },
         .max_sets = 64,
-        .pool_size_count = 2,
+        .pool_size_count = 3,
         .p_pool_sizes = &[_]vk.DescriptorPoolSize{
             .{ .type = .combined_image_sampler, .descriptor_count = 64 },
             .{ .type = .uniform_buffer, .descriptor_count = 64 },
+            .{ .type = .sampled_image, .descriptor_count = 64 },
         },
     }, null);
 }
