@@ -78,6 +78,8 @@ pub fn build(b: *std.Build) void {
                 embedSpirV(b, vk_backend, "ui_primitives_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives.vert"));
                 embedSpirV(b, vk_backend, "ui_primitives_instance_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance.vert"));
                 embedSpirV(b, vk_backend, "ui_primitives_fragment_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives.frag"));
+                embedSpirV(b, vk_backend, "slug_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/slug.vert"));
+                embedSpirV(b, vk_backend, "slug_fragment_shader", b.path("src/gpu/backend/vulkan/shaders/slug.frag"));
 
                 break :blk vk_backend;
             },
