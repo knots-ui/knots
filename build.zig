@@ -29,7 +29,6 @@ pub fn build(b: *std.Build) void {
     }
 
     const glfw_dep = b.dependency("glfw", .{ .target = target, .optimize = optimize, .linux_backend = .wayland });
-    const harfbuzz = b.dependency("harfbuzz", .{ .target = target, .optimize = optimize });
     const freetype = b.dependency("freetype", .{ .target = target, .optimize = optimize });
 
     const gpu_mod = b.createModule(.{
@@ -159,7 +158,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .root_source_file = b.path("src/text/root.zig"),
         .imports = &.{
-            .{ .name = "harfbuzz", .module = harfbuzz.module("harfbuzz") },
             .{ .name = "freetype", .module = freetype.module("freetype") },
         },
     });

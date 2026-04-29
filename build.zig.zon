@@ -2,7 +2,6 @@
     .name = .knots,
     .version = "0.0.1",
     .dependencies = .{
-        .harfbuzz = .{ .path = "lib/harfbuzz" },
         .freetype = .{ .path = "lib/freetype" },
         .glfw = .{
             .url = "git+https://codeberg.org/shahwali/glfw-bindings.git#0c85f77bf9f2002650935411ddf68e3bad8d15dc",
