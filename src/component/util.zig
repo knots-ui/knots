@@ -6,7 +6,7 @@ pub fn xAtByte(glyphs: []const glyph.Shaped, byte: u32, content_scale: f32) f32 
     }
     if (glyphs.len == 0) return 0;
     const last = glyphs[glyphs.len - 1];
-    return (last.x + last.metrics.advance) / content_scale;
+    return (last.x + last.advance) / content_scale;
 }
 
 pub const XRange = struct { lo: f32, hi: f32 };
@@ -24,7 +24,7 @@ pub fn xRangeAtBytes(glyphs: []const glyph.Shaped, lo: u32, hi: u32, content_sca
         }
     }
     const last = glyphs[glyphs.len - 1];
-    const end_x = (last.x + last.metrics.advance) / content_scale;
+    const end_x = (last.x + last.advance) / content_scale;
     return .{
         .lo = x_lo orelse end_x,
         .hi = x_hi orelse end_x,
@@ -35,7 +35,7 @@ pub fn byteOffsetAtX(glyphs: []const glyph.Shaped, content: []const u8, local_x:
     if (glyphs.len == 0) return 0;
     for (glyphs) |gl| {
         const gx = gl.x / content_scale;
-        const gw = gl.metrics.advance / content_scale;
+        const gw = gl.advance / content_scale;
         const mid = gx + gw * 0.5;
         if (local_x < mid) return gl.cluster;
     }

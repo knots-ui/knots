@@ -155,7 +155,7 @@ fn tickFrame(self: *App, frameCb: Callback) !void {
     try self.ui.resolve();
     try self.ui.tessellate(self.frame_arena.allocator(), &self.draw_list);
     self.ui.resolveHit();
-    try self.renderer.draw(&self.draw_list, self.ui.font.atlas, self.ui.content_scale);
+    try self.renderer.draw(&self.draw_list, self.ui.font.glyph_builder, self.ui.content_scale);
     self.window.waitEvents();
 }
 
@@ -263,8 +263,7 @@ fn handleRendererReconfigure(self: *App) !void {
 
     try self.renderer.reconfigure(new_cfg);
 
-    self.ui.font.atlas.dirty_min_y = 0;
-    self.ui.font.atlas.dirty_max_y_excl = self.ui.font.atlas.height;
+    self.ui.font.glyph_builder.markAllDirty();
     if (self.cfg.onReconfigure) |cb| try cb(self);
 }
 
