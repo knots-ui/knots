@@ -74,6 +74,6 @@ See [examples](examples), you can also try the web version of the playground [he
 ## Known limitations
 
 - Currently there is a hard dependency on GLFW for windowing.
-- Two C++ dependencies are currently used for text rendering, FreeType and HarfBuzz.
+- One C dependency is currently used for text rendering, FreeType.
 - In general, text rendering is in very early stages.
 - No X11 support yet.
