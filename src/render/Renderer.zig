@@ -10,7 +10,13 @@ const DrawList = @import("DrawList.zig");
 const INIT_VERTEX_BYTES = 256 * 1024;
 const INIT_INSTANCE_BYTES = 64 * 1024;
 const INIT_INDEX_COUNT = 64 * 1024;
+const INIT_TEXT_VERTEX_BYTES = 128 * 1024;
+const INIT_TEXT_INDEX_COUNT = 16 * 1024;
 const MAX_TEXTURES = 16;
+
+const CURVE_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
+const BAND_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
+const INITIAL_TEX_HEIGHT: u32 = 256;
 
 pub const Config = struct {
     present_mode: gpu.Context.PresentMode = .fifo,
@@ -50,12 +56,19 @@ cfg: Config,
 ctx: gpu.Context,
 pipeline: gpu.Pipeline,
 instance_pipeline: gpu.Pipeline,
+text_pipeline: gpu.Pipeline,
 vertex_buf: gpu.Buffer,
 index_buf: gpu.Buffer,
 instance_buf: gpu.Buffer,
 unit_index_buf: gpu.Buffer,
+text_vertex_buf: gpu.Buffer,
+text_index_buf: gpu.Buffer,
 atlas_texture: gpu.Texture,
 atlas_sampler: gpu.Sampler,
+curve_texture: gpu.Texture,
+band_texture: gpu.Texture,
+curve_tex_height: u32,
+band_tex_height: u32,
 frame: gpu.Frame,
 cached_vp_width: u32 = 0,
 cached_vp_height: u32 = 0,
@@ -82,15 +95,21 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     const instance_pipeline = try ctx.createPipeline(.{ .kind = .instance });
     errdefer instance_pipeline.deinit();
 
+    const text_pipeline = try ctx.createPipeline(.{ .kind = .text });
+    errdefer text_pipeline.deinit();
+
     const vertex_buf = try ctx.createBuffer(INIT_VERTEX_BYTES, .{ .vertex = true, .copy_dst = true });
     errdefer vertex_buf.deinit();
 
     const instance_buf = try ctx.createBuffer(INIT_INSTANCE_BYTES, .{ .vertex = true, .copy_dst = true });
     errdefer instance_buf.deinit();
 
+    const text_vertex_buf = try ctx.createBuffer(INIT_TEXT_VERTEX_BYTES, .{ .vertex = true, .copy_dst = true });
+    errdefer text_vertex_buf.deinit();
+
     const atlas_texture = try ctx.createTexture(.{
-        .width = 1024,
-        .height = 1024,
+        .width = 1,
+        .height = 1,
         .format = .r8,
         .usage = .{ .texture_binding = true, .copy_dst = true },
     });
@@ -102,8 +121,30 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer atlas_sampler.deinit();
 
+    const dummy_pixel = [_]u8{0};
+    try atlas_texture.write(&dummy_pixel, 1, 0, 0, 1, 1, null);
+
+    const curve_texture = try ctx.createTexture(.{
+        .width = CURVE_TEX_WIDTH,
+        .height = INITIAL_TEX_HEIGHT,
+        .format = .rgba32f,
+        .usage = .{ .texture_binding = true, .copy_dst = true },
+    });
+    errdefer curve_texture.deinit();
+
+    const band_texture = try ctx.createTexture(.{
+        .width = BAND_TEX_WIDTH,
+        .height = INITIAL_TEX_HEIGHT,
+        .format = .rgba32u,
+        .usage = .{ .texture_binding = true, .copy_dst = true },
+    });
+    errdefer band_texture.deinit();
+
     const index_buf = try ctx.createBuffer(INIT_INDEX_COUNT * @sizeOf(u32), .{ .index = true, .copy_dst = true });
     errdefer index_buf.deinit();
+
+    const text_index_buf = try ctx.createBuffer(INIT_TEXT_INDEX_COUNT * @sizeOf(u32), .{ .index = true, .copy_dst = true });
+    errdefer text_index_buf.deinit();
 
     const unit_index_buf = try ctx.createBuffer(6 * @sizeOf(u32), .{ .index = true, .copy_dst = true });
     errdefer unit_index_buf.deinit();
@@ -117,12 +158,19 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
         .ctx = ctx,
         .pipeline = pipeline,
         .instance_pipeline = instance_pipeline,
+        .text_pipeline = text_pipeline,
         .vertex_buf = vertex_buf,
         .index_buf = index_buf,
         .instance_buf = instance_buf,
         .unit_index_buf = unit_index_buf,
+        .text_vertex_buf = text_vertex_buf,
+        .text_index_buf = text_index_buf,
         .atlas_texture = atlas_texture,
         .atlas_sampler = atlas_sampler,
+        .curve_texture = curve_texture,
+        .band_texture = band_texture,
+        .curve_tex_height = INITIAL_TEX_HEIGHT,
+        .band_tex_height = INITIAL_TEX_HEIGHT,
         .frame = try ctx.createFrame(),
     };
 }
@@ -137,12 +185,17 @@ pub fn deinit(self: *Renderer) void {
     }
     self.pipeline.deinit();
     self.instance_pipeline.deinit();
+    self.text_pipeline.deinit();
     self.vertex_buf.deinit();
     self.index_buf.deinit();
     self.instance_buf.deinit();
     self.unit_index_buf.deinit();
+    self.text_vertex_buf.deinit();
+    self.text_index_buf.deinit();
     self.atlas_texture.deinit();
     self.atlas_sampler.deinit();
+    self.curve_texture.deinit();
+    self.band_texture.deinit();
     self.ctx.deinit();
 }
 
@@ -194,12 +247,19 @@ pub fn reconfigure(self: *Renderer, new_cfg: Config) !void {
     self.* = try Renderer.init(allocator, window, new_cfg);
 }
 
-pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_scale: f32) !void {
+pub fn draw(
+    self: *Renderer,
+    dl: *const DrawList,
+    glyph_builder: *text.GlyphBuilder,
+    content_scale: f32,
+) !void {
     if (dl.cmds.items.len == 0) return;
 
     try self.frame.waitForFence();
 
-    try self.syncAtlas(atlas);
+    try self.syncGlyphBuilder(glyph_builder);
+    self.pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
+    self.instance_pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
     if (!self.atlas_texture.isReady()) return;
 
     // Vertex coords are in logical pixels; surface/scissor are in physical pixels.
@@ -210,6 +270,7 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
     if (logical_w != self.cached_vp_width or logical_h != self.cached_vp_height) {
         self.pipeline.updateViewport(logical_w, logical_h);
         self.instance_pipeline.updateViewport(logical_w, logical_h);
+        self.text_pipeline.updateViewport(logical_w, logical_h);
         self.cached_vp_width = logical_w;
         self.cached_vp_height = logical_h;
     }
@@ -229,6 +290,16 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
     if (dl.indices.items.len > 0) {
         try ensureBufferCapacity(&self.index_buf, dl.indices.items.len * @sizeOf(u32));
         self.index_buf.load(u32, dl.indices.items);
+    }
+    const tverts = dl.text_vertices.items;
+    const tverts_bytes = tverts.len * @sizeOf(gpu.SlugVertex);
+    if (tverts.len > 0) {
+        try ensureBufferCapacity(&self.text_vertex_buf, tverts_bytes);
+        self.text_vertex_buf.load(gpu.SlugVertex, tverts);
+    }
+    if (dl.text_indices.items.len > 0) {
+        try ensureBufferCapacity(&self.text_index_buf, dl.text_indices.items.len * @sizeOf(u32));
+        self.text_index_buf.load(u32, dl.text_indices.items);
     }
 
     var pass = try self.frame.beginRenderPass(.{ .color_attachment = .{} });
@@ -251,11 +322,16 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
                     pass.setVertexBuffer(0, &self.instance_buf, 0, insts_bytes);
                     pass.setIndexBuffer(&self.unit_index_buf, 0, 6 * @sizeOf(u32));
                 },
+                .text => {
+                    pass.bindPipeline(&self.text_pipeline);
+                    pass.setVertexBuffer(0, &self.text_vertex_buf, 0, tverts_bytes);
+                    pass.setIndexBuffer(&self.text_index_buf, 0, dl.text_indices.items.len * @sizeOf(u32));
+                },
             }
             current_texture = null;
             current_kind = cmd.kind;
         }
-        if (cmd.texture != current_texture) {
+        if (cmd.kind != .text and cmd.texture != current_texture) {
             if (cmd.texture) |tex_id| {
                 if (self.registered_textures[tex_id]) |*reg| {
                     self.pipeline.bindTexture(&reg.texture, &reg.sampler);
@@ -285,26 +361,102 @@ pub fn draw(self: *Renderer, dl: *const DrawList, atlas: *text.Atlas, content_sc
         switch (cmd.kind) {
             .vertex => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
             .instance => pass.drawIndexed(6, cmd.count, 0, 0, cmd.offset),
+            .text => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
         }
     }
     pass.end();
     try self.frame.submit();
 }
 
-fn syncAtlas(self: *Renderer, atlas: *text.Atlas) !void {
-    if (atlas.isDirty()) {
-        const y0 = atlas.dirty_min_y;
-        const y1 = atlas.dirty_max_y_excl;
-        const row_h = y1 - y0;
-        const stride = atlas.width;
-        const offset = y0 * stride;
-        const len = row_h * stride;
-        try self.atlas_texture.write(atlas.bitmap.ptr + offset, len, 0, y0, atlas.width, row_h, null);
-        atlas.markClean();
+fn syncGlyphBuilder(self: *Renderer, gb: *text.GlyphBuilder) !void {
+    const needed_curve_h = gb.curveTextureHeight();
+    const needed_band_h = gb.bandTextureHeight();
+
+    if (needed_curve_h > self.curve_tex_height) {
+        try self.frame.waitForCompletion();
+        self.curve_texture.deinit();
+        const new_h = std.math.ceilPowerOfTwo(u32, needed_curve_h) catch needed_curve_h;
+        self.curve_texture = try self.ctx.createTexture(.{
+            .width = CURVE_TEX_WIDTH,
+            .height = new_h,
+            .format = .rgba32f,
+            .usage = .{ .texture_binding = true, .copy_dst = true },
+        });
+        self.curve_tex_height = new_h;
+        gb.curve_dirty_min_y = 0;
+        gb.curve_dirty_max_y_excl = needed_curve_h;
     }
-    // Ensure current_texture_ds is valid for the initial bindPipeline call
-    self.pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
-    self.instance_pipeline.bindTexture(&self.atlas_texture, &self.atlas_sampler);
+    if (needed_band_h > self.band_tex_height) {
+        try self.frame.waitForCompletion();
+        self.band_texture.deinit();
+        const new_h = std.math.ceilPowerOfTwo(u32, needed_band_h) catch needed_band_h;
+        self.band_texture = try self.ctx.createTexture(.{
+            .width = BAND_TEX_WIDTH,
+            .height = new_h,
+            .format = .rgba32u,
+            .usage = .{ .texture_binding = true, .copy_dst = true },
+        });
+        self.band_tex_height = new_h;
+        gb.band_dirty_min_y = 0;
+        gb.band_dirty_max_y_excl = needed_band_h;
+    }
+
+    if (gb.curveDirtyRange()) |r| {
+        try uploadDirtyRows(
+            text.GlyphBuilder.CurveTexel,
+            self.allocator,
+            &self.curve_texture,
+            gb.curve_data.items,
+            CURVE_TEX_WIDTH,
+            r.y0,
+            r.y1,
+        );
+    }
+    if (gb.bandDirtyRange()) |r| {
+        try uploadDirtyRows(
+            text.GlyphBuilder.BandTexel,
+            self.allocator,
+            &self.band_texture,
+            gb.band_data.items,
+            BAND_TEX_WIDTH,
+            r.y0,
+            r.y1,
+        );
+    }
+    gb.markClean();
+
+    self.text_pipeline.bindCurveBand(&self.curve_texture, &self.band_texture);
+}
+
+fn uploadDirtyRows(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    texture: *gpu.Texture,
+    items: []const T,
+    width: u32,
+    y0: u32,
+    y1_excl: u32,
+) !void {
+    const rows = y1_excl - y0;
+    const start_idx: usize = @as(usize, y0) * @as(usize, width);
+    const end_idx: usize = @as(usize, y1_excl) * @as(usize, width);
+    const have_end = @min(end_idx, items.len);
+
+    var slice = items[start_idx..have_end];
+    var owned: ?[]T = null;
+    defer if (owned) |o| allocator.free(o);
+
+    if (have_end < end_idx) {
+        const buf = try allocator.alloc(T, end_idx - start_idx);
+        owned = buf;
+        @memcpy(buf[0..(have_end - start_idx)], items[start_idx..have_end]);
+        @memset(buf[(have_end - start_idx)..], std.mem.zeroes(T));
+        slice = buf;
+    }
+
+    const ptr: [*]const u8 = @ptrCast(slice.ptr);
+    const len = slice.len * @sizeOf(T);
+    try texture.write(ptr, len, 0, y0, width, rows, null);
 }
 
 fn ensureBufferCapacity(buf: *gpu.Buffer, required: usize) !void {
