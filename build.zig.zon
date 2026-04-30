@@ -29,6 +29,10 @@
             .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
             .lazy = true,
         },
+        .TrueType = .{
+            .url = "git+https://codeberg.org/andrewrk/TrueType.git#b0f9867671a14ce4ed75a05a7e52c927623095e5",
+            .hash = "TrueType-0.0.0-Ne-mWMxxAQDit1oHfxlK2lkZAX8P7Wsa2SBPaR_xSpc8",
+        },
     },
     .minimum_zig_version = "0.16.0",
     .paths = .{
