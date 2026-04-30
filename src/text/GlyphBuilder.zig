@@ -1,10 +1,7 @@
 const std = @import("std");
-const ft = @import("freetype").c;
-const curve_mod = @import("curve.zig");
-const band_mod = @import("band.zig");
+const Curve = @import("curve.zig").Curve;
+const band = @import("band.zig");
 const glyph = @import("glyph.zig");
-
-const Curve = curve_mod.Curve;
 
 pub const TEXTURE_WIDTH: u32 = 4096;
 const LOG_TEXTURE_WIDTH: u5 = 12;
@@ -109,15 +106,10 @@ fn markBandDirty(self: *GlyphBuilder, y0: u32, y1_excl: u32) void {
     self.band_dirty_max_y_excl = @max(self.band_dirty_max_y_excl, y1_excl);
 }
 
-pub fn addOutline(self: *GlyphBuilder, outline: *const ft.FT_Outline, units_per_em: f32) !glyph.GlyphRecord {
-    const curves = try curve_mod.decomposeOutline(self.allocator, outline, units_per_em);
-    defer self.allocator.free(curves);
+pub fn addCurves(self: *GlyphBuilder, curves: []const Curve) !glyph.GlyphRecord {
+    if (curves.len == 0) return .empty;
 
-    if (curves.len == 0) {
-        return self.makeEmptyRecord();
-    }
-
-    var part = try band_mod.partition(self.allocator, curves);
+    var part = try band.partition(self.allocator, curves);
     defer part.deinit(self.allocator);
 
     const band_count_x: u32 = @as(u32, part.band_max[0]) + 1;
@@ -215,45 +207,20 @@ pub fn addOutline(self: *GlyphBuilder, outline: *const ft.FT_Outline, units_per_
     };
 }
 
-fn makeEmptyRecord(_: *GlyphBuilder) glyph.GlyphRecord {
-    return .{
-        .glyph_loc_x = 0,
-        .glyph_loc_y = 0,
-        .band_max_x = 0,
-        .band_max_y = 0,
-        .em_min = .{ 0, 0 },
-        .em_max = .{ 0, 0 },
-        .band_scale = .{ 0, 0 },
-        .band_offset = .{ 0, 0 },
-        .advance_em = 0,
-        .is_empty = true,
-    };
-}
-
 test "produces curves and bands" {
     const allocator = std.testing.allocator;
 
-    var pts = [_]ft.FT_Vector{
-        .{ .x = 0, .y = 0 },
-        .{ .x = 1024, .y = 0 },
-        .{ .x = 1024, .y = 1024 },
-        .{ .x = 0, .y = 1024 },
-    };
-    var tags = [_]u8{ 1, 1, 1, 1 };
-    var contours = [_]c_ushort{3};
-    const outline = ft.FT_Outline{
-        .n_contours = 1,
-        .n_points = 4,
-        .points = &pts,
-        .tags = &tags,
-        .contours = &contours,
-        .flags = 0,
+    const curves = [_]Curve{
+        .{ .p1 = .{ 0, 0 }, .p2 = .{ 0.5, 0 }, .p3 = .{ 1, 0 } },
+        .{ .p1 = .{ 1, 0 }, .p2 = .{ 1, 0.5 }, .p3 = .{ 1, 1 } },
+        .{ .p1 = .{ 1, 1 }, .p2 = .{ 0.5, 1 }, .p3 = .{ 0, 1 } },
+        .{ .p1 = .{ 0, 1 }, .p2 = .{ 0, 0.5 }, .p3 = .{ 0, 0 } },
     };
 
     var gb = try GlyphBuilder.init(allocator);
     defer gb.deinit();
 
-    const rec = try gb.addOutline(&outline, 1024.0);
+    const rec = try gb.addCurves(&curves);
 
     try std.testing.expect(!rec.is_empty);
     // 4 line as quadratics x 2 texels == 8 curve texels.

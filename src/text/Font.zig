@@ -1,5 +1,4 @@
 const std = @import("std");
-const ft = @import("freetype").c;
 const GlyphBuilder = @import("GlyphBuilder.zig");
 const Face = @import("Face.zig");
 
@@ -8,16 +7,12 @@ pub const FontKey = struct { []const u8, []const u8 };
 const KeyedFace = struct { key: []const u8, face: Face };
 
 allocator: std.mem.Allocator,
-ft_lib: ft.FT_Library,
 glyph_builder: *GlyphBuilder,
 faces: std.ArrayList(KeyedFace),
 
 const Font = @This();
 
 pub fn init(allocator: std.mem.Allocator, fonts: []const FontKey) !Font {
-    var ft_lib: ft.FT_Library = undefined;
-    if (ft.FT_Init_FreeType(&ft_lib) != 0) return error.FreeTypeInitFailed;
-
     const glyph_builder = try allocator.create(GlyphBuilder);
     errdefer allocator.destroy(glyph_builder);
     glyph_builder.* = try GlyphBuilder.init(allocator);
@@ -31,19 +26,18 @@ pub fn init(allocator: std.mem.Allocator, fonts: []const FontKey) !Font {
 
     for (fonts) |font| faces.appendAssumeCapacity(.{
         .key = font.@"0",
-        .face = try Face.init(allocator, ft_lib, font.@"1", glyph_builder),
+        .face = try Face.init(allocator, font.@"1", glyph_builder),
     });
 
     return .{
         .allocator = allocator,
-        .ft_lib = ft_lib,
         .glyph_builder = glyph_builder,
         .faces = faces,
     };
 }
 
 pub fn addFace(self: *Font, key: []const u8, data: []const u8) !void {
-    var face = try Face.init(self.allocator, self.ft_lib, data, self.glyph_builder);
+    var face = try Face.init(self.allocator, data, self.glyph_builder);
     errdefer face.deinit();
     try self.faces.append(self.allocator, .{ .key = key, .face = face });
 }
@@ -64,5 +58,4 @@ pub fn deinit(self: *Font) void {
     self.faces.deinit(self.allocator);
     self.glyph_builder.deinit();
     self.allocator.destroy(self.glyph_builder);
-    _ = ft.FT_Done_FreeType(self.ft_lib);
 }

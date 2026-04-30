@@ -9,6 +9,19 @@ pub const GlyphRecord = struct {
     band_offset: [2]f32,
     advance_em: f32,
     is_empty: bool,
+
+    pub const empty = GlyphRecord{
+        .glyph_loc_x = 0,
+        .glyph_loc_y = 0,
+        .band_max_x = 0,
+        .band_max_y = 0,
+        .em_min = .{ 0, 0 },
+        .em_max = .{ 0, 0 },
+        .band_scale = .{ 0, 0 },
+        .band_offset = .{ 0, 0 },
+        .advance_em = 0,
+        .is_empty = true,
+    };
 };
 
 pub const Shaped = struct {

@@ -1,9 +1,15 @@
 const std = @import("std");
-const ft = @import("freetype").c;
+const TrueType = @import("TrueType");
+const curve = @import("curve.zig");
 const glyph = @import("glyph.zig");
 const GlyphBuilder = @import("GlyphBuilder.zig");
 
-ft_face: ft.FT_Face,
+pub fn unitsPerEm(tt: *const TrueType) u16 {
+    const head = tt.table_offsets[@intFromEnum(TrueType.TableId.head)];
+    return std.mem.readInt(u16, tt.ttf_bytes[head + 18 ..][0..2], .big);
+}
+
+tt: TrueType,
 glyph_builder: *GlyphBuilder,
 cache: std.AutoHashMap(u32, glyph.GlyphRecord),
 shaped_cache: ShapedMap,
@@ -48,18 +54,16 @@ const ShapedMap = std.HashMapUnmanaged(
     std.hash_map.default_max_load_percentage,
 );
 
-pub fn init(allocator: std.mem.Allocator, ft_lib: ft.FT_Library, font_data: []const u8, glyph_builder: *GlyphBuilder) !Face {
-    var ft_face: ft.FT_Face = undefined;
-    if (ft.FT_New_Memory_Face(ft_lib, font_data.ptr, @intCast(font_data.len), 0, &ft_face) != 0)
-        return error.FontLoadFailed;
+pub fn init(allocator: std.mem.Allocator, font_data: []const u8, glyph_builder: *GlyphBuilder) !Face {
+    const tt = try TrueType.load(font_data);
 
-    const upem: f32 = @floatFromInt(ft_face.*.units_per_EM);
-    // ascender / height live in font units when no size has been set.
-    const ascender_em: f32 = @as(f32, @floatFromInt(ft_face.*.ascender)) / upem;
-    const line_height_em: f32 = @as(f32, @floatFromInt(ft_face.*.height)) / upem;
+    const upem: f32 = @floatFromInt(unitsPerEm(&tt));
+    const vm = tt.verticalMetrics();
+    const ascender_em: f32 = @as(f32, @floatFromInt(vm.ascent)) / upem;
+    const line_height_em: f32 = @as(f32, @floatFromInt(vm.ascent - vm.descent + vm.line_gap)) / upem;
 
     return .{
-        .ft_face = ft_face,
+        .tt = tt,
         .glyph_builder = glyph_builder,
         .cache = .init(allocator),
         .shaped_cache = .empty,
@@ -81,21 +85,27 @@ pub fn deinit(self: *Face) void {
     self.shaped_cache.deinit(self.allocator);
     self.stale_buf.deinit(self.allocator);
     self.cache.deinit();
-    _ = ft.FT_Done_Face(self.ft_face);
 }
 
-pub fn getGlyph(self: *Face, codepoint: u32) !glyph.GlyphRecord {
+pub fn getGlyph(self: *Face, codepoint: u21) !glyph.GlyphRecord {
     if (self.cache.get(codepoint)) |rec| return rec;
 
-    const gid = ft.FT_Get_Char_Index(self.ft_face, codepoint);
-    const flags: c_int = ft.FT_LOAD_NO_SCALE | ft.FT_LOAD_NO_BITMAP | ft.FT_LOAD_NO_HINTING;
-    if (ft.FT_Load_Glyph(self.ft_face, gid, flags) != 0)
-        return error.LoadGlyphFailed;
+    const gid = self.tt.codepointGlyphIndex(codepoint);
+    const hm = self.tt.glyphHMetrics(gid);
+    const advance_em: f32 = @as(f32, @floatFromInt(hm.advance_width)) / self.units_per_em;
 
-    const g = self.ft_face.*.glyph;
-    const advance_em: f32 = @as(f32, @floatFromInt(g.*.metrics.horiAdvance)) / self.units_per_em;
+    var rec: glyph.GlyphRecord = blk: {
+        const verts = self.tt.glyphShape(self.allocator, gid) catch |e| switch (e) {
+            error.GlyphNotFound => break :blk .empty,
+            else => return e,
+        };
+        defer self.allocator.free(verts);
 
-    var rec = try self.glyph_builder.addOutline(&g.*.outline, self.units_per_em);
+        const curves = try curve.decomposeVertices(self.allocator, verts, self.units_per_em);
+        defer self.allocator.free(curves);
+
+        break :blk try self.glyph_builder.addCurves(curves);
+    };
     rec.advance_em = advance_em;
 
     try self.cache.put(codepoint, rec);
