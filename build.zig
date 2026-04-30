@@ -29,7 +29,6 @@ pub fn build(b: *std.Build) void {
     }
 
     const glfw_dep = b.dependency("glfw", .{ .target = target, .optimize = optimize, .linux_backend = .wayland });
-    const freetype = b.dependency("freetype", .{ .target = target, .optimize = optimize });
     const truetype_dep = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
 
     const gpu_mod = b.createModule(.{
@@ -160,10 +159,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/text/root.zig"),
-        .imports = &.{
-            .{ .name = "freetype", .module = freetype.module("freetype") },
-            .{ .name = "TrueType", .module = truetype_dep.module("TrueType") },
-        },
+        .imports = &.{.{ .name = "TrueType", .module = truetype_dep.module("TrueType") }},
     });
 
     const render_mod = b.createModule(.{
