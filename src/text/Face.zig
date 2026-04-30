@@ -4,7 +4,7 @@ const curve = @import("curve.zig");
 const glyph = @import("glyph.zig");
 const GlyphBuilder = @import("GlyphBuilder.zig");
 
-pub fn unitsPerEm(tt: *const TrueType) u16 {
+fn unitsPerEm(tt: *const TrueType) u16 {
     const head = tt.table_offsets[@intFromEnum(TrueType.TableId.head)];
     return std.mem.readInt(u16, tt.ttf_bytes[head + 18 ..][0..2], .big);
 }
