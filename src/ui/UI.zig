@@ -16,11 +16,6 @@ const Key = @import("Key.zig");
 const Style = @import("Style.zig");
 const Size = @import("Size.zig");
 
-pub const AnimOpts = struct {
-    duration_ms: u32 = 150,
-    ease: animation.Ease = .smooth_step,
-};
-
 const Allocator = std.mem.Allocator;
 
 const INV_SQRT2: f32 = 0.70710677;
@@ -157,7 +152,7 @@ pub fn reset(self: *UI) void {
 /// wherever they were rather than restarting.
 ///
 /// Marks the UI dirty while in flight so the host app can keep ticking frames.
-pub fn anim(self: *UI, element_id: Element.Id, channel: []const u8, target: f32, opts: AnimOpts) f32 {
+pub fn anim(self: *UI, element_id: Element.Id, channel: []const u8, target: f32, opts: animation.Options) f32 {
     const id = animation.channelId(element_id, channel);
     const s: *State.Anim = self.state.getOrCreate(.anim, self.allocator, id) catch return target;
     const now = self.input.now_ms;

@@ -15,7 +15,7 @@ const Text = @import("Text.zig");
 const default_brighten: f32 = 0.15;
 
 pub const HoverAnim = struct {
-    opts: UI.AnimOpts = .{ .duration_ms = 100 },
+    opts: animation.Options = .{ .duration_ms = 100 },
     brighten: f32 = default_brighten,
 };
 
