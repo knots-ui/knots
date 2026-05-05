@@ -1,7 +1,11 @@
 const std = @import("std");
+const Grid = @import("Grid.zig");
 
 pub const Id = u32;
-pub const INVALID_ID: Id = std.math.maxInt(u32);
+pub const GridTemplate = Grid.Template;
+pub const GridPlacement = Grid.Placement;
+
+pub const INVALID_ID: Id = std.math.maxInt(u64);
 
 pub const Slot = u32;
 pub const INVALID_SLOT: Slot = std.math.maxInt(u32);
@@ -89,6 +93,8 @@ pub const Padding = struct {
 pub const Direction = enum {
     row,
     column,
+    layer,
+    grid,
 };
 
 pub const Position = enum {
@@ -149,6 +155,8 @@ pub const Config = struct {
     overflow: Overflow = .visible,
     position: Position = .static,
     z_index: u8 = 0,
+    grid_template: ?Grid.Template = null,
+    grid_placement: ?Grid.Placement = null,
 
     pub fn toElement(self: Config) Element {
         return .{

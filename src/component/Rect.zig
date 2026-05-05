@@ -3,6 +3,11 @@ const Style = @import("ui").Style;
 const Key = @import("ui").Key;
 const Decoration = @import("ui").Decoration;
 const Element = @import("layout").Element;
+const Grid = @import("layout").Grid;
+
+pub const GridTrack = Grid.Track;
+pub const GridTemplate = Grid.Template;
+pub const GridPlacement = Grid.Placement;
 
 @"align": Element.Align = .start,
 justify: Element.Justify = .start,
@@ -15,6 +20,11 @@ position: Element.Position = .static,
 gap: f32 = 0,
 style: Style = .{},
 key: Key,
+
+/// Set on grid containers (`dir = .grid`) to declare row/column tracks.
+grid_template: ?GridTemplate = null,
+/// Set on direct children of a grid to declare cell placement.
+grid_placement: ?GridPlacement = null,
 
 const Rect = @This();
 
@@ -33,6 +43,8 @@ pub fn open(self: *const Rect, app: *App) !Element.Id {
         .position = self.position,
         .direction = self.dir,
         .gap = self.gap,
+        .grid_template = self.grid_template,
+        .grid_placement = self.grid_placement,
     }, decoration);
 }
 
