@@ -55,8 +55,7 @@ pub fn hash(self: Key) Element.Id {
             break :blk hasher.final();
         },
     };
-    const result: Element.Id = @truncate(final);
-    return if (result == Element.INVALID_ID) result -% 1 else result;
+    return if (final == Element.INVALID_ID) final -% 1 else final;
 }
 
 /// Wyhash-style finalizer applied to (seed, index). Cheap, well-distributed.
@@ -65,4 +64,18 @@ inline fn mixIndex(seed: u64, index: usize) u64 {
     x = (x ^ (x >> 32)) *% 0x9E3779B97F4A7C15;
     x = (x ^ (x >> 32)) *% 0xBF58476D1CE4E5B9;
     return x ^ (x >> 32);
+}
+
+const testing = std.testing;
+
+test "hash produces full u64 codomain" {
+    const a = str("a").hash();
+    const b = str("b").hash();
+    try testing.expect(a != b);
+
+    var any_high_bits = false;
+    inline for ([_][]const u8{ "a", "b", "c", "widget", "scroll", "modal" }) |s| {
+        if ((str(s).hash() >> 32) != 0) any_high_bits = true;
+    }
+    try testing.expect(any_high_bits);
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Grid = @import("Grid.zig");
 
-pub const Id = u32;
+pub const Id = u64;
 pub const GridTemplate = Grid.Template;
 pub const GridPlacement = Grid.Placement;
 

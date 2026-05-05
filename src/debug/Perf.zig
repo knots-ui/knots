@@ -2,6 +2,7 @@ const std = @import("std");
 
 const App = @import("knots").App;
 const UI = @import("ui").UI;
+const Element = @import("layout").Element;
 
 samples: [60]f32 = [_]f32{0} ** 60,
 index: usize = 0,
@@ -10,7 +11,7 @@ fps_buf: []u8,
 
 const Perf = @This();
 
-pub fn open(self: *const Perf, app: *App) !u32 {
+pub fn open(self: *const Perf, app: *App) !Element.Id {
     var deco = try app.ui.textDecoration(self.fps_label, .{ .value = 10 }, null);
     deco.text.color = .{ 1.0, 0.0, 0.0, 1.0 };
     return try app.ui.openRoot(.src(@src()), 0, 0, .{ .z_index = 255 }, deco);
