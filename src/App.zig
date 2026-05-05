@@ -52,9 +52,6 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
     const window: Window = try .init(cfg.window);
     errdefer window.deinit();
 
-    var signals: std.ArrayList(Signal) = .empty;
-    errdefer signals.deinit(allocator);
-
     var completion_queue: CompletionQueue = try .init(allocator, cfg.max_completions_recv);
     errdefer completion_queue.deinit(allocator, io);
 
@@ -68,7 +65,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
         .io = io,
         .allocator = allocator,
         .frame_arena = .init(allocator),
-        .signals = signals,
+        .signals = .empty,
         .completion_queue = completion_queue,
         .renderer = renderer,
         .timer = .init(cfg.timer_clock),
@@ -125,11 +122,16 @@ pub fn start(self: *App, frameCb: Callback) !void {
     }
 }
 
+/// Frame ordering, per tick:
+///  1. `resolveWindow`: Collects input + routes scroll against the previous frame's tree.
+///  2. `reset`: Clears the layout pool / decoration list.
+///  3. `frameCb`: User code.
+///  4. `endFrame`: TTL sweep over per-widget state.
+///  5. `resolve` |> `tessellate` |> `resolveHit`: compute layout, build draw list, hit-test against the new tree.
 fn tickFrame(self: *App, frameCb: Callback, draw_list: *render.DrawList) !void {
     defer _ = self.frame_arena.reset(self.cfg.arena_reset_mode);
 
     self.timer.tick(self.io);
-    self.ui.reset();
 
     if (self.window.consumeResize()) |ev| {
         if (ev.physical.width == 0 or ev.physical.height == 0) return;
@@ -139,10 +141,13 @@ fn tickFrame(self: *App, frameCb: Callback, draw_list: *render.DrawList) !void {
     try self.handleRendererReconfigure();
 
     try self.ui.resolveWindow(self.window.collectInput(), self.timer.ms(), self.window.getContentScale());
+    self.ui.reset();
 
     try self.completion_queue.consume(self, self.io);
 
     try @call(.auto, frameCb, .{self});
+
+    try self.ui.endFrame();
 
     if (self.ui.anim_active) try self.signal(.redraw);
 
