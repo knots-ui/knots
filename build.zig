@@ -203,6 +203,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/control/root.zig"),
+        .imports = &.{
+            .{ .name = "ui", .module = ui_mod },
+            .{ .name = "layout", .module = layout_mod },
+        },
     });
 
     const animation_mod = b.createModule(.{
