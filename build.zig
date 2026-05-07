@@ -75,10 +75,14 @@ pub fn build(b: *std.Build) void {
                         .{ .name = "gpu", .module = gpu_mod },
                     },
                 });
-                embedSpirV(b, vk_backend, "ui_primitives_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives.vert"));
-                embedSpirV(b, vk_backend, "ui_primitives_instance_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance.vert"));
+                embedZigSpirV(b, vk_backend, "ui_primitives_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
+                embedZigSpirV(b, vk_backend, "ui_primitives_instance_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
+                embedZigSpirV(b, vk_backend, "slug_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
+
+                // TODO: Migrate to Zig and drop glslc as a dependency.
+                // Will require a fix for https://codeberg.org/ziglang/zig/issues/35238
+                // Among other things.
                 embedSpirV(b, vk_backend, "ui_primitives_fragment_shader", b.path("src/gpu/backend/vulkan/shaders/ui_primitives.frag"));
-                embedSpirV(b, vk_backend, "slug_vertex_shader", b.path("src/gpu/backend/vulkan/shaders/slug.vert"));
                 embedSpirV(b, vk_backend, "slug_fragment_shader", b.path("src/gpu/backend/vulkan/shaders/slug.frag"));
 
                 break :blk vk_backend;
@@ -272,5 +276,23 @@ fn embedSpirV(b: *std.Build, mod: *std.Build.Module, comptime name: []const u8, 
     const cmd = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.2", "-o" });
     const spv = cmd.addOutputFileArg(std.fmt.comptimePrint("{s}.spv", .{name}));
     cmd.addFileArg(path);
+    mod.addAnonymousImport(name, .{ .root_source_file = spv });
+}
+
+// We should be using b.addObject with a resolved spir-v target
+// but it doesn't work on windows due to a bug in the Zig build system.
+fn embedZigSpirV(b: *std.Build, mod: *std.Build.Module, comptime name: []const u8, path: std.Build.LazyPath) void {
+    const out_name = std.fmt.comptimePrint("{s}.spv", .{name});
+
+    const cmd = b.addSystemCommand(&.{
+        b.graph.zig_exe, "build-obj",
+        "-fno-llvm",     "-ofmt=spirv",
+        "-target",       "spirv32-vulkan",
+        "-mcpu",         "vulkan_v1_2",
+        "--name",        name,
+    });
+    cmd.addPrefixedFileArg("-Mroot=", path);
+    const spv = cmd.addPrefixedOutputFileArg("-femit-bin=", out_name);
+
     mod.addAnonymousImport(name, .{ .root_source_file = spv });
 }

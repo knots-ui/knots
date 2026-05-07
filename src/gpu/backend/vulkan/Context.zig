@@ -106,7 +106,14 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         &.{vk.extensions.khr_swapchain.name};
 
     const queue_priority = [_]f32{1.0};
+    var vk12_features = vk.PhysicalDeviceVulkan12Features{
+        .shader_int_8 = .true,
+    };
+    const enabled_features = vk.PhysicalDeviceFeatures{
+        .shader_int_16 = .true,
+    };
     const device = try vki.createDevice(phys.device, &.{
+        .p_next = &vk12_features,
         .queue_create_info_count = 1,
         .p_queue_create_infos = &[_]vk.DeviceQueueCreateInfo{.{
             .queue_family_index = phys.queue_family,
@@ -115,6 +122,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         }},
         .enabled_extension_count = @intCast(device_extensions.len),
         .pp_enabled_extension_names = @ptrCast(device_extensions.ptr),
+        .p_enabled_features = &enabled_features,
     }, null);
 
     const vkd = DeviceDispatch.load(device, vki.dispatch.vkGetDeviceProcAddr.?);
