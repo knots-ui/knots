@@ -167,20 +167,14 @@ pub fn shape(self: *Face, text: []const u8, size_px: f32) !glyph.ShapedView {
     const size_q: u32 = @intFromFloat(@round(size_px * 64));
     const probe = ShapedKey{ .text = text, .size_q = size_q };
 
-    const gop = try self.shaped_cache.getOrPutContext(self.allocator, probe, .{});
-    if (gop.found_existing) {
-        gop.value_ptr.last_used_frame = self.current_frame;
+    if (self.shaped_cache.getEntryContext(probe, .{})) |entry| {
+        entry.value_ptr.last_used_frame = self.current_frame;
         return .{
-            .glyphs = gop.value_ptr.glyphs,
-            .width = gop.value_ptr.width,
-            .ascender = gop.value_ptr.ascender,
+            .glyphs = entry.value_ptr.glyphs,
+            .width = entry.value_ptr.width,
+            .ascender = entry.value_ptr.ascender,
         };
     }
-    errdefer _ = self.shaped_cache.removeContext(probe, .{});
-
-    const text_copy = try self.allocator.dupe(u8, text);
-    errdefer self.allocator.free(text_copy);
-    gop.key_ptr.* = .{ .text = text_copy, .size_q = size_q };
 
     var view = std.unicode.Utf8View.init(text) catch return error.InvalidUtf8;
     var it = view.iterator();
@@ -209,12 +203,21 @@ pub fn shape(self: *Face, text: []const u8, size_px: f32) !glyph.ShapedView {
 
     const ascender = self.ascender_em * size_px;
 
-    gop.value_ptr.* = .{
-        .glyphs = out,
-        .width = pen_x,
-        .ascender = ascender,
-        .last_used_frame = self.current_frame,
-    };
+    const text_copy = try self.allocator.dupe(u8, text);
+    errdefer self.allocator.free(text_copy);
+
+    try self.shaped_cache.putNoClobberContext(
+        self.allocator,
+        .{ .text = text_copy, .size_q = size_q },
+        .{
+            .glyphs = out,
+            .width = pen_x,
+            .ascender = ascender,
+            .last_used_frame = self.current_frame,
+        },
+        .{},
+    );
+
     return .{ .glyphs = out, .width = pen_x, .ascender = ascender };
 }
 
@@ -232,35 +235,40 @@ pub fn shapeWrapped(self: *Face, text: []const u8, size_px: f32, wrap_px: f32) !
     const line_h = self.line_height_em * size_px;
     const ascender = self.ascender_em * size_px;
 
-    const gop = try self.wrap_cache.getOrPutContext(self.allocator, probe, .{});
-    if (gop.found_existing) {
-        gop.value_ptr.last_used_frame = self.current_frame;
+    if (self.wrap_cache.getEntryContext(probe, .{})) |entry| {
+        entry.value_ptr.last_used_frame = self.current_frame;
         return .{
-            .lines = gop.value_ptr.lines,
-            .width = gop.value_ptr.width,
-            .height = gop.value_ptr.height,
-            .ascender = gop.value_ptr.ascender,
-            .line_height = gop.value_ptr.line_height,
+            .lines = entry.value_ptr.lines,
+            .width = entry.value_ptr.width,
+            .height = entry.value_ptr.height,
+            .ascender = entry.value_ptr.ascender,
+            .line_height = entry.value_ptr.line_height,
         };
     }
-    errdefer _ = self.wrap_cache.removeContext(probe, .{});
-
-    const text_copy = try self.allocator.dupe(u8, text);
-    errdefer self.allocator.free(text_copy);
-    gop.key_ptr.* = .{ .text = text_copy, .size_q = size_q, .wrap_q = wrap_q };
 
     if (text.len == 0) {
         const out_glyphs = try self.allocator.alloc(glyph.Shaped, 0);
+        errdefer self.allocator.free(out_glyphs);
         const out_lines = try self.allocator.alloc(glyph.Line, 0);
-        gop.value_ptr.* = .{
-            .glyphs = out_glyphs,
-            .lines = out_lines,
-            .width = 0,
-            .height = line_h,
-            .ascender = ascender,
-            .line_height = line_h,
-            .last_used_frame = self.current_frame,
-        };
+        errdefer self.allocator.free(out_lines);
+        const text_copy = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(text_copy);
+
+        try self.wrap_cache.putNoClobberContext(
+            self.allocator,
+            .{ .text = text_copy, .size_q = size_q, .wrap_q = wrap_q },
+            .{
+                .glyphs = out_glyphs,
+                .lines = out_lines,
+                .width = 0,
+                .height = line_h,
+                .ascender = ascender,
+                .line_height = line_h,
+                .last_used_frame = self.current_frame,
+            },
+            .{},
+        );
+
         return .{ .lines = out_lines, .width = 0, .height = line_h, .ascender = ascender, .line_height = line_h };
     }
 
@@ -408,16 +416,24 @@ pub fn shapeWrapped(self: *Face, text: []const u8, size_px: f32, wrap_px: f32) !
     errdefer self.allocator.free(lines_owned);
 
     const height = @as(f32, @floatFromInt(lines_owned.len)) * line_h;
+    const text_copy = try self.allocator.dupe(u8, text);
+    errdefer self.allocator.free(text_copy);
 
-    gop.value_ptr.* = .{
-        .glyphs = out_glyphs,
-        .lines = lines_owned,
-        .width = max_line_w,
-        .height = height,
-        .ascender = ascender,
-        .line_height = line_h,
-        .last_used_frame = self.current_frame,
-    };
+    try self.wrap_cache.putNoClobberContext(
+        self.allocator,
+        .{ .text = text_copy, .size_q = size_q, .wrap_q = wrap_q },
+        .{
+            .glyphs = out_glyphs,
+            .lines = lines_owned,
+            .width = max_line_w,
+            .height = height,
+            .ascender = ascender,
+            .line_height = line_h,
+            .last_used_frame = self.current_frame,
+        },
+        .{},
+    );
+
     return .{
         .lines = lines_owned,
         .width = max_line_w,
