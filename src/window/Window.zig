@@ -33,8 +33,8 @@ frame_handler: ?FrameHandler = null,
 
 const Window = @This();
 
-pub fn init(cfg: Config) !Window {
-    var be: impl.Backend = try impl.init(cfg);
+pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !Window {
+    var be: impl.Backend = try impl.init(io, allocator, cfg);
     return Window{
         .backend = be,
         .canvas_selector = cfg.canvas_selector,
@@ -50,12 +50,12 @@ pub inline fn startCapture(self: *Window) void {
     self.backend.startCapture(self);
 }
 
-pub inline fn pollEvents(self: *const Window) void {
-    self.backend.pollEvents();
+pub inline fn pollEvents(self: *const Window, io: std.Io) void {
+    self.backend.pollEvents(io);
 }
 
-pub inline fn waitEvents(self: *const Window) void {
-    self.backend.waitEvents();
+pub inline fn waitEvents(self: *const Window, io: std.Io) void {
+    self.backend.waitEvents(io);
 }
 
 pub inline fn postEmptyEvent(self: *const Window) void {

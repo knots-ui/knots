@@ -184,7 +184,7 @@ pub const Backend = struct {
     }
 };
 
-pub fn init(cfg: window.Config) !Backend {
+pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
     if (!classes_registered) {
         const registered = try classes.registerClasses();
         KnotsView = registered.view;

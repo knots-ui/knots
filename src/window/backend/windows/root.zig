@@ -33,7 +33,7 @@ pub const Backend = struct {
         _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWLP_USERDATA, @bitCast(@as(usize, @intFromPtr(owner))));
     }
 
-    pub fn pollEvents(_: *const Self) void {
+    pub fn pollEvents(_: *const Self, _: std.Io) void {
         var msg: win32.MSG = undefined;
         while (win32.PeekMessageW(&msg, null, 0, 0, win32.PM_REMOVE) != 0) {
             _ = win32.TranslateMessage(&msg);
@@ -41,7 +41,7 @@ pub const Backend = struct {
         }
     }
 
-    pub fn waitEvents(self: *const Self) void {
+    pub fn waitEvents(self: *const Self, _: std.Io) void {
         var msg: win32.MSG = undefined;
         const got = win32.GetMessageW(&msg, null, 0, 0);
         if (got > 0) {
@@ -176,7 +176,7 @@ pub const Backend = struct {
     }
 };
 
-pub fn init(cfg: window.Config) !Backend {
+pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
     _ = win32.SetProcessDpiAwarenessContext(win32.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     const hinstance = win32.GetModuleHandleW(null) orelse return error.NoModuleHandle;

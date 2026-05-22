@@ -1,5 +1,6 @@
 const std = @import("std");
 const build_zon = @import("build.zig.zon");
+const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
 
@@ -110,16 +111,35 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "gpu", .module = gpu_mod }},
         }),
         .linux => {
-            const glfw_dep = b.dependency("glfw", .{ .target = target, .optimize = optimize, .linux_backend = .wayland });
+            const scanner = WaylandScanner.create(b, .{});
+            scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+            scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
+            scanner.generate("wl_compositor", 6);
+            scanner.generate("wl_shm", 1);
+            scanner.generate("wl_seat", 7);
+            scanner.generate("wl_output", 4);
+            scanner.generate("wl_data_device_manager", 3);
+            scanner.generate("xdg_wm_base", 3);
+            scanner.generate("zxdg_decoration_manager_v1", 1);
+
+            const wayland_mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = scanner.result,
+            });
             const m = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/window/backend/glfw/root.zig"),
+                .root_source_file = b.path("src/window/backend/wayland/root.zig"),
                 .imports = &.{
-                    .{ .name = "glfw", .module = glfw_dep.module("glfw") },
+                    .{ .name = "wayland", .module = wayland_mod },
                     .{ .name = "gpu", .module = gpu_mod },
                 },
             });
+            m.link_libc = true;
+            m.linkSystemLibrary("wayland-client", .{});
+            m.linkSystemLibrary("wayland-cursor", .{});
+            m.linkSystemLibrary("xkbcommon", .{});
             break :blk m;
         },
         else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),

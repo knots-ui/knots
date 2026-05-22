@@ -2,10 +2,6 @@
     .name = .knots,
     .version = "0.0.3",
     .dependencies = .{
-        .glfw = .{
-            .url = "git+https://codeberg.org/shahwali/glfw-bindings.git#0c85f77bf9f2002650935411ddf68e3bad8d15dc",
-            .hash = "glfw-0.0.3-TqMi_9ZFAABGHCKBDqncWvrkxIM0gtant5BPj0nTUehQ",
-        },
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-bindings.git#c56a63b58b73abfe21dfe3c441a24eb89b670996",
             .hash = "wgpu-0.0.2-Z1CB1tZzAQCeLiHR9GrD3Zal_qs6AxvaXCl2fKuChh6-",
@@ -29,6 +25,10 @@
         .TrueType = .{
             .url = "git+https://codeberg.org/andrewrk/TrueType.git#b0f9867671a14ce4ed75a05a7e52c927623095e5",
             .hash = "TrueType-0.0.0-Ne-mWMxxAQDit1oHfxlK2lkZAX8P7Wsa2SBPaR_xSpc8",
+        },
+        .wayland = .{
+            .url = "git+https://codeberg.org/ifreund/zig-wayland.git#a8e10e87e5ebb49ce518ac3d2198909c87ee615a",
+            .hash = "wayland-0.7.0-dev-lQa1kjT8AQDBstL61Gy3WCMtGwVaMN1p6w5wGfdDvP15",
         },
     },
     .minimum_zig_version = "0.16.0",

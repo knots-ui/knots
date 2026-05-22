@@ -188,7 +188,7 @@ pub const Backend = struct {
     }
 };
 
-pub fn init(cfg: window.Config) !Backend {
+pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
     const selector = cfg.canvas_selector orelse @panic("canvas_selector must be set for emscripten windows");
     const cs = em.applyCanvasSize(selector, cfg.width, cfg.height);
     const ev: window.ResizeEvent = .{
