@@ -789,7 +789,22 @@ fn decodeFileUriToBuffer(text: []const u8, out: []u8) ?[]const u8 {
         if (!std.mem.eql(u8, host, "localhost")) return null;
     }
 
-    return parsed.path.toRaw(out) catch null;
+    const raw = parsed.path.toRaw(out) catch return null;
+    return ensureBuffered(raw, out);
+}
+
+fn ensureBuffered(raw: []const u8, out: []u8) ?[]const u8 {
+    if (raw.len == 0) return out[0..0];
+
+    const out_start = @intFromPtr(out.ptr);
+    const out_end = out_start + out.len;
+    const raw_start = @intFromPtr(raw.ptr);
+    const raw_end = raw_start + raw.len;
+    if (raw_start >= out_start and raw_end <= out_end) return raw;
+
+    if (raw.len > out.len) return null;
+    @memcpy(out[0..raw.len], raw);
+    return out[0..raw.len];
 }
 
 fn parseUriListIntoBuffers(
