@@ -14,6 +14,7 @@ const keymap = @import("keymap.zig");
 const xkb = @import("xkb.zig");
 
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 const TEXT_URI_LIST: [*:0]const u8 = "text/uri-list";
 
 const OutputState = struct {
@@ -620,7 +621,9 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, state: *State) void 
         .motion => |motion| state.cursor_pos = .{ motion.surface_x.toDouble(), motion.surface_y.toDouble() },
         .button => |button| {
             if (button.button == BTN_LEFT) {
-                if (owner) |o| o.setMouseDown(button.state == .pressed);
+                if (owner) |o| o.setMouseDown(button.state == .pressed, true);
+            } else if (button.button == BTN_RIGHT) {
+                if (owner) |o| o.setMouseDown(button.state == .pressed, false);
             }
         },
         .axis => |axis| {

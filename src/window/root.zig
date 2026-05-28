@@ -156,6 +156,7 @@ pub const ScrollInput = struct {
 pub const Input = struct {
     pos: [2]f64,
     mouse_down_now: bool,
+    mouse_r_down_now: bool,
     scroll: ScrollInput,
     chars: []const u21,
     keys: []const Key,

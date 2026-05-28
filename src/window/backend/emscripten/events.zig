@@ -40,16 +40,22 @@ pub fn onKeyUp(_: c_int, ev: *const root.EmscriptenKeyboardEvent, user_data: ?*a
 }
 
 pub fn onMouseDown(_: c_int, ev: *const root.EmscriptenMouseEvent, user_data: ?*anyopaque) callconv(.c) bool {
-    if (ev.button != 0) return false;
     const owner = ownerOf(user_data) orelse return false;
-    owner.setMouseDown(true);
+    switch (ev.button) {
+        0 => owner.setMouseDown(true, true),
+        2 => owner.setMouseDown(true, false),
+        else => return false,
+    }
     return true;
 }
 
 pub fn onMouseUp(_: c_int, ev: *const root.EmscriptenMouseEvent, user_data: ?*anyopaque) callconv(.c) bool {
-    if (ev.button != 0) return false;
     const owner = ownerOf(user_data) orelse return false;
-    owner.setMouseDown(false);
+    switch (ev.button) {
+        0 => owner.setMouseDown(false, true),
+        2 => owner.setMouseDown(false, false),
+        else => return false,
+    }
     return true;
 }
 

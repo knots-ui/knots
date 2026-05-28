@@ -333,12 +333,22 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
         },
         win32.WM_LBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
-            if (ownerOf(hwnd)) |o| o.setMouseDown(true);
+            if (ownerOf(hwnd)) |o| o.setMouseDown(true, true);
             return 0;
         },
         win32.WM_LBUTTONUP => {
             _ = win32.ReleaseCapture();
-            if (ownerOf(hwnd)) |o| o.setMouseDown(false);
+            if (ownerOf(hwnd)) |o| o.setMouseDown(false, true);
+            return 0;
+        },
+        win32.WM_RBUTTONDOWN => {
+            _ = win32.SetCapture(hwnd);
+            if (ownerOf(hwnd)) |o| o.setMouseDown(true, false);
+            return 0;
+        },
+        win32.WM_RBUTTONUP => {
+            _ = win32.ReleaseCapture();
+            if (ownerOf(hwnd)) |o| o.setMouseDown(false, false);
             return 0;
         },
         win32.WM_MOUSEWHEEL => {
