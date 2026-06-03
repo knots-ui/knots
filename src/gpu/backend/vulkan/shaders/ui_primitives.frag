@@ -12,8 +12,25 @@ layout(location = 3) in vec2 in_half_size;
 layout(location = 4) in vec4 in_border_width;
 layout(location = 5) in vec4 in_border_color;
 layout(location = 6) in float in_prim_type;
+layout(location = 7) in vec2 in_world_pos;
+layout(location = 8) in float in_clip_node;
 
 layout(location = 0) out vec4 frag_color;
+
+const uint MAX_CLIP_DEPTH = 32u;
+
+struct ClipNode {
+    vec4 rect;
+    vec4 radii;
+    uint parent;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+layout(set = 2, binding = 0, std430) readonly buffer ClipNodes {
+    ClipNode clip_nodes[];
+};
 
 vec4 normalizedRadii(vec4 radii, vec2 size) {
     vec4 r = max(radii, vec4(0.0));
@@ -61,6 +78,20 @@ vec4 innerRadii(vec4 radii, vec4 width) {
     ), vec4(0.0));
 }
 
+float clipAlpha(vec2 world_pos, float clip_node) {
+    uint idx = uint(clip_node + 0.5);
+    float alpha = 1.0;
+    for (uint i = 0u; i < MAX_CLIP_DEPTH && idx != 0u; i++) {
+        ClipNode node = clip_nodes[idx];
+        vec2 half_size = node.rect.zw * 0.5;
+        vec2 center = node.rect.xy + half_size;
+        float d = sdRoundedBox(world_pos - center, half_size, node.radii);
+        alpha *= 1.0 - smoothstep(-0.5, 0.5, d);
+        idx = node.parent;
+    }
+    return idx == 0u ? alpha : 0.0;
+}
+
 vec3 linearToSrgb(vec3 c) {
     bvec3 cutoff = lessThanEqual(c, vec3(0.0031308));
     vec3 lo = 12.92 * c;
@@ -103,6 +134,8 @@ void main() {
     } else {
         col = in_color;
     }
+
+    col.a *= clipAlpha(in_world_pos, in_clip_node);
 
     if (apply_srgb_encode) {
         frag_color = vec4(linearToSrgb(col.rgb), col.a);

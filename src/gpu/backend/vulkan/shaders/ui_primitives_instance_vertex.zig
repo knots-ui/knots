@@ -19,6 +19,7 @@ const in_border_color = input(Vec4f, "in_border_color", .{ .location = 5 });
 const in_corner_radius = input(Vec4f, "in_corner_radius", .{ .location = 6 });
 const in_border_width = input(Vec4f, "in_border_width", .{ .location = 7 });
 const in_prim_type = input(f32, "in_prim_type", .{ .location = 8 });
+const in_clip_node = input(f32, "in_clip_node", .{ .location = 9 });
 
 const out_color = output(Vec4f, "out_color", .{ .location = 0 });
 const out_uv = output(Vec2f, "out_uv", .{ .location = 1 });
@@ -27,6 +28,8 @@ const out_half_size = output(Vec2f, "out_half_size", .{ .location = 3 });
 const out_border_width = output(Vec4f, "out_border_width", .{ .location = 4 });
 const out_border_color = output(Vec4f, "out_border_color", .{ .location = 5 });
 const out_prim_type = output(f32, "out_prim_type", .{ .location = 6 });
+const out_world_pos = output(Vec2f, "out_world_pos", .{ .location = 7 });
+const out_clip_node = output(f32, "out_clip_node", .{ .location = 8 });
 
 extern var position: Vec4f addrspace(.output);
 
@@ -45,6 +48,8 @@ export fn main() callconv(.spirv_vertex) void {
     out_corner_radius.* = in_corner_radius.*;
     out_border_width.* = in_border_width.*;
     out_prim_type.* = in_prim_type.*;
+    out_world_pos.* = world;
+    out_clip_node.* = in_clip_node.*;
 
     if (in_prim_type.* < 0.5) {
         out_half_size.* = in_size.* * @as(Vec2f, @splat(0.5));

@@ -15,6 +15,8 @@ layout(location = 0) in vec4 in_color;
 layout(location = 1) in vec2 in_texcoord;
 layout(location = 2) flat in vec4 in_banding;
 layout(location = 3) flat in ivec4 in_glyph;
+layout(location = 4) in vec2 in_world_pos;
+layout(location = 5) in float in_clip_node;
 
 layout(location = 0) out vec4 frag_color;
 
@@ -27,6 +29,68 @@ uint calc_root_code(float y1, float y2, float y3) {
     shift = (i3 & 4u) | (shift & ~4u);
 
     return (0x2E74u >> shift) & 0x0101u;
+}
+
+const uint MAX_CLIP_DEPTH = 32u;
+
+struct ClipNode {
+    vec4 rect;
+    vec4 radii;
+    uint parent;
+    uint pad0;
+    uint pad1;
+    uint pad2;
+};
+
+layout(set = 2, binding = 0, std430) readonly buffer ClipNodes {
+    ClipNode clip_nodes[];
+};
+
+vec4 normalizedRadii(vec4 radii, vec2 size) {
+    vec4 r = max(radii, vec4(0.0));
+    float scale = 1.0;
+    if (r.x + r.y > size.x && r.x + r.y > 0.0) {
+        scale = min(scale, size.x / (r.x + r.y));
+    }
+    if (r.y + r.z > size.y && r.y + r.z > 0.0) {
+        scale = min(scale, size.y / (r.y + r.z));
+    }
+    if (r.z + r.w > size.x && r.z + r.w > 0.0) {
+        scale = min(scale, size.x / (r.z + r.w));
+    }
+    if (r.w + r.x > size.y && r.w + r.x > 0.0) {
+        scale = min(scale, size.y / (r.w + r.x));
+    }
+    return r * scale;
+}
+
+float cornerRadius(vec2 p, vec4 radii) {
+    if (p.y < 0.0) {
+        if (p.x < 0.0) return radii.x;
+        return radii.y;
+    }
+    if (p.x >= 0.0) return radii.z;
+    return radii.w;
+}
+
+float sdRoundedBox(vec2 p, vec2 half_size, vec4 radii) {
+    float radius = cornerRadius(p, normalizedRadii(radii, half_size * 2.0));
+    vec2 q = abs(p) - half_size + radius;
+    return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+float clipAlpha(vec2 world_pos, float clip_node) {
+    uint idx = uint(clip_node + 0.5);
+    float alpha = 1.0;
+    for (uint i = 0u; i < MAX_CLIP_DEPTH && idx != 0u; i++) {
+        ClipNode node = clip_nodes[idx];
+        vec2 half_size = node.rect.zw * 0.5;
+        vec2 center = node.rect.xy + half_size;
+        float d = sdRoundedBox(world_pos - center, half_size, node.radii);
+        alpha *= 1.0 - smoothstep(-0.5, 0.5, d);
+        idx = node.parent;
+    }
+    return idx == 0u ? alpha : 0.0;
 }
 
 vec2 solve_horiz_poly(vec4 p12, vec2 p3) {
@@ -170,7 +234,7 @@ vec3 linear_to_srgb(vec3 c) {
 
 void main() {
     float coverage = slug_render(in_texcoord, in_banding, in_glyph);
-    float alpha = in_color.a * coverage;
+    float alpha = in_color.a * coverage * clipAlpha(in_world_pos, in_clip_node);
     vec4 col = vec4(in_color.rgb * alpha, alpha);
     if (apply_srgb_encode) {
         frag_color = vec4(linear_to_srgb(col.rgb), col.a);

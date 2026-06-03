@@ -22,11 +22,14 @@ const in_tex = input(Vec4f, "in_tex", .{ .location = 1 });
 const in_jac = input(Vec4f, "in_jac", .{ .location = 2 });
 const in_bnd = input(Vec4f, "in_bnd", .{ .location = 3 });
 const in_col = input(Vec4f, "in_col", .{ .location = 4 });
+const in_clip_node = input(f32, "in_clip_node", .{ .location = 5 });
 
 const out_color = output(Vec4f, "out_color", .{ .location = 0 });
 const out_texcoord = output(Vec2f, "out_texcoord", .{ .location = 1 });
 const out_banding = output(Vec4f, "out_banding", .{ .location = 2 });
 const out_glyph = output(@Vector(4, i32), "out_glyph", .{ .location = 3 });
+const out_world_pos = output(Vec2f, "out_world_pos", .{ .location = 4 });
+const out_clip_node = output(f32, "out_clip_node", .{ .location = 5 });
 
 extern var position: Vec4f addrspace(.output);
 
@@ -96,6 +99,8 @@ export fn main() callconv(.spirv_vertex) void {
     out_texcoord.* = .{ dilated[2], dilated[3] };
     out_banding.* = in_bnd.*;
     out_color.* = in_col.*;
+    out_world_pos.* = .{ px, py };
+    out_clip_node.* = in_clip_node.*;
 
     const t = in_tex.*;
     const zb: u32 = @bitCast(t[2]);
