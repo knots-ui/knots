@@ -54,11 +54,17 @@ pub const Rule = struct {
 pub fn open(self: *const Graph, app: *App) !Element.Id {
     const id = self.key.hash();
     _ = try app.ui.state.getOrCreate(.measured, app.ui.allocator, id);
+    const rect = self.style.toRect(&app.ui.theme);
+    const needs_clip_shape = !rect.corner_radius.isZero() or !rect.border_width.isZero();
+    const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
+        .{ .rect = rect }
+    else
+        .none;
     return try app.ui.open(self.key, .{
         .width = self.width,
         .height = self.height,
         .overflow = .hidden,
-    }, .none);
+    }, decoration);
 }
 
 pub fn close(self: *const Graph, app: *App) !void {

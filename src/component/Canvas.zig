@@ -59,8 +59,10 @@ pub const Painter = struct {
 };
 
 pub fn open(self: *const Canvas, app: *App) !Element.Id {
-    const decoration: Decoration = if (self.style.hasDecoration())
-        .{ .rect = self.style.toRect(&app.ui.theme) }
+    const rect = self.style.toRect(&app.ui.theme);
+    const needs_clip_shape = !rect.corner_radius.isZero() or !rect.border_width.isZero();
+    const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
+        .{ .rect = rect }
     else
         .none;
     return try app.ui.open(self.key, .{

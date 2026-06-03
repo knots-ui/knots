@@ -29,8 +29,10 @@ grid_placement: ?GridPlacement = null,
 const Rect = @This();
 
 pub fn open(self: *const Rect, app: *App) !Element.Id {
-    const decoration: Decoration = if (self.style.hasDecoration())
-        .{ .rect = self.style.toRect(&app.ui.theme) }
+    const rect = self.style.toRect(&app.ui.theme);
+    const needs_clip_shape = self.overflow != .visible and !rect.corner_radius.isZero();
+    const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
+        .{ .rect = rect }
     else
         .none;
     return try app.ui.open(self.key, .{
