@@ -15,12 +15,27 @@ struct Uniforms {
 @group(1) @binding(0) var curve_texture: texture_2d<f32>;
 @group(1) @binding(1) var band_texture: texture_2d<u32>;
 
+struct ClipNode {
+    rect: vec4f,
+    radii: vec4f,
+    parent: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+}
+
+@group(2) @binding(0)
+var<storage, read> clip_nodes: array<ClipNode>;
+
+const MAX_CLIP_DEPTH: u32 = 32u;
+
 struct VsIn {
     @location(0) pos: vec4f,
     @location(1) tex: vec4f,
     @location(2) jac: vec4f,
     @location(3) bnd: vec4f,
     @location(4) col: vec4f,
+    @location(5) clip_node: f32,
 };
 
 struct VsOut {
@@ -29,6 +44,8 @@ struct VsOut {
     @location(1) texcoord: vec2f,
     @interpolate(flat) @location(2) banding: vec4f,
     @interpolate(flat) @location(3) glyph: vec4i,
+    @location(4) world_pos: vec2f,
+    @location(5) clip_node: f32,
 };
 
 fn slug_dilate(
@@ -85,7 +102,63 @@ fn vs_main(in: VsIn) -> VsOut {
     out.banding = in.bnd;
     out.glyph = unpack_glyph(in.tex);
     out.color = in.col;
+    out.world_pos = p;
+    out.clip_node = in.clip_node;
     return out;
+}
+
+fn normalizedRadii(radii: vec4f, size: vec2f) -> vec4f {
+    let r = max(radii, vec4f(0.0));
+    var scale: f32 = 1.0;
+    if (r.x + r.y > size.x && r.x + r.y > 0.0) {
+        scale = min(scale, size.x / (r.x + r.y));
+    }
+    if (r.y + r.z > size.y && r.y + r.z > 0.0) {
+        scale = min(scale, size.y / (r.y + r.z));
+    }
+    if (r.z + r.w > size.x && r.z + r.w > 0.0) {
+        scale = min(scale, size.x / (r.z + r.w));
+    }
+    if (r.w + r.x > size.y && r.w + r.x > 0.0) {
+        scale = min(scale, size.y / (r.w + r.x));
+    }
+    return r * scale;
+}
+
+fn cornerRadius(p: vec2f, radii: vec4f) -> f32 {
+    if (p.y < 0.0) {
+        if (p.x < 0.0) {
+            return radii.x;
+        }
+        return radii.y;
+    }
+    if (p.x >= 0.0) {
+        return radii.z;
+    }
+    return radii.w;
+}
+
+fn sdRoundedBox(p: vec2f, half_size: vec2f, radii: vec4f) -> f32 {
+    let r = cornerRadius(p, normalizedRadii(radii, half_size * 2.0));
+    let q = abs(p) - half_size + r;
+    return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+fn clipAlpha(world_pos: vec2f, clip_node: f32) -> f32 {
+    var idx = u32(clip_node + 0.5);
+    var alpha = 1.0;
+    for (var i: u32 = 0u; i < MAX_CLIP_DEPTH && idx != 0u; i = i + 1u) {
+        let node = clip_nodes[idx];
+        let half_size = node.rect.zw * 0.5;
+        let center = node.rect.xy + half_size;
+        let d = sdRoundedBox(world_pos - center, half_size, node.radii);
+        alpha = alpha * (1.0 - smoothstep(-0.5, 0.5, d));
+        idx = node.parent;
+    }
+    if idx != 0u {
+        return 0.0;
+    }
+    return alpha;
 }
 
 fn calc_root_code(y1: f32, y2: f32, y3: f32) -> u32 {
@@ -238,7 +311,7 @@ fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4i) -> f32 {
 
 fn shade_linear(in: VsOut) -> vec4f {
     let coverage = slug_render(in.texcoord, in.banding, in.glyph);
-    let alpha = in.color.a * coverage;
+    let alpha = in.color.a * coverage * clipAlpha(in.world_pos, in.clip_node);
     return vec4f(in.color.rgb * alpha, alpha);
 }
 

@@ -11,6 +11,20 @@ var atlas_texture: texture_2d<f32>;
 @group(1) @binding(1)
 var atlas_sampler: sampler;
 
+struct ClipNode {
+    rect: vec4f,
+    radii: vec4f,
+    parent: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
+}
+
+@group(2) @binding(0)
+var<storage, read> clip_nodes: array<ClipNode>;
+
+const MAX_CLIP_DEPTH: u32 = 32u;
+
 struct VertexInput {
     @location(0) pos: vec2f,
     @location(1) uv: vec2f,
@@ -20,6 +34,7 @@ struct VertexInput {
     @location(5) border_width: vec4f,
     @location(6) border_color: vec4f,
     @location(7) prim_type: f32,
+    @location(8) clip_node: f32,
 }
 
 struct VertexOutput {
@@ -31,6 +46,8 @@ struct VertexOutput {
     @location(4) border_width: vec4f,
     @location(5) border_color: vec4f,
     @location(6) prim_type: f32,
+    @location(7) world_pos: vec2f,
+    @location(8) clip_node: f32,
 }
 
 @vertex
@@ -46,6 +63,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.border_width = in.border_width;
     out.border_color = in.border_color;
     out.prim_type = in.prim_type;
+    out.world_pos = in.pos;
+    out.clip_node = in.clip_node;
     return out;
 }
 
@@ -59,6 +78,7 @@ struct InstanceInput {
     @location(6) corner_radius: vec4f,
     @location(7) border_width: vec4f,
     @location(8) prim_type: f32,
+    @location(9) clip_node: f32,
 }
 
 @vertex
@@ -81,6 +101,8 @@ fn vs_instance_main(@builtin(vertex_index) vid: u32, inst: InstanceInput) -> Ver
     out.corner_radius = inst.corner_radius;
     out.border_width = inst.border_width;
     out.prim_type = inst.prim_type;
+    out.world_pos = world;
+    out.clip_node = inst.clip_node;
 
     if inst.prim_type < 0.5 {
         // SDF rect/circle: signed centered coords + half_size for sdRoundedBox.
@@ -140,6 +162,23 @@ fn innerRadii(radii: vec4f, width: vec4f) -> vec4f {
     ), vec4f(0.0));
 }
 
+fn clipAlpha(world_pos: vec2f, clip_node: f32) -> f32 {
+    var idx = u32(clip_node + 0.5);
+    var alpha = 1.0;
+    for (var i: u32 = 0u; i < MAX_CLIP_DEPTH && idx != 0u; i = i + 1u) {
+        let node = clip_nodes[idx];
+        let half_size = node.rect.zw * 0.5;
+        let center = node.rect.xy + half_size;
+        let d = sdRoundedBox(world_pos - center, half_size, node.radii);
+        alpha = alpha * (1.0 - smoothstep(-0.5, 0.5, d));
+        idx = node.parent;
+    }
+    if idx != 0u {
+        return 0.0;
+    }
+    return alpha;
+}
+
 fn shadeLinear(in: VertexOutput) -> vec4f {
     let sampled = textureSample(atlas_texture, atlas_sampler, in.uv);
 
@@ -166,14 +205,17 @@ fn shadeLinear(in: VertexOutput) -> vec4f {
         }
 
         let col = mix(in.color, in.border_color, border_alpha);
-        return vec4f(col.rgb, col.a * fill_alpha);
+        let clip_alpha = clipAlpha(in.world_pos, in.clip_node);
+        return vec4f(col.rgb, col.a * fill_alpha * clip_alpha);
     } else if in.prim_type < 1.5 {
         let coverage = sampled.r;
-        return vec4f(in.color.rgb, in.color.a * coverage);
+        let clip_alpha = clipAlpha(in.world_pos, in.clip_node);
+        return vec4f(in.color.rgb, in.color.a * coverage * clip_alpha);
     } else if in.prim_type < 2.5 {
-        return vec4f(sampled.rgb * in.color.rgb, sampled.a * in.color.a);
+        let col = vec4f(sampled.rgb * in.color.rgb, sampled.a * in.color.a);
+        return vec4f(col.rgb, col.a * clipAlpha(in.world_pos, in.clip_node));
     } else {
-        return in.color;
+        return vec4f(in.color.rgb, in.color.a * clipAlpha(in.world_pos, in.clip_node));
     }
 }
 
