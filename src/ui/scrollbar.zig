@@ -3,6 +3,7 @@ const math = @import("math");
 const layout = @import("layout");
 const gpu = @import("gpu");
 const DrawList = @import("render").DrawList;
+const Clip = @import("render").Clip;
 
 const Element = layout.Element;
 const State = @import("State.zig");
@@ -27,7 +28,7 @@ pub const Geom = struct {
 pub const SlotGeom = struct {
     slot: Element.Slot,
     layer: u8 = 0,
-    parent_clip: ?math.Rect = null,
+    parent_clip: Clip.State = .{},
     geom: Geom,
 };
 
@@ -249,7 +250,7 @@ pub fn route(ui: *UI) !void {
     }
 }
 
-pub fn recordForTessellate(ui: *UI, slot: Element.Slot, parent_clip: ?math.Rect, layer: u8) !void {
+pub fn recordForTessellate(ui: *UI, slot: Element.Slot, parent_clip: Clip.State, layer: u8) !void {
     const el = &ui.layout_ctx.pool.elements.items[slot];
     const offset = ui.state.getScroll(el.id);
     const geom = compute(el, .{ offset[0], offset[1] }, &ui.theme) orelse return;
@@ -271,7 +272,6 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: u8) !void {
     for (ui.scroll_geoms.items) |sg| {
         if (sg.layer != layer) continue;
         const el = &elements[sg.slot];
-        const clip_arr: ?[4]f32 = if (sg.parent_clip) |c| @as([4]f32, c.v) else null;
         const sb_id = idFor(el.id);
 
         for (sg.geom.bars) |maybe_bar| {
@@ -288,7 +288,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: u8) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{track_inst}, null, clip_arr);
+            try draw_list.pushInstances(&[_]gpu.Instance{track_inst}, null, sg.parent_clip);
 
             const dragging = if (ui.state.get(.scroll, el.id)) |s| s.drag_axis == bar.axis else false;
             const hovered = ui.state.hovered == sb_id or dragging;
@@ -306,7 +306,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: u8) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{thumb_inst}, null, clip_arr);
+            try draw_list.pushInstances(&[_]gpu.Instance{thumb_inst}, null, sg.parent_clip);
 
             try ui.appendHitWithScope(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
         }
@@ -325,7 +325,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: u8) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{corner_inst}, null, clip_arr);
+            try draw_list.pushInstances(&[_]gpu.Instance{corner_inst}, null, sg.parent_clip);
         }
     }
 }

@@ -6,7 +6,9 @@ const math = @import("math");
 const Element = layout.Element;
 const std = @import("std");
 const gpu = @import("gpu");
-const DrawList = @import("render").DrawList;
+const render = @import("render");
+const DrawList = render.DrawList;
+const Clip = render.Clip;
 
 const State = @import("State.zig");
 const Input = @import("Input.zig");
@@ -39,7 +41,7 @@ const TEXT_QUAD_NORMALS = [4][2]f32{
 pub const HitRecord = struct {
     id: Element.Id,
     bounds: math.Rect,
-    clip: ?math.Rect,
+    clip: Clip.State,
     layer: u8,
     input_scope: Element.Id,
     insertion_order: u32,
@@ -73,6 +75,10 @@ input: Input,
 hit_records: std.ArrayList(HitRecord),
 hit_counter: u32,
 scroll_geoms: std.ArrayList(scrollbar.SlotGeom),
+clip_shapes: std.ArrayList(?Clip.Shape),
+slot_clips: std.ArrayList(Clip.State),
+child_clips: std.ArrayList(Clip.State),
+clip_nodes: std.ArrayList(Clip.Node),
 input_scopes: InputScope,
 content_scale: f32,
 scroll_line_size: Size.Input,
@@ -93,6 +99,10 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .hit_records = .empty,
         .hit_counter = 0,
         .scroll_geoms = .empty,
+        .clip_shapes = .empty,
+        .slot_clips = .empty,
+        .child_clips = .empty,
+        .clip_nodes = .empty,
         .input_scopes = .{},
         .content_scale = 1.0,
         .scroll_line_size = cfg.scroll_line_size,
@@ -109,13 +119,23 @@ pub fn deinit(self: *UI) void {
     self.state.deinit();
     self.hit_records.deinit(self.allocator);
     self.scroll_geoms.deinit(self.allocator);
+    self.clip_shapes.deinit(self.allocator);
+    self.slot_clips.deinit(self.allocator);
+    self.child_clips.deinit(self.allocator);
+    self.clip_nodes.deinit(self.allocator);
     self.input_scopes.deinit(self.allocator);
 }
 
 pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration) !Element.Id {
     const id = key.hash();
+    try self.decorations.ensureUnusedCapacity(self.allocator, 1);
+    try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
     const slot = try self.layout_ctx.open(id, element);
-    try self.decorations.append(self.allocator, decoration);
+    const slot_index: usize = @intCast(slot);
+    std.debug.assert(self.decorations.items.len == slot_index);
+    std.debug.assert(self.clip_shapes.items.len == slot_index);
+    self.decorations.appendAssumeCapacity(decoration);
+    self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration));
     const el = self.layout_ctx.pool.get(slot);
     el.input_scope = self.input_scopes.current();
     if (decoration == .text) {
@@ -138,8 +158,14 @@ pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, dec
     }
 
     const id = key.hash();
+    try self.decorations.ensureUnusedCapacity(self.allocator, 1);
+    try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
     const slot = try self.layout_ctx.openRoot(id, cfg);
-    try self.decorations.append(self.allocator, decoration);
+    const slot_index: usize = @intCast(slot);
+    std.debug.assert(self.decorations.items.len == slot_index);
+    std.debug.assert(self.clip_shapes.items.len == slot_index);
+    self.decorations.appendAssumeCapacity(decoration);
+    self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration));
     const el = self.layout_ctx.pool.get(slot);
     el.input_scope = self.input_scopes.current();
     el.box.setX(x);
@@ -149,6 +175,16 @@ pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, dec
         el.intrinsic_h = decoration.text.intrinsic_h;
     }
     return id;
+}
+
+fn clipShapeFromDecoration(decoration: Decoration) ?Clip.Shape {
+    return switch (decoration) {
+        .rect => |r| .{
+            .corner_radius = r.corner_radius.value,
+            .border_width = r.border_width.value,
+        },
+        else => null,
+    };
 }
 
 /// Open an absolutely-positioned element inside the current parent at parent-local
@@ -223,6 +259,8 @@ pub fn textDecoration(self: *UI, content: []const u8, size: Size, font: ?[]const
     } };
 }
 
+/// Replaces only the draw decoration.
+/// Overflow clip shape is captured when the slot is opened so canvas-like components can replace their drawing later.
 pub fn setDecoration(self: *UI, slot: Element.Slot, decoration: Decoration) void {
     self.decorations.items[slot] = decoration;
 }
@@ -235,9 +273,13 @@ pub fn currentSlot(self: *UI) Element.Slot {
 pub fn reset(self: *UI) void {
     self.layout_ctx.reset();
     self.decorations.clearRetainingCapacity();
+    self.clip_shapes.clearRetainingCapacity();
     self.hit_records.clearRetainingCapacity();
     self.hit_counter = 0;
     self.scroll_geoms.clearRetainingCapacity();
+    self.slot_clips.clearRetainingCapacity();
+    self.child_clips.clearRetainingCapacity();
+    self.clip_nodes.clearRetainingCapacity();
     self.input_scopes.resetFrame();
     self.anim_active = false;
 }
@@ -489,11 +531,11 @@ fn clearOtherTextSelect(hovered: Element.Id, id: Element.Id, s: *State.TextSelec
     s.dragging = false;
 }
 
-pub fn appendHit(self: *UI, id: Element.Id, bounds: math.Rect, clip: ?math.Rect, layer: u8) !void {
+pub fn appendHit(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: u8) !void {
     try self.appendHitWithScope(id, bounds, clip, layer, self.inputScopeForId(id) orelse Element.INVALID_ID);
 }
 
-pub fn appendHitWithScope(self: *UI, id: Element.Id, bounds: math.Rect, clip: ?math.Rect, layer: u8, input_scope: Element.Id) !void {
+pub fn appendHitWithScope(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: u8, input_scope: Element.Id) !void {
     try self.hit_records.append(self.allocator, .{
         .id = id,
         .bounds = bounds,
@@ -520,7 +562,7 @@ fn hitTarget(self: *UI, p: math.Vec2) Element.Id {
 
     for (self.hit_records.items) |rec| {
         if (!rec.bounds.contains(p)) continue;
-        if (rec.clip) |c| if (!c.contains(p)) continue;
+        if (!Clip.contains(rec.clip, self.clip_nodes.items, p)) continue;
         if (!self.input_scopes.allows(rec.input_scope)) continue;
 
         if (best_id == Element.INVALID_ID or
@@ -572,6 +614,10 @@ fn updateStats(self: *UI) void {
 
 pub fn tessellate(self: *UI, allocator: Allocator, draw_list: *DrawList) !void {
     defer self.font.endFrame();
+
+    try self.buildClipStates();
+    try draw_list.clip_nodes.appendSlice(draw_list.allocator, self.clip_nodes.items);
+
     var it = self.layout_ctx.z_used.iterator(.{});
     while (it.next()) |z| {
         draw_list.setLayer(@intCast(z));
@@ -579,34 +625,80 @@ pub fn tessellate(self: *UI, allocator: Allocator, draw_list: *DrawList) !void {
     }
 }
 
+fn buildClipStates(self: *UI) !void {
+    const elements = self.layout_ctx.pool.elements.items;
+
+    self.slot_clips.clearRetainingCapacity();
+    self.child_clips.clearRetainingCapacity();
+    self.clip_nodes.clearRetainingCapacity();
+
+    try self.slot_clips.resize(self.allocator, elements.len);
+    try self.child_clips.resize(self.allocator, elements.len);
+    try self.clip_nodes.append(self.allocator, Clip.Node.empty);
+
+    for (elements, 0..) |*el, idx| {
+        const parent_clip = if (el.parent != Element.INVALID_SLOT)
+            self.child_clips.items[el.parent]
+        else
+            Clip.State{};
+
+        self.slot_clips.items[idx] = parent_clip;
+        self.child_clips.items[idx] = try self.childClip(@intCast(idx), parent_clip);
+    }
+}
+
+fn childClip(self: *UI, slot: Element.Slot, parent_clip: Clip.State) !Clip.State {
+    const el = &self.layout_ctx.pool.elements.items[slot];
+    if (el.overflow == .visible) return parent_clip;
+
+    var clip_rect = el.box;
+    var radii: math.Vec4 = @splat(0);
+    var has_rounding = false;
+
+    if (self.clip_shapes.items[slot]) |shape| {
+        clip_rect = .init(
+            el.box.x() + shape.border_width[3],
+            el.box.y() + shape.border_width[0],
+            @max(0, el.box.w() - shape.border_width[3] - shape.border_width[1]),
+            @max(0, el.box.h() - shape.border_width[0] - shape.border_width[2]),
+        );
+        radii = .{
+            @max(0, shape.corner_radius[0] - @max(shape.border_width[0], shape.border_width[3])),
+            @max(0, shape.corner_radius[1] - @max(shape.border_width[0], shape.border_width[1])),
+            @max(0, shape.corner_radius[2] - @max(shape.border_width[2], shape.border_width[1])),
+            @max(0, shape.corner_radius[3] - @max(shape.border_width[2], shape.border_width[3])),
+        };
+        has_rounding = !math.isZero(radii);
+    }
+
+    var out = parent_clip;
+    out.scissor = if (parent_clip.scissor) |scissor| scissor.intersect(clip_rect) else clip_rect;
+
+    if (has_rounding and !clip_rect.isEmpty()) {
+        if (Clip.depth(self.clip_nodes.items, out.node) >= Clip.MAX_DEPTH) return error.ClipStackTooDeep;
+        const node_index: u32 = @intCast(self.clip_nodes.items.len);
+        try self.clip_nodes.append(self.allocator, .{
+            .rect = clip_rect.v,
+            .radii = radii,
+            .parent = out.node,
+            ._pad = .{ 0, 0, 0 },
+        });
+        out.node = node_index;
+    }
+
+    return out;
+}
+
 fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots: []const Element.Slot, layer: u8) !void {
     const content_scale = self.content_scale;
     const elements = self.layout_ctx.pool.elements.items;
 
-    var clip_rects: std.ArrayList(math.Rect) = .empty;
-    var clip_owners: std.ArrayList(Element.Slot) = .empty;
-
     for (slots) |slot| {
         const el = &elements[slot];
 
-        while (clip_owners.items.len > 0) {
-            if (self.layout_ctx.isDescendantOf(slot, clip_owners.items[clip_owners.items.len - 1])) break;
-            _ = clip_owners.pop();
-            _ = clip_rects.pop();
-        }
-
-        const clip: ?math.Rect = if (clip_rects.items.len > 0) clip_rects.items[clip_rects.items.len - 1] else null;
-        const clip_arr: ?[4]f32 = if (clip) |c| @as([4]f32, c.v) else null;
-        const clipped_out = if (clip) |c| !c.overlaps(el.box) else false;
-
-        if (clipped_out) {
-            if (el.overflow != .visible) {
-                const new_clip = clip.?.intersect(el.box);
-                try clip_rects.append(allocator, new_clip);
-                try clip_owners.append(allocator, slot);
-            }
-            continue;
-        }
+        const clip = self.slot_clips.items[slot];
+        const clipped_out = if (clip.scissor) |c| !c.overlaps(el.box) else false;
+        if (clipped_out) continue;
 
         if (el.overflow.isScroll()) try scrollbar.recordForTessellate(self, slot, clip, layer);
 
@@ -626,7 +718,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = r.border_width.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip_arr);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
             },
             .text => |t| if (t.content.len > 0) {
                 const face = try self.font.getFace(t.font);
@@ -643,7 +735,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     for (shaped.lines) |ln| total_glyphs += ln.glyphs.len;
                     if (total_glyphs == 0) continue;
 
-                    const batch = (try draw_list.beginTextBatch(total_glyphs, clip_arr)).?;
+                    const batch = (try draw_list.beginTextBatch(total_glyphs, clip)).?;
 
                     for (shaped.lines) |line| {
                         const baseline = el.box.y() + ascender + line.y / content_scale;
@@ -660,7 +752,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                             const sx_v = origin_x_v + em_x * size_v;
                             const sy_v = baseline_v - em_y * size_v;
 
-                            if (clip) |c| {
+                            if (clip.scissor) |c| {
                                 const dilation_margin = 2.0 / content_scale;
                                 const glyph_bounds = math.Rect.fromMinMax(
                                     .{ @reduce(.Min, sx_v), @reduce(.Min, sy_v) },
@@ -701,7 +793,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     }
                 }
             },
-            .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip_arr),
+            .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
             .image => |img| {
                 const zero4 = [4]f32{ 0, 0, 0, 0 };
                 const inst = gpu.Instance{
@@ -715,25 +807,16 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = BorderWidth.zero.value,
                     .prim_type = 2.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.texture_id, clip_arr);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.texture_id, clip);
             },
-            .range => |r| try renderRange(draw_list, el.box, r, clip_arr),
-        }
-
-        if (el.overflow != .visible) {
-            const new_clip: math.Rect = if (clip_rects.items.len > 0)
-                clip_rects.items[clip_rects.items.len - 1].intersect(el.box)
-            else
-                el.box;
-            try clip_rects.append(allocator, new_clip);
-            try clip_owners.append(allocator, slot);
+            .range => |r| try renderRange(draw_list, el.box, r, clip),
         }
     }
 
     try scrollbar.render(self, draw_list, layer);
 }
 
-fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: ?[4]f32) !void {
+fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: Clip.State) !void {
     const bx = box.x();
     const by = box.y();
     const bw = box.w();
@@ -913,7 +996,7 @@ test "resolveHit reports hover changes" {
     var ui = try UI.init(allocator, .{});
     defer ui.deinit();
 
-    try ui.appendHit(42, math.Rect.init(0, 0, 100, 100), null, 0);
+    try ui.appendHit(42, .init(0, 0, 100, 100), .{}, 0);
 
     ui.input.mouse_pos = .{ 10, 10 };
     try std.testing.expect(ui.resolveHit());

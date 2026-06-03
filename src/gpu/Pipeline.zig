@@ -39,6 +39,7 @@ pub const SamplerBindingType = enum { filtering, non_filtering };
 
 pub const BindingType = union(enum) {
     uniform_buffer,
+    read_only_storage_buffer,
     sampled_texture: TextureSampleType,
     sampler: SamplerBindingType,
 };

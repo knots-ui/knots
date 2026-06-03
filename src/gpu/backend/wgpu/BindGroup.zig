@@ -27,6 +27,12 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
                 w.offset = b.offset;
                 w.size = if (b.size == 0) wbuf.size - b.offset else b.size;
             },
+            .read_only_storage_buffer => |b| {
+                const wbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
+                w.buffer = wbuf.buffer;
+                w.offset = b.offset;
+                w.size = if (b.size == 0) wbuf.size - b.offset else b.size;
+            },
             .texture_view => |t| {
                 const wtex: *Texture = @ptrCast(@alignCast(t.ptr));
                 w.texture_view = wtex.view;

@@ -62,7 +62,14 @@ const primitives_texture_bgl = gpu.Pipeline.BindGroupLayoutDesc{
     },
 };
 
-const primitives_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ primitives_uniform_bgl, primitives_texture_bgl };
+const clip_bgl = gpu.Pipeline.BindGroupLayoutDesc{
+    .label = "clip_bgl",
+    .entries = &.{
+        .{ .binding = 0, .visibility = .{ .fragment = true }, .type = .read_only_storage_buffer },
+    },
+};
+
+const primitives_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ primitives_uniform_bgl, primitives_texture_bgl, clip_bgl };
 
 const slug_uniform_bgl = gpu.Pipeline.BindGroupLayoutDesc{
     .label = "slug_uniform_bgl",
@@ -79,7 +86,7 @@ const slug_curveband_bgl = gpu.Pipeline.BindGroupLayoutDesc{
     },
 };
 
-const slug_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ slug_uniform_bgl, slug_curveband_bgl };
+const slug_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ slug_uniform_bgl, slug_curveband_bgl, clip_bgl };
 
 pub fn primitivesDesc(backend: GPUBackend, kind: PrimitivesKind, srgb_surface: bool) gpu.Pipeline.Desc {
     return primitivesDescForTarget(backend, kind, null, !srgb_surface);

@@ -110,6 +110,7 @@ fn toWgpuBglEntry(e: gpu.Pipeline.BindGroupLayoutEntry) wgpu.BindGroupLayout.Ent
     };
     switch (e.type) {
         .uniform_buffer => out.buffer = .{ .binding_type = .uniform },
+        .read_only_storage_buffer => out.buffer = .{ .binding_type = .read_only_storage },
         .sampled_texture => |st| out.texture = .{
             .sample_type = switch (st) {
                 .float => .float,

@@ -205,9 +205,10 @@ fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device) !vk.Descriptor
     return vkd.createDescriptorPool(device, &.{
         .flags = .{ .free_descriptor_set_bit = true },
         .max_sets = 64,
-        .pool_size_count = 3,
+        .pool_size_count = 4,
         .p_pool_sizes = &[_]vk.DescriptorPoolSize{
             .{ .type = .uniform_buffer, .descriptor_count = 64 },
+            .{ .type = .storage_buffer, .descriptor_count = 64 },
             .{ .type = .sampled_image, .descriptor_count = 64 },
             .{ .type = .sampler, .descriptor_count = 64 },
         },

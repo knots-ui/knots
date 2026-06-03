@@ -8,3 +8,4 @@ corner_radius: [4]f32,
 border_width: [4]f32,
 /// 0.0 = SDF rect, 1.0 = text, 2.0 = image, 3.0 = raw vertex color
 prim_type: f32,
+clip_node: f32 = 0,

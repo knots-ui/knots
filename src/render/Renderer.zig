@@ -3,9 +3,11 @@ const gpu = @import("gpu");
 const GPUBackend = @import("gpu_backend").Backend;
 const text = @import("text");
 const Window = @import("window").Window;
+const math = @import("math");
 const builtin = @import("builtin");
 
 const DrawList = @import("DrawList.zig");
+const Clip = @import("Clip.zig");
 const pipelines = @import("pipelines.zig");
 const FrameUploads = @import("FrameUploads.zig");
 
@@ -552,7 +554,7 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     }
 
     self.updateViewport(upload, content_scale);
-    const sizes = try uploadFrameData(upload, dl);
+    const sizes = try self.uploadFrameData(upload, dl);
     const use_linear_target = self.linear_pipeline != null;
     if (use_linear_target) try self.ensureLinearTarget();
 
@@ -563,7 +565,7 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
 
     const phys_w = self.ctx.cfg.window_width;
     const phys_h = self.ctx.cfg.window_height;
-    var current_clip: ?[4]f32 = null;
+    var current_clip: Clip.State = .{};
     var current_texture: ?u32 = null;
     var current_kind: ?DrawList.CommandKind = null;
     var clip_initialized = false;
@@ -580,9 +582,9 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
                 try self.bindTextureForCommand(&pass, cmd.texture);
                 current_texture = cmd.texture;
             }
-            if (!clip_initialized or !std.meta.eql(current_clip, cmd.clip_rect)) {
-                applyClip(&pass, cmd.clip_rect, content_scale, phys_w, phys_h);
-                current_clip = cmd.clip_rect;
+            if (!clip_initialized or !current_clip.scissorEql(cmd.clip)) {
+                applyClip(&pass, cmd.clip.scissor, content_scale, phys_w, phys_h);
+                current_clip = cmd.clip;
                 clip_initialized = true;
             }
             dispatchCommand(&pass, cmd);
@@ -612,15 +614,19 @@ fn updateViewport(self: *Renderer, uploads: *FrameUploads, content_scale: f32) v
     uploads.text_uniform_buf.load(pipelines.SlugUniforms, &.{u});
 }
 
-fn uploadFrameData(uploads: *FrameUploads, dl: *const DrawList) !FrameSizes {
+fn uploadFrameData(self: *Renderer, uploads: *FrameUploads, dl: *const DrawList) !FrameSizes {
     const verts = dl.vertices.items;
     const insts = dl.instances.items;
     const tverts = dl.text_vertices.items;
+    const empty_clip_nodes = [_]Clip.Node{Clip.Node.empty};
+    const clip_nodes = if (dl.clip_nodes.items.len > 0) dl.clip_nodes.items else empty_clip_nodes[0..];
     try ensureAndLoad(&uploads.vertex_buf, gpu.Vertex, verts);
     try ensureAndLoad(&uploads.instance_buf, gpu.Instance, insts);
     try ensureAndLoad(&uploads.index_buf, u32, dl.indices.items);
     try ensureAndLoad(&uploads.text_vertex_buf, gpu.SlugVertex, tverts);
     try ensureAndLoad(&uploads.text_index_buf, u32, dl.text_indices.items);
+    try uploads.ensureClipNodeCapacity(&self.ctx, &self.pipeline, &self.instance_pipeline, &self.text_pipeline, clip_nodes.len * @sizeOf(Clip.Node));
+    uploads.clip_node_buf.load(Clip.Node, clip_nodes);
     return .{
         .verts_bytes = verts.len * @sizeOf(gpu.Vertex),
         .insts_bytes = insts.len * @sizeOf(gpu.Instance),
@@ -637,6 +643,7 @@ fn bindKind(self: *Renderer, pass: *gpu.RenderPass, uploads: *FrameUploads, kind
             pass.bindPipeline(pipeline);
             pass.setBindGroup(0, &uploads.vertex_uniform_bg);
             pass.setBindGroup(1, &self.atlas_texture_bg);
+            pass.setBindGroup(2, &uploads.vertex_clip_bg);
             pass.setVertexBuffer(0, &uploads.vertex_buf, 0, sizes.verts_bytes);
             pass.setIndexBuffer(&uploads.index_buf, 0, sizes.indices_bytes);
         },
@@ -645,6 +652,7 @@ fn bindKind(self: *Renderer, pass: *gpu.RenderPass, uploads: *FrameUploads, kind
             pass.bindPipeline(pipeline);
             pass.setBindGroup(0, &uploads.instance_uniform_bg);
             pass.setBindGroup(1, &self.atlas_texture_bg);
+            pass.setBindGroup(2, &uploads.instance_clip_bg);
             pass.setVertexBuffer(0, &uploads.instance_buf, 0, sizes.insts_bytes);
             pass.setIndexBuffer(&self.unit_index_buf, 0, 6 * @sizeOf(u32));
         },
@@ -653,6 +661,7 @@ fn bindKind(self: *Renderer, pass: *gpu.RenderPass, uploads: *FrameUploads, kind
             pass.bindPipeline(pipeline);
             pass.setBindGroup(0, &uploads.text_uniform_bg);
             pass.setBindGroup(1, &self.text_curveband_bg);
+            pass.setBindGroup(2, &uploads.text_clip_bg);
             pass.setVertexBuffer(0, &uploads.text_vertex_buf, 0, sizes.tverts_bytes);
             pass.setIndexBuffer(&uploads.text_index_buf, 0, sizes.tindices_bytes);
         },
@@ -730,6 +739,7 @@ fn compositeLinearTarget(self: *Renderer, frame_ctx: *gpu.Frame.Context, uploads
     pass.bindPipeline(&self.instance_pipeline);
     pass.setBindGroup(0, &uploads.instance_uniform_bg);
     pass.setBindGroup(1, &self.linear_target_bg.?);
+    pass.setBindGroup(2, &uploads.instance_clip_bg);
     pass.setVertexBuffer(0, &uploads.composite_instance_buf, 0, @sizeOf(gpu.Instance));
     pass.setIndexBuffer(&self.unit_index_buf, 0, 6 * @sizeOf(u32));
     pass.setScissorRect(0, 0, self.ctx.cfg.window_width, self.ctx.cfg.window_height);
@@ -753,7 +763,7 @@ fn getOrCreateTextureBg(self: *Renderer, slot: *TextureSlot) !gpu.BindGroup {
     return bg;
 }
 
-fn applyClip(pass: *gpu.RenderPass, clip_rect: ?[4]f32, content_scale: f32, phys_w: u32, phys_h: u32) void {
+fn applyClip(pass: *gpu.RenderPass, clip_rect: ?math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) void {
     const vw: f32 = @floatFromInt(phys_w);
     const vh: f32 = @floatFromInt(phys_h);
     if (sanitizeClip(clip_rect)) |clip| {
@@ -879,8 +889,9 @@ fn uploadDirtyRows(
     try texture.write(ptr, len, 0, y0, width, rows, null);
 }
 
-fn sanitizeClip(c: ?[4]f32) ?[4]f32 {
-    const v = c orelse return null;
+fn sanitizeClip(c: ?math.Rect) ?[4]f32 {
+    const rect = c orelse return null;
+    const v = [4]f32{ rect.x(), rect.y(), rect.w(), rect.h() };
     for (v) |f| if (!std.math.isFinite(f)) return null;
     return v;
 }

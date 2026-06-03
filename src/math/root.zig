@@ -69,3 +69,7 @@ pub inline fn select(mask: anytype, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
 pub inline fn cross2(a: Vec2, b: Vec2) f32 {
     return a[0] * b[1] - a[1] * b[0];
 }
+
+pub inline fn isZero(v: anytype) bool {
+    return @reduce(.And, v == @as(@TypeOf(v), @splat(0)));
+}

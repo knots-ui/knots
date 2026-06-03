@@ -45,6 +45,24 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
                     .p_texel_buffer_view = undefined,
                 };
             },
+            .read_only_storage_buffer => |b| {
+                const vbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
+                buf_info_buf[i] = .{
+                    .buffer = vbuf.buffer,
+                    .offset = b.offset,
+                    .range = if (b.size == 0) vk.WHOLE_SIZE else b.size,
+                };
+                writes_buf[i] = .{
+                    .dst_set = alloc_result.set,
+                    .dst_binding = e.binding,
+                    .dst_array_element = 0,
+                    .descriptor_count = 1,
+                    .descriptor_type = .storage_buffer,
+                    .p_buffer_info = buf_info_buf[i .. i + 1].ptr,
+                    .p_image_info = undefined,
+                    .p_texel_buffer_view = undefined,
+                };
+            },
             .texture_view => |t| {
                 const vtex: *Texture = @ptrCast(@alignCast(t.ptr));
                 img_info_buf[i] = .{

@@ -13,6 +13,7 @@ pub const BufferBinding = struct {
 
 pub const Entry = union(enum) {
     buffer: BufferBinding,
+    read_only_storage_buffer: BufferBinding,
     texture_view: *const Texture,
     sampler: *const Sampler,
 };

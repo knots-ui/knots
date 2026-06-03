@@ -1,6 +1,8 @@
 const std = @import("std");
 const gpu = @import("gpu");
-const DrawList = @import("render").DrawList;
+const render = @import("render");
+const DrawList = render.DrawList;
+const Clip = render.Clip;
 
 const Decoration = @import("decoration.zig").Decoration;
 const Radius = @import("Radius.zig");
@@ -10,7 +12,7 @@ const zero2 = [2]f32{ 0, 0 };
 const zero4 = [4]f32{ 0, 0, 0, 0 };
 const flat_hs = [2]f32{ 1e4, 1e4 };
 
-pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []const Decoration.DrawCmd, origin: [2]f32, clip: ?[4]f32) !void {
+pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []const Decoration.DrawCmd, origin: [2]f32, clip: Clip.State) !void {
     const ox = origin[0];
     const oy = origin[1];
 

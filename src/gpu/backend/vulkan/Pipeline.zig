@@ -224,6 +224,7 @@ pub fn descriptorSetLayout(self: *const Pipeline, index: u32) vk.DescriptorSetLa
 fn toVkDescriptorType(t: gpu.Pipeline.BindingType) vk.DescriptorType {
     return switch (t) {
         .uniform_buffer => .uniform_buffer,
+        .read_only_storage_buffer => .storage_buffer,
         .sampled_texture => .sampled_image,
         .sampler => .sampler,
     };
