@@ -39,7 +39,7 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
 
     if (is_focused) {
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, ui, s);
+        try edit.processInputEarly(self.buf, app, s, false);
     }
 
     const is_hovered = ui.hovering(id);
