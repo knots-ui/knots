@@ -25,7 +25,13 @@ pub fn onKeyDown(_: c_int, ev: *const root.EmscriptenKeyboardEvent, user_data: ?
     const owner = ownerOf(user_data) orelse return false;
     const mods = modsOf(ev);
     const action: window.KeyAction = if (ev.repeat) .repeat else .press;
-    if (keymap.translateCode(&ev.code)) |key| owner.pushKey(@intFromEnum(key), action, mods);
+    if (keymap.translateCode(&ev.code)) |key| {
+        if ((mods.ctrl or mods.super) and key == .v) {
+            owner.backend.preparePaste();
+            return false;
+        }
+        owner.pushKey(@intFromEnum(key), action, mods);
+    }
     if (!mods.ctrl and !mods.super) {
         if (decodePrintableChar(&ev.key)) |cp| owner.pushChar(cp);
     }

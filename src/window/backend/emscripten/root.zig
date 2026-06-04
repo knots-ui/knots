@@ -81,6 +81,7 @@ const EMSCRIPTEN_EVENT_TARGET_WINDOW = em.EMSCRIPTEN_EVENT_TARGET_WINDOW;
 const EMSCRIPTEN_EVENT_TARGET_DOCUMENT = em.EMSCRIPTEN_EVENT_TARGET_DOCUMENT;
 
 pub const Backend = struct {
+    allocator: std.mem.Allocator,
     selector: [:0]const u8,
     logical_size: window.Size,
     physical_size: window.Size,
@@ -88,13 +89,30 @@ pub const Backend = struct {
     pending_resize: ?window.ResizeEvent,
     is_fullscreen: bool = false,
     cursor_visible: bool = true,
+    owner_addr: usize = 0,
+    clipboard_text: std.ArrayList(u8) = .empty,
+    clipboard_valid: bool = false,
 
     const Self = @This();
 
-    pub fn deinit(_: *const Self) void {}
+    pub fn deinit(self: *Self) void {
+        if (self.owner_addr != 0) {
+            var buf: [512]u8 = undefined;
+            const script = std.fmt.bufPrintSentinel(
+                &buf,
+                "(() => {{ const key='__knotsPaste_{d}'; const cb=globalThis[key]; if (cb) {{ document.removeEventListener('paste', cb, true); delete globalThis[key]; }} const el=globalThis[key + 'Catcher']; if (el) {{ el.remove(); delete globalThis[key + 'Catcher']; }} }})()",
+                .{self.owner_addr},
+                0x00,
+            ) catch null;
+            if (script) |s| std.os.emscripten.emscripten_run_script(s.ptr);
+        }
+        self.clipboard_text.deinit(self.allocator);
+    }
 
     pub fn startCapture(self: *Self, owner: *window.Window) void {
         const sel = self.selector.ptr;
+        self.owner_addr = @intFromPtr(owner);
+        const paste_cb_addr = @intFromPtr(&pasteCallback);
         // Keyboard events go on the window target — canvas-scoped keyboard requires
         // the canvas to have tabindex and be focused, which most host pages don't set up.
         _ = emscripten_set_keydown_callback_on_thread(EMSCRIPTEN_EVENT_TARGET_WINDOW, @ptrCast(owner), true, events.onKeyDown, 0);
@@ -108,6 +126,60 @@ pub const Backend = struct {
         _ = emscripten_set_wheel_callback_on_thread(sel, @ptrCast(owner), false, events.onWheel, 0);
         _ = em.emscripten_set_resize_callback_on_thread(EMSCRIPTEN_EVENT_TARGET_WINDOW, @ptrCast(owner), false, events.onResize, 0);
         _ = emscripten_set_blur_callback_on_thread(EMSCRIPTEN_EVENT_TARGET_WINDOW, @ptrCast(owner), false, events.onBlur, 0);
+        var buf: [4096]u8 = undefined;
+        const script = std.fmt.bufPrintSentinel(
+            &buf,
+            \\(() => {{
+            \\  const key='__knotsPaste_{d}';
+            \\  if (globalThis[key]) return;
+            \\  const catcher = document.createElement('textarea');
+            \\  catcher.setAttribute('readonly', '');
+            \\  catcher.setAttribute('aria-hidden', 'true');
+            \\  catcher.style.position = 'fixed';
+            \\  catcher.style.left = '-10000px';
+            \\  catcher.style.top = '0';
+            \\  catcher.style.width = '1px';
+            \\  catcher.style.height = '1px';
+            \\  catcher.style.opacity = '0';
+            \\  document.body.appendChild(catcher);
+            \\  globalThis[key + 'Catcher'] = catcher;
+            \\  globalThis[key] = (e) => {{
+            \\    const target = e.target;
+            \\    if (target && (target.isContentEditable || target.tagName === 'INPUT' || (target.tagName === 'TEXTAREA' && target !== catcher))) return;
+            \\    const data = e.clipboardData && e.clipboardData.getData('text/plain');
+            \\    if (data == null) return;
+            \\    const len = lengthBytesUTF8(data);
+            \\    const ptr = _malloc(len + 1);
+            \\    if (!ptr) return;
+            \\    stringToUTF8Array(data, HEAPU8, ptr, len + 1);
+            \\    if (typeof dynCall_vjjj !== 'undefined') {{
+            \\      dynCall_vjjj({d}, BigInt({d}), BigInt(ptr), BigInt(len));
+            \\    }} else {{
+            \\      dynCall_viii({d}, {d}, ptr, len);
+            \\    }}
+            \\    _free(ptr);
+            \\    e.preventDefault();
+            \\    if (document.activeElement === catcher) catcher.blur();
+            \\  }};
+            \\  document.addEventListener('paste', globalThis[key], true);
+            \\}})()
+        ,
+            .{ self.owner_addr, paste_cb_addr, self.owner_addr, paste_cb_addr, self.owner_addr },
+            0x00,
+        ) catch return;
+        std.os.emscripten.emscripten_run_script(script.ptr);
+    }
+
+    pub fn preparePaste(self: *Self) void {
+        if (self.owner_addr == 0) return;
+        var buf: [512]u8 = undefined;
+        const script = std.fmt.bufPrintSentinel(
+            &buf,
+            "(() => {{ const el=globalThis['__knotsPaste_{d}Catcher']; if (!el) return; el.value=''; el.removeAttribute('readonly'); el.focus(); el.select(); setTimeout(() => {{ el.setAttribute('readonly', ''); if (document.activeElement === el) el.blur(); }}, 1000); }})()",
+            .{self.owner_addr},
+            0x00,
+        ) catch return;
+        std.os.emscripten.emscripten_run_script(script.ptr);
     }
 
     pub fn pollEvents(_: *const Self, _: std.Io) void {}
@@ -187,7 +259,53 @@ pub const Backend = struct {
     pub fn consumeDrops(_: *Self, _: *window.Window, _: std.mem.Allocator, _: usize) ![][]const u8 {
         return &[_][]const u8{};
     }
+
+    pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
+        if (!self.clipboard_valid) return null;
+        self.clipboard_valid = false;
+        defer self.clipboard_text.clearRetainingCapacity();
+        return try allocator.dupe(u8, self.clipboard_text.items);
+    }
+
+    pub fn setClipboardText(_: *Self, _: std.mem.Allocator, text: []const u8) !bool {
+        var buf: [1536]u8 = undefined;
+        const script = std.fmt.bufPrintSentinel(
+            &buf,
+            \\(() => {{
+            \\  const text = UTF8ToString({d}, {d});
+            \\  const ta = document.createElement('textarea');
+            \\  ta.value = text;
+            \\  ta.setAttribute('readonly', '');
+            \\  ta.style.position = 'fixed';
+            \\  ta.style.left = '-10000px';
+            \\  ta.style.top = '0';
+            \\  document.body.appendChild(ta);
+            \\  ta.focus();
+            \\  ta.select();
+            \\  let ok = false;
+            \\  try {{ ok = document.execCommand('copy'); }}
+            \\  catch (_) {{ ok = false; }}
+            \\  document.body.removeChild(ta);
+            \\  return ok ? 1 : 0;
+            \\}})()
+        ,
+            .{ @intFromPtr(text.ptr), text.len },
+            0x00,
+        ) catch return false;
+        return std.os.emscripten.emscripten_run_script_int(script.ptr) != 0;
+    }
 };
+
+fn pasteCallback(owner_addr: usize, ptr: [*]const u8, len: usize) callconv(.c) void {
+    const owner: *window.Window = @ptrFromInt(owner_addr);
+    owner.backend.clipboard_text.clearRetainingCapacity();
+    owner.backend.clipboard_text.appendSlice(owner.backend.allocator, ptr[0..len]) catch {
+        owner.backend.clipboard_valid = false;
+        return;
+    };
+    owner.backend.clipboard_valid = true;
+    owner.pushKey(@intFromEnum(window.Key.v), .press, .{ .ctrl = true });
+}
 
 // Not good.
 fn suppressNativeContextMenu(selector: [:0]const u8) void {
@@ -201,7 +319,7 @@ fn suppressNativeContextMenu(selector: [:0]const u8) void {
     std.os.emscripten.emscripten_run_script(script.ptr);
 }
 
-pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
+pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backend {
     const selector = cfg.canvas_selector orelse @panic("canvas_selector must be set for emscripten windows");
     const cs = em.applyCanvasSize(selector, cfg.width, cfg.height);
     const ev: window.ResizeEvent = .{
@@ -210,6 +328,7 @@ pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
         .content_scale = cs.content_scale,
     };
     return .{
+        .allocator = allocator,
         .selector = selector,
         .logical_size = ev.logical,
         .physical_size = ev.physical,
