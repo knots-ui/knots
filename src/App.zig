@@ -48,7 +48,7 @@ const App = @This();
 /// The `io` parameter will be the underlying `Io` implementation used when calling `dispatch`.
 /// The `allocator` parameter will be used as the backing allocator to the per-frame arena.
 pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
-    const window: Window = try .init(io, allocator, cfg.window);
+    var window: Window = try .init(io, allocator, cfg.window);
     errdefer window.deinit();
 
     var completion_queue: CompletionQueue = try .init(allocator, cfg.max_completions_recv);

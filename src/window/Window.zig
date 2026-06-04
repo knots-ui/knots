@@ -77,7 +77,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !Window {
     };
 }
 
-pub inline fn deinit(self: *const Window) void {
+pub inline fn deinit(self: *Window) void {
     self.backend.deinit();
 }
 
@@ -215,6 +215,14 @@ pub fn consumeDrops(self: *Window, allocator: std.mem.Allocator) ![][]const u8 {
     self.pending_drop_count = 0;
     if (n == 0) return &[_][]const u8{};
     return self.backend.consumeDrops(self, allocator, n);
+}
+
+pub fn getClipboardText(self: *Window, allocator: std.mem.Allocator) !?[]u8 {
+    return self.backend.getClipboardText(allocator);
+}
+
+pub fn setClipboardText(self: *Window, allocator: std.mem.Allocator, text: []const u8) !bool {
+    return self.backend.setClipboardText(allocator, text);
 }
 
 pub fn pushChar(self: *Window, codepoint: u21) void {
