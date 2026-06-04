@@ -30,10 +30,12 @@ pub const NSEventModifierFlagOption: c_ulong = 1 << 19;
 pub const NSEventModifierFlagCommand: c_ulong = 1 << 20;
 
 pub const NSDragOperationCopy: c_ulong = 1;
+pub const NSUTF8StringEncoding: c_ulong = 4;
 
 pub extern const NSDefaultRunLoopMode: c.id;
 pub extern const NSEventTrackingRunLoopMode: c.id;
 pub extern const NSPasteboardTypeFileURL: c.id;
+pub extern const NSPasteboardTypeString: c.id;
 
 pub fn boolParam(b: bool) c.BOOL {
     return switch (c.BOOL) {

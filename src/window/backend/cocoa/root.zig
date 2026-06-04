@@ -182,6 +182,38 @@ pub const Backend = struct {
         for (0..n) |i| out[i] = try allocator.dupe(u8, self.drop_slices[i]);
         return out;
     }
+
+    pub fn getClipboardText(_: *Self, allocator: std.mem.Allocator) !?[]u8 {
+        const NSPasteboard = objc.getClass("NSPasteboard").?;
+        const pasteboard = NSPasteboard.msgSend(objc.Object, "generalPasteboard", .{});
+        if (pasteboard.value == null) return null;
+
+        const str = pasteboard.msgSend(objc.Object, "stringForType:", .{objc.Object{ .value = ak.NSPasteboardTypeString }});
+        if (str.value == null) return null;
+
+        const utf8 = str.msgSend(?[*:0]const u8, "UTF8String", .{}) orelse return null;
+        return try allocator.dupe(u8, std.mem.sliceTo(utf8, 0));
+    }
+
+    pub fn setClipboardText(_: *Self, _: std.mem.Allocator, text: []const u8) !bool {
+        const NSPasteboard = objc.getClass("NSPasteboard").?;
+        const pasteboard = NSPasteboard.msgSend(objc.Object, "generalPasteboard", .{});
+        if (pasteboard.value == null) return false;
+
+        const NSString = objc.getClass("NSString").?;
+        const str = NSString
+            .msgSend(objc.Object, "alloc", .{})
+            .msgSend(objc.Object, "initWithBytes:length:encoding:", .{
+            text.ptr,
+            @as(c_ulong, @intCast(text.len)),
+            ak.NSUTF8StringEncoding,
+        });
+        if (str.value == null) return false;
+        defer str.msgSend(void, "release", .{});
+
+        pasteboard.msgSend(void, "clearContents", .{});
+        return pasteboard.msgSend(bool, "setString:forType:", .{ str, objc.Object{ .value = ak.NSPasteboardTypeString } });
+    }
 };
 
 pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
