@@ -248,6 +248,52 @@ pub const Backend = struct {
         return out;
     }
 
+    pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
+        if (win32.IsClipboardFormatAvailable(@intFromEnum(win32.CF_UNICODETEXT)) == 0) return null;
+        if (win32.OpenClipboard(self.hwnd) == 0) return null;
+        defer _ = win32.CloseClipboard();
+
+        const handle = win32.GetClipboardData(@intFromEnum(win32.CF_UNICODETEXT)) orelse return null;
+        const raw_handle: isize = @bitCast(@intFromPtr(handle));
+        const locked = win32.GlobalLock(raw_handle) orelse return null;
+        defer _ = win32.GlobalUnlock(raw_handle);
+
+        const byte_len = win32.GlobalSize(raw_handle);
+        if (byte_len < @sizeOf(u16)) return null;
+        const max_len = byte_len / @sizeOf(u16);
+        const wide: [*]const u16 = @ptrCast(@alignCast(locked));
+
+        var len: usize = 0;
+        while (len < max_len and wide[len] != 0) : (len += 1) {}
+        if (len == 0) return try allocator.dupe(u8, "");
+        return try std.unicode.utf16LeToUtf8Alloc(allocator, wide[0..len]);
+    }
+
+    pub fn setClipboardText(self: *Self, allocator: std.mem.Allocator, text: []const u8) !bool {
+        const wide = try std.unicode.utf8ToUtf16LeAllocZ(allocator, text);
+        defer allocator.free(wide);
+
+        const byte_len = (wide.len + 1) * @sizeOf(u16);
+        const handle = win32.GlobalAlloc(win32.GMEM_MOVEABLE, byte_len);
+        if (handle == 0) return false;
+        var transferred = false;
+        defer _ = if (!transferred) win32.GlobalFree(handle);
+
+        const locked = win32.GlobalLock(handle) orelse return false;
+        @memcpy(@as([*]u16, @ptrCast(@alignCast(locked)))[0 .. wide.len + 1], wide.ptr[0 .. wide.len + 1]);
+        _ = win32.GlobalUnlock(handle);
+
+        if (win32.OpenClipboard(self.hwnd) == 0) return false;
+        defer _ = win32.CloseClipboard();
+
+        if (win32.EmptyClipboard() == 0) return false;
+        const clipboard_handle: win32.HANDLE = @ptrFromInt(@as(usize, @bitCast(handle)));
+        if (win32.SetClipboardData(@intFromEnum(win32.CF_UNICODETEXT), clipboard_handle) == null) return false;
+        transferred = true;
+
+        return true;
+    }
+
     pub fn applyTitleBarTheme(self: *const Self) void {
         var enabled: win32.BOOL = @intFromBool(systemPrefersDarkTheme());
         _ = win32.DwmSetWindowAttribute(
