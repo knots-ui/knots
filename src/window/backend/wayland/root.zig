@@ -16,6 +16,9 @@ const xkb = @import("xkb.zig");
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
 const TEXT_URI_LIST: [*:0]const u8 = "text/uri-list";
+const TEXT_UTF8: [*:0]const u8 = "text/plain;charset=utf-8";
+const TEXT_PLAIN: [*:0]const u8 = "text/plain";
+const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
 
 const OutputState = struct {
     output: *wl.Output,
@@ -41,6 +44,10 @@ const State = struct {
     keyboard: ?*wl.Keyboard = null,
     data_device_manager: ?*wl.DataDeviceManager = null,
     data_device: ?*wl.DataDevice = null,
+    clipboard_source: ?*wl.DataSource = null,
+    clipboard_text: []u8 = &.{},
+    selection_offer: ?*wl.DataOffer = null,
+    selection_mime: ?[*:0]const u8 = null,
     cursor_theme: ?*wl.CursorTheme = null,
     cursor_surface: ?*wl.Surface = null,
     cursor: ?*wl.Cursor = null,
@@ -66,6 +73,7 @@ const State = struct {
     drop_slices: [64][]const u8 = undefined,
     pending_offer: ?*wl.DataOffer = null,
     pending_offer_has_uri: bool = false,
+    pending_offer_mime: ?[*:0]const u8 = null,
     drag_offer: ?*wl.DataOffer = null,
     drag_serial: u32 = 0,
     drag_has_uri: bool = false,
@@ -79,10 +87,13 @@ const State = struct {
     repeat_window_key: window.Key = @enumFromInt(0),
     repeat_char: ?u21 = null,
     repeat_next_ms: i64 = 0,
+    last_keyboard_serial: u32 = 0,
 
     fn deinit(self: *State) void {
         self.clearRepeat();
         self.deinitXkb();
+        self.clearClipboardSource();
+        if (self.selection_offer) |offer| offer.destroy();
 
         if (self.drag_offer) |offer| offer.destroy();
         if (self.data_device) |data_device| releaseDataDevice(data_device);
@@ -105,6 +116,15 @@ const State = struct {
         closeFd(self.wake_pipe[0]);
         closeFd(self.wake_pipe[1]);
         self.allocator.destroy(self);
+    }
+
+    fn clearClipboardSource(self: *State) void {
+        if (self.clipboard_source) |source| source.destroy();
+        self.clipboard_source = null;
+        if (self.clipboard_text.len > 0) {
+            self.allocator.free(self.clipboard_text);
+            self.clipboard_text = &.{};
+        }
     }
 
     fn deinitXkb(self: *State) void {
@@ -211,6 +231,17 @@ const State = struct {
         const data_device = manager.getDataDevice(seat) catch return;
         data_device.setListener(*State, dataDeviceListener, self);
         self.data_device = data_device;
+    }
+
+    fn offerMime(self: *State, data_offer: *wl.DataOffer, mime: [*:0]const u8) void {
+        if (self.pending_offer != data_offer) return;
+        if (std.mem.orderZ(u8, mime, TEXT_URI_LIST) == .eq) {
+            self.pending_offer_has_uri = true;
+        } else if (std.mem.orderZ(u8, mime, TEXT_UTF8) == .eq) {
+            self.pending_offer_mime = TEXT_UTF8;
+        } else if (self.pending_offer_mime == null and std.mem.orderZ(u8, mime, TEXT_PLAIN) == .eq) {
+            self.pending_offer_mime = TEXT_PLAIN;
+        }
     }
 
     fn applyCursor(self: *State) void {
@@ -398,6 +429,38 @@ pub const Backend = struct {
         errdefer allocator.free(out);
         for (0..n) |i| out[i] = try allocator.dupe(u8, self.state.drop_slices[i]);
         return out;
+    }
+
+    pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
+        if (self.state.selection_offer) |offer| {
+            const mime = self.state.selection_mime orelse return null;
+            return receiveClipboardText(self.state, allocator, offer, mime) catch null;
+        }
+        if (self.state.clipboard_text.len > 0) return try allocator.dupe(u8, self.state.clipboard_text);
+        return null;
+    }
+
+    pub fn setClipboardText(self: *Self, _: std.mem.Allocator, text: []const u8) !bool {
+        const manager = self.state.data_device_manager orelse return false;
+        const data_device = self.state.data_device orelse return false;
+        if (self.state.last_keyboard_serial == 0) return false;
+
+        const source = manager.createDataSource() catch return false;
+        errdefer source.destroy();
+        const owned_text = try self.state.allocator.dupe(u8, text);
+        errdefer self.state.allocator.free(owned_text);
+
+        source.setListener(*State, dataSourceListener, self.state);
+        source.offer(TEXT_UTF8);
+        source.offer(TEXT_PLAIN);
+
+        self.state.clearClipboardSource();
+        self.state.clipboard_source = source;
+        self.state.clipboard_text = owned_text;
+
+        data_device.setSelection(source, self.state.last_keyboard_serial);
+        _ = self.state.display.flush();
+        return true;
     }
 };
 
@@ -674,6 +737,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *State) vo
             const owner = state.owner orelse return;
             const translated = keymap.translateEvdev(key.key);
             const mods = state.currentMods();
+            state.last_keyboard_serial = key.serial;
             switch (key.state) {
                 .pressed => {
                     const cp = state.utf32ForKey(key.key);
@@ -714,6 +778,7 @@ fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, state: *Sta
         .data_offer => |data_offer| {
             state.pending_offer = data_offer.id;
             state.pending_offer_has_uri = false;
+            state.pending_offer_mime = null;
             data_offer.id.setListener(*State, dataOfferListener, state);
         },
         .enter => |enter| {
@@ -756,18 +821,28 @@ fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, state: *Sta
             if (offer.getVersion() >= 3 and state.drag_action_ok) offer.finish();
         },
         .selection => |selection| {
-            if (selection.id) |offer| offer.destroy();
+            if (state.selection_offer) |old| {
+                if (selection.id == null or old != selection.id.?) old.destroy();
+            }
+            state.selection_offer = null;
+            state.selection_mime = null;
+
+            const offer = selection.id orelse return;
+            if (state.pending_offer == offer) {
+                if (state.pending_offer_mime) |mime| {
+                    state.selection_offer = offer;
+                    state.selection_mime = mime;
+                    return;
+                }
+            }
+            offer.destroy();
         },
     }
 }
 
 fn dataOfferListener(data_offer: *wl.DataOffer, event: wl.DataOffer.Event, state: *State) void {
     switch (event) {
-        .offer => |offer| {
-            if (state.pending_offer == data_offer and std.mem.orderZ(u8, offer.mime_type, TEXT_URI_LIST) == .eq) {
-                state.pending_offer_has_uri = true;
-            }
-        },
+        .offer => |offer| state.offerMime(data_offer, offer.mime_type),
         .action => |action| {
             if (state.drag_offer == data_offer) {
                 state.drag_action_ok = action.dnd_action.copy or action.dnd_action.move;
@@ -775,6 +850,64 @@ fn dataOfferListener(data_offer: *wl.DataOffer, event: wl.DataOffer.Event, state
         },
         .source_actions => {},
     }
+}
+
+fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, state: *State) void {
+    switch (event) {
+        .send => |send| {
+            defer closeFd(send.fd);
+            if (state.clipboard_source != data_source) return;
+            if (std.mem.orderZ(u8, send.mime_type, TEXT_UTF8) != .eq and
+                std.mem.orderZ(u8, send.mime_type, TEXT_PLAIN) != .eq)
+                return;
+
+            var written: usize = 0;
+            while (written < state.clipboard_text.len) {
+                const n = linux.write(send.fd, state.clipboard_text[written..].ptr, state.clipboard_text.len - written);
+                switch (posix.errno(n)) {
+                    .SUCCESS => {
+                        const count: usize = @intCast(n);
+                        if (count == 0) return;
+                        written += count;
+                    },
+                    else => return,
+                }
+            }
+        },
+        .cancelled => {
+            if (state.clipboard_source == data_source) state.clearClipboardSource();
+        },
+        .target, .dnd_drop_performed, .dnd_finished, .action => {},
+    }
+}
+
+fn receiveClipboardText(state: *State, allocator: std.mem.Allocator, offer: *wl.DataOffer, mime: [*:0]const u8) !?[]u8 {
+    var fds: [2]i32 = undefined;
+    switch (posix.errno(linux.pipe2(&fds, .{ .CLOEXEC = true }))) {
+        .SUCCESS => {},
+        else => return null,
+    }
+    defer closeFd(fds[0]);
+
+    offer.receive(mime, fds[1]);
+    closeFd(fds[1]);
+    _ = state.display.flush();
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = try posix.read(fds[0], &buf);
+        if (n == 0) break;
+        if (out.items.len + n > MAX_CLIPBOARD_BYTES) {
+            out.deinit(allocator);
+            return null;
+        }
+        try out.appendSlice(allocator, buf[0..n]);
+    }
+
+    return try out.toOwnedSlice(allocator);
 }
 
 fn receiveUriListDrop(state: *State, offer: *wl.DataOffer) !usize {
