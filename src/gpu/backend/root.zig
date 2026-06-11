@@ -10,11 +10,13 @@ pub const Backend = enum {
 
     pub fn availableSlice() []const Backend {
         const backends = comptime blk: {
-            var buf: [std.meta.fields(Backend).len]Backend = undefined;
+            const field_names = @typeInfo(Backend).@"enum".field_names;
+            const field_values = @typeInfo(Backend).@"enum".field_values;
+            var buf: [field_names.len]Backend = undefined;
             var i: usize = 0;
-            for (std.meta.fields(Backend)) |field| {
-                if (@field(available, field.name)) {
-                    buf[i] = @enumFromInt(field.value);
+            for (field_names, field_values) |field_name, field_value| {
+                if (@field(available, field_name)) {
+                    buf[i] = @enumFromInt(field_value);
                     i += 1;
                 }
             }
@@ -57,10 +59,12 @@ pub const Backend = enum {
     }
 
     pub fn init(self: Backend, allocator: std.mem.Allocator, window_handle: Context.WindowHandle, cfg: Context.Config) !Context {
-        inline for (@typeInfo(Backend).@"enum".fields) |field| {
-            if (self == @as(Backend, @enumFromInt(field.value))) {
-                if (!@field(available, field.name)) return error.BackendUnavailable;
-                const module = switch (@as(Backend, @enumFromInt(field.value))) {
+        const field_values = @typeInfo(Backend).@"enum".field_values;
+        const field_names = @typeInfo(Backend).@"enum".field_names;
+        inline for (field_names, field_values) |field_name, field_value| {
+            if (self == @as(Backend, @enumFromInt(field_value))) {
+                if (!@field(available, field_name)) return error.BackendUnavailable;
+                const module = switch (@as(Backend, @enumFromInt(field_value))) {
                     .wgpu => @import("gpu_wgpu"),
                     .vulkan => @import("gpu_vulkan"),
                 };

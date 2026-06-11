@@ -7,8 +7,8 @@
             .hash = "wgpu-0.0.2-Z1CB1tZzAQCeLiHR9GrD3Zal_qs6AxvaXCl2fKuChh6-",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
-            .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
+            .url = "git+https://github.com/MasonRemaley/vulkan-zig/#79c6b21d90f33a863233b8748dd126ada62cc568",
+            .hash = "vulkan-0.0.0-r7Ytx8V9AwAu-uUb1SGwtkVtgOYwJrGhE3265Gj8nI3F",
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.346.tar.gz",
@@ -23,15 +23,15 @@
             .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
         },
         .TrueType = .{
-            .url = "git+https://codeberg.org/andrewrk/TrueType.git#2d7f80bf0d18c0e74fd5291aa0749718db3405d0",
-            .hash = "TrueType-0.0.0-Ne-mWPBxAQCuGsQqPVw_0AyZVJcgKCpZDmd-XHEwNOEP",
+            .url = "git+https://codeberg.org/alichraghi/TrueType#da87817f4e1f7390e5b76776967e212dd8e21ae4",
+            .hash = "TrueType-0.0.0-Ne-mWPpxAQByxdanUCTsGKxKbgcQKN7HfpvcGtSAlP-_",
         },
         .wayland = .{
             .url = "git+https://codeberg.org/ifreund/zig-wayland.git#a8e10e87e5ebb49ce518ac3d2198909c87ee615a",
             .hash = "wayland-0.7.0-dev-lQa1kjT8AQDBstL61Gy3WCMtGwVaMN1p6w5wGfdDvP15",
         },
     },
-    .minimum_zig_version = "0.17.0-dev.269+ebff43698",
+    .minimum_zig_version = "0.17.0-dev.813+2153f8143",
     .paths = .{
         "build.zig",
         "build.zig.zon",

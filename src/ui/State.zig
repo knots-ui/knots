@@ -207,8 +207,9 @@ pub const Storage = struct {
     }
 
     pub fn deinit(self: *Storage, allocator: std.mem.Allocator) void {
-        inline for (std.meta.fields(StoragePools)) |f| {
-            @field(self.pools, f.name).deinit(allocator);
+        const field_names = @typeInfo(StoragePools).@"struct".field_names;
+        inline for (field_names) |field_name| {
+            @field(self.pools, field_name).deinit(allocator);
         }
     }
 
@@ -225,8 +226,9 @@ pub const Storage = struct {
     }
 
     pub fn evictStale(self: *Storage, allocator: std.mem.Allocator, frame: u32, ttls: Ttls, scratch: *std.ArrayList(Element.Id)) !void {
-        inline for (std.meta.fields(StoragePools)) |f| {
-            try @field(self.pools, f.name).evictStale(allocator, frame, @field(ttls, f.name), scratch);
+        const field_names = @typeInfo(StoragePools).@"struct".field_names;
+        inline for (field_names) |field_name| {
+            try @field(self.pools, field_name).evictStale(allocator, frame, @field(ttls, field_name), scratch);
         }
     }
 
