@@ -793,35 +793,70 @@ fn syncGlyphBuilder(self: *Renderer, gb: *text.GlyphBuilder) !void {
     const needed_curve_h = gb.curveTextureHeight();
     const needed_band_h = gb.bandTextureHeight();
 
-    var curveband_dirty = false;
+    var new_curve_texture: ?gpu_impl.Texture = null;
+    var new_band_texture: ?gpu_impl.Texture = null;
+    var new_curve_h = self.curve_tex_height;
+    var new_band_h = self.band_tex_height;
+    var new_curveband_bg: ?gpu_impl.BindGroup = null;
+    errdefer if (new_curve_texture) |*t| t.deinit();
+    errdefer if (new_band_texture) |*t| t.deinit();
+    errdefer if (new_curveband_bg) |*bg| bg.deinit();
 
     if (needed_curve_h > self.curve_tex_height) {
-        try self.frame.waitForCompletion();
-        self.curve_texture.deinit();
-        const new_h = std.math.ceilPowerOfTwo(u32, needed_curve_h) catch needed_curve_h;
-        self.curve_texture = try self.ctx.createTexture(.{
+        new_curve_h = std.math.ceilPowerOfTwo(u32, needed_curve_h) catch needed_curve_h;
+        new_curve_texture = try self.ctx.createTexture(.{
             .width = CURVE_TEX_WIDTH,
-            .height = new_h,
+            .height = new_curve_h,
             .format = .rgba32f,
             .usage = .{ .texture_binding = true, .copy_dst = true },
         });
-        self.curve_tex_height = new_h;
-        gb.markCurveDirtyTo(needed_curve_h);
-        curveband_dirty = true;
     }
     if (needed_band_h > self.band_tex_height) {
-        try self.frame.waitForCompletion();
-        self.band_texture.deinit();
-        const new_h = std.math.ceilPowerOfTwo(u32, needed_band_h) catch needed_band_h;
-        self.band_texture = try self.ctx.createTexture(.{
+        new_band_h = std.math.ceilPowerOfTwo(u32, needed_band_h) catch needed_band_h;
+        new_band_texture = try self.ctx.createTexture(.{
             .width = BAND_TEX_WIDTH,
-            .height = new_h,
+            .height = new_band_h,
             .format = .rgba32u,
             .usage = .{ .texture_binding = true, .copy_dst = true },
         });
-        self.band_tex_height = new_h;
-        gb.markBandDirtyTo(needed_band_h);
-        curveband_dirty = true;
+    }
+
+    if (new_curve_texture != null or new_band_texture != null) {
+        const curve_for_bg = if (new_curve_texture) |*t| t else &self.curve_texture;
+        const band_for_bg = if (new_band_texture) |*t| t else &self.band_texture;
+        new_curveband_bg = try self.ctx.createBindGroup(.{
+            .label = "text_curveband_bg",
+            .pipeline = &self.text_pipeline,
+            .layout_index = 1,
+            .entries = &.{
+                .{ .binding = 0, .resource = .{ .texture_view = curve_for_bg } },
+                .{ .binding = 1, .resource = .{ .texture_view = band_for_bg } },
+            },
+        });
+
+        try self.frame.waitForCompletion();
+
+        var old_curveband_bg = self.text_curveband_bg;
+        self.text_curveband_bg = new_curveband_bg.?;
+        new_curveband_bg = null;
+        old_curveband_bg.deinit();
+
+        if (new_curve_texture) |tex| {
+            var old = self.curve_texture;
+            self.curve_texture = tex;
+            self.curve_tex_height = new_curve_h;
+            new_curve_texture = null;
+            old.deinit();
+            gb.markCurveDirtyTo(needed_curve_h);
+        }
+        if (new_band_texture) |tex| {
+            var old = self.band_texture;
+            self.band_texture = tex;
+            self.band_tex_height = new_band_h;
+            new_band_texture = null;
+            old.deinit();
+            gb.markBandDirtyTo(needed_band_h);
+        }
     }
 
     if (gb.curveDirtyRange()) |r| {
@@ -847,19 +882,6 @@ fn syncGlyphBuilder(self: *Renderer, gb: *text.GlyphBuilder) !void {
         );
     }
     gb.markClean();
-
-    if (curveband_dirty) {
-        self.text_curveband_bg.deinit();
-        self.text_curveband_bg = try self.ctx.createBindGroup(.{
-            .label = "text_curveband_bg",
-            .pipeline = &self.text_pipeline,
-            .layout_index = 1,
-            .entries = &.{
-                .{ .binding = 0, .resource = .{ .texture_view = &self.curve_texture } },
-                .{ .binding = 1, .resource = .{ .texture_view = &self.band_texture } },
-            },
-        });
-    }
 }
 
 fn uploadDirtyRows(
