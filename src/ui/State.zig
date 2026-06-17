@@ -6,7 +6,9 @@ const animation = @import("animation.zig");
 pub const TextInput = struct {
     cursor: u32 = 0,
     sel_anchor: u32 = 0,
-    scroll_x: f32 = 0,
+    dragging: bool = false,
+    last_click_ms: ?i64 = null,
+    last_click_byte: u32 = 0,
 };
 
 pub const TextSelect = struct {
@@ -359,7 +361,6 @@ test "getOrCreate returns default state" {
     const s = try state.getOrCreate(.text_input, testing.allocator, 42);
     try testing.expectEqual(s.cursor, 0);
     try testing.expectEqual(s.sel_anchor, 0);
-    try testing.expectEqual(s.scroll_x, 0);
 }
 
 test "get returns null before creation" {

@@ -36,6 +36,7 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
     const ui = &app.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);
+    _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     if (is_focused) {
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
@@ -87,6 +88,14 @@ pub fn close(self: *const TextInput, app: *App) !void {
         const face = try ui.font.getFace(null);
         const shaped = try face.shapeWrapped(items, size.value * scale, 0);
         const line_h = shaped.line_height / scale;
+        const measured = try ui.state.getOrCreate(.measured, ui.allocator, id);
+        const scroll = try ui.state.getOrCreate(.scroll, ui.allocator, id);
+        const content_origin = [2]f32{
+            measured.box.x() + self.padding.left(),
+            measured.box.y() + self.padding.top(),
+        };
+
+        edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
 
         try edit.processInputLate(self.buf, false, ui, s, shaped, line_h);
         ui.input.consumeKeyboard();
@@ -94,6 +103,10 @@ pub fn close(self: *const TextInput, app: *App) !void {
         const sel_lo = @min(s.cursor, s.sel_anchor);
         const sel_hi = @max(s.cursor, s.sel_anchor);
         const has_sel = sel_lo != sel_hi;
+        const cursor_pos = util.posAtByte(shaped, s.cursor, scale);
+        const viewport_w = @max(0, measured.width - self.padding.left() - self.padding.right());
+        ensureCaretVisibleX(scroll, cursor_pos.x, viewport_w, shaped.width / scale);
+        const scroll_x = scroll.offset[0];
 
         if (has_sel) {
             const sel_color = blk: {

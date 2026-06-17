@@ -4,8 +4,11 @@ const builtin = @import("builtin");
 const App = @import("knots").App;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
+const Element = @import("layout").Element;
 const glyph = @import("text").glyph;
 const util = @import("util.zig");
+
+const DOUBLE_CLICK_MS: i64 = 400;
 
 pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput, multiline: bool) !void {
     const ui = &app.ui;
@@ -198,11 +201,114 @@ fn deleteSelection(buf: *std.ArrayList(u8), len: *u32, s: *State.TextInput) void
     s.sel_anchor = lo;
 }
 
-fn selectionRange(s: *const State.TextInput) struct { lo: u32, hi: u32 } {
+pub fn selectionRange(s: *const State.TextInput) struct { lo: u32, hi: u32 } {
     return .{
         .lo = @min(s.cursor, s.sel_anchor),
         .hi = @max(s.cursor, s.sel_anchor),
     };
+}
+
+pub fn processMouse(
+    ui: *UI,
+    id: Element.Id,
+    buf: []const u8,
+    s: *State.TextInput,
+    shaped: glyph.ShapedWrappedView,
+    content_origin: [2]f32,
+    scroll_offset: [2]f32,
+    scale: f32,
+) void {
+    if (ui.input.mouse_left_pressed and ui.hovering(id)) {
+        const byte = byteAtMouse(ui, shaped, content_origin, scroll_offset, scale, @intCast(buf.len));
+        const double_click = if (s.last_click_ms) |last|
+            ui.input.now_ms - last <= DOUBLE_CLICK_MS and s.last_click_byte == byte
+        else
+            false;
+
+        if (double_click) {
+            selectWordAtByte(buf, s, byte);
+        } else {
+            moveCursorToByte(buf, s, byte, ui.input.shift_held);
+        }
+        s.dragging = true;
+        s.last_click_ms = ui.input.now_ms;
+        s.last_click_byte = byte;
+    }
+
+    if (s.dragging and ui.input.mouse_left_down) {
+        const byte = byteAtMouse(ui, shaped, content_origin, scroll_offset, scale, @intCast(buf.len));
+        moveCursorToByte(buf, s, byte, true);
+    }
+
+    if (!ui.input.mouse_left_down) s.dragging = false;
+}
+
+pub fn moveCursorToByte(buf: []const u8, s: *State.TextInput, byte: u32, extend: bool) void {
+    const b = clampByte(buf, byte);
+    s.cursor = b;
+    if (!extend) s.sel_anchor = b;
+}
+
+pub fn selectWordAtByte(buf: []const u8, s: *State.TextInput, byte: u32) void {
+    if (buf.len == 0) {
+        s.cursor = 0;
+        s.sel_anchor = 0;
+        return;
+    }
+
+    const len: u32 = @intCast(buf.len);
+    var pos = clampByte(buf, byte);
+    if (pos == len and pos > 0) pos = prevCharStart(buf, pos);
+    if (!isWordStart(buf, pos)) {
+        s.cursor = pos;
+        s.sel_anchor = pos;
+        return;
+    }
+
+    var start = pos;
+    while (start > 0) {
+        const prev = prevCharStart(buf, start);
+        if (!isWordStart(buf, prev)) break;
+        start = prev;
+    }
+
+    var end = nextCharStart(buf, pos);
+    while (end < len and isWordStart(buf, end)) end = nextCharStart(buf, end);
+
+    s.sel_anchor = start;
+    s.cursor = end;
+}
+
+fn byteAtMouse(
+    ui: *UI,
+    shaped: glyph.ShapedWrappedView,
+    content_origin: [2]f32,
+    scroll_offset: [2]f32,
+    scale: f32,
+    len: u32,
+) u32 {
+    const local: util.Pos = .{
+        .x = @as(f32, @floatCast(ui.input.mouse_pos[0])) - content_origin[0] + scroll_offset[0],
+        .y = @as(f32, @floatCast(ui.input.mouse_pos[1])) - content_origin[1] + scroll_offset[1],
+    };
+    return @min(util.byteAtPos(shaped, local, scale), len);
+}
+
+fn clampByte(buf: []const u8, byte: u32) u32 {
+    const len: u32 = @intCast(buf.len);
+    var i: u32 = @min(byte, len);
+    while (i > 0 and i < len and (buf[@intCast(i)] & 0xC0) == 0x80) i -= 1;
+    return i;
+}
+
+fn isWordStart(buf: []const u8, pos: u32) bool {
+    if (pos >= @as(u32, @intCast(buf.len))) return false;
+    const b = buf[@intCast(pos)];
+    return b == '_' or
+        (b >= '0' and b <= '9') or
+        (b >= 'A' and b <= 'Z') or
+        (b >= 'a' and b <= 'z') or
+        b >= 0x80;
 }
 
 fn prevCharStart(buf: []const u8, pos: u32) u32 {
