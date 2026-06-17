@@ -94,8 +94,8 @@ pub fn onResize(_: c_int, _: *const root.EmscriptenUiEvent, user_data: ?*anyopaq
 
 pub fn onBlur(_: c_int, _: *const root.EmscriptenFocusEvent, user_data: ?*anyopaque) callconv(.c) bool {
     const owner = ownerOf(user_data) orelse return false;
-    owner.key_count = 0;
-    owner.char_count = 0;
+    owner.key_events.clearRetainingCapacity();
+    owner.char_buf.clearRetainingCapacity();
     owner.setMouseLeftDown(false);
     owner.setMouseRightDown(false);
     return true;
