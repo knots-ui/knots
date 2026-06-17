@@ -38,7 +38,7 @@ timer: Timer,
 cfg: Config,
 pending_renderer_cfg: ?render.Renderer.Config = null,
 pending_reconfigure: bool = false,
-frame_cb: Callback = undefined,
+frame_cb: ?Callback = null,
 frame_active: bool = false,
 frame_pending: bool = false,
 frame_event_error: ?anyerror = null,
@@ -158,6 +158,7 @@ fn emscriptenMain(ud: ?*anyopaque) callconv(.c) void {
 }
 
 fn stepFrame(self: *App) !void {
+    const frame_cb = self.frame_cb orelse return error.AppNotStarted;
     if (self.frame_active) {
         self.frame_pending = true;
         return;
@@ -165,10 +166,10 @@ fn stepFrame(self: *App) !void {
     self.frame_active = true;
     defer self.frame_active = false;
 
-    try self.renderFrame(self.frame_cb);
+    try self.renderFrame(frame_cb);
     while (self.frame_pending) {
         self.frame_pending = false;
-        try self.renderFrame(self.frame_cb);
+        try self.renderFrame(frame_cb);
     }
 }
 
