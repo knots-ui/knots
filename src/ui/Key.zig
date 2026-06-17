@@ -41,7 +41,12 @@ pub inline fn indexed(self: Key, index: usize) Key {
 
 pub fn fmt(comptime format: []const u8, args: anytype) Element.Id {
     var buf: [256]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, format, args) catch buf[0..];
+    const s = std.fmt.bufPrint(&buf, format, args) catch @panic("Key.fmt buffer too small");
+    return str(s).hash();
+}
+
+pub fn fmtBuf(buf: []u8, comptime format: []const u8, args: anytype) !Element.Id {
+    const s = try std.fmt.bufPrint(buf, format, args);
     return str(s).hash();
 }
 
