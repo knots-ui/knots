@@ -90,6 +90,7 @@ const ParseHexError = error{ InvalidCharacter, InvalidLength };
 ///   "#RGBA"     — shorthand with alpha
 /// Values are normalized to [0.0, 1.0].
 pub fn hex(str: []const u8) ParseHexError!Color {
+    if (str.len == 0) return ParseHexError.InvalidLength;
     const s = if (str[0] == '#') str[1..] else str;
 
     const parseNibble = struct {
