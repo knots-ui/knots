@@ -15,14 +15,14 @@ const DisplayMode = @import("root.zig").DisplayMode;
 const FrameHandler = @import("root.zig").FrameHandler;
 
 backend: impl.Backend,
+allocator: std.mem.Allocator,
 should_close: bool = false,
 mouse: Mouse = .{},
 scroll: ScrollInput = .{},
-char_buf: [32]u21 = @splat(0),
-char_count: u8 = 0,
-key_events: [16]KeyEvent = undefined,
-key_buf: [16]Key = undefined,
-key_count: u8 = 0,
+char_buf: std.ArrayList(u21) = .empty,
+key_events: std.ArrayList(KeyEvent) = .empty,
+key_buf: std.ArrayList(Key) = .empty,
+input_error: ?std.mem.Allocator.Error = null,
 resized: bool = false,
 pending_drop_count: u8 = 0,
 canvas_selector: ?[:0]const u8,
@@ -71,6 +71,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !Window {
     var be: impl.Backend = try impl.init(io, allocator, cfg);
     return Window{
         .backend = be,
+        .allocator = allocator,
         .mouse = .{ .pos = be.getCursorPos() },
         .canvas_selector = cfg.canvas_selector,
         .content_scale = be.computeContentScale(),
@@ -78,6 +79,9 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !Window {
 }
 
 pub inline fn deinit(self: *Window) void {
+    self.char_buf.deinit(self.allocator);
+    self.key_events.deinit(self.allocator);
+    self.key_buf.deinit(self.allocator);
     self.backend.deinit();
 }
 
@@ -152,10 +156,31 @@ pub inline fn setCursorVisible(self: *const Window, visible: bool) void {
     self.backend.setCursorVisible(visible);
 }
 
-pub fn collectInput(self: *Window) Input {
+pub fn collectInput(self: *Window) !Input {
+    if (self.input_error) |err| {
+        self.input_error = null;
+        return err;
+    }
+
+    var shift_held = false;
+    var ctrl_held = false;
+    var super_held = false;
+
+    try self.key_buf.ensureTotalCapacity(self.allocator, self.key_events.items.len);
+    self.key_buf.clearRetainingCapacity();
+    for (self.key_events.items) |ev| {
+        if (ev.mods.shift) shift_held = true;
+        if (ev.mods.ctrl) ctrl_held = true;
+        if (ev.mods.super) super_held = true;
+        if (ev.action != .press and ev.action != .repeat) continue;
+
+        const key = std.enums.fromInt(Key, ev.key) orelse continue;
+        self.key_buf.appendAssumeCapacity(key);
+    }
+
     const scroll = self.scroll;
     const mouse = self.mouse;
-    const char_count = self.char_count;
+    const chars = self.char_buf.items;
 
     self.input_dirty = false;
     self.scroll = .{};
@@ -164,25 +189,8 @@ pub fn collectInput(self: *Window) Input {
     self.mouse.pressed_pos = .{ null, null };
     self.mouse.released_pos = .{ null, null };
 
-    var translated_count: u8 = 0;
-    var shift_held = false;
-    var ctrl_held = false;
-    var super_held = false;
-
-    for (self.key_events[0..self.key_count]) |ev| {
-        if (ev.mods.shift) shift_held = true;
-        if (ev.mods.ctrl) ctrl_held = true;
-        if (ev.mods.super) super_held = true;
-        if (ev.action != .press and ev.action != .repeat) continue;
-        if (translated_count >= self.key_buf.len) break;
-
-        const key = std.enums.fromInt(Key, ev.key) orelse continue;
-        self.key_buf[translated_count] = key;
-        translated_count += 1;
-    }
-
-    self.char_count = 0;
-    self.key_count = 0;
+    self.char_buf.clearRetainingCapacity();
+    self.key_events.clearRetainingCapacity();
     return .{
         .pos = mouse.pos,
         .mouse_left_down_now = mouse.isDown(.left),
@@ -196,8 +204,8 @@ pub fn collectInput(self: *Window) Input {
         .mouse_right_pressed_pos = mouse.pressed_pos[Mouse.index(.right)],
         .mouse_right_released_pos = mouse.released_pos[Mouse.index(.right)],
         .scroll = scroll,
-        .chars = self.char_buf[0..char_count],
-        .keys = self.key_buf[0..translated_count],
+        .chars = chars,
+        .keys = self.key_buf.items,
         .shift_held = shift_held,
         .ctrl_held = ctrl_held,
         .super_held = super_held,
@@ -226,19 +234,21 @@ pub fn setClipboardText(self: *Window, allocator: std.mem.Allocator, text: []con
 }
 
 pub fn pushChar(self: *Window, codepoint: u21) void {
-    if (self.char_count < self.char_buf.len) {
-        self.char_buf[self.char_count] = codepoint;
-        self.char_count += 1;
+    self.char_buf.append(self.allocator, codepoint) catch |err| {
+        self.input_error = err;
         self.markInputChanged();
-    }
+        return;
+    };
+    self.markInputChanged();
 }
 
 pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {
-    if (self.key_count < self.key_events.len) {
-        self.key_events[self.key_count] = .{ .key = key, .action = action, .mods = mods };
-        self.key_count += 1;
+    self.key_events.append(self.allocator, .{ .key = key, .action = action, .mods = mods }) catch |err| {
+        self.input_error = err;
         self.markInputChanged();
-    }
+        return;
+    };
+    self.markInputChanged();
 }
 
 pub fn addScroll(self: *Window, scroll: ScrollInput) void {
