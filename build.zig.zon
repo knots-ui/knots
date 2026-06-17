@@ -1,6 +1,6 @@
 .{
     .name = .knots,
-    .version = "0.0.3",
+    .version = "0.0.4",
     .dependencies = .{
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-bindings.git#c56a63b58b73abfe21dfe3c441a24eb89b670996",
