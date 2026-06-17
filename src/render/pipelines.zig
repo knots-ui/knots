@@ -1,6 +1,4 @@
-const std = @import("std");
 const gpu = @import("gpu");
-const GPUBackend = @import("gpu_backend").Backend;
 const shaders = @import("shaders.zig");
 
 pub const SlugUniforms = extern struct {
@@ -88,15 +86,15 @@ const slug_curveband_bgl = gpu.Pipeline.BindGroupLayoutDesc{
 
 const slug_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ slug_uniform_bgl, slug_curveband_bgl, clip_bgl };
 
-pub fn primitivesDesc(backend: GPUBackend, kind: PrimitivesKind, srgb_surface: bool) gpu.Pipeline.Desc {
-    return primitivesDescForTarget(backend, kind, null, !srgb_surface);
+pub fn primitivesDesc(kind: PrimitivesKind, srgb_surface: bool) gpu.Pipeline.Desc {
+    return primitivesDescForTarget(kind, null, !srgb_surface);
 }
 
-pub fn linearTargetPrimitivesDesc(backend: GPUBackend, kind: PrimitivesKind) gpu.Pipeline.Desc {
-    return primitivesDescForTarget(backend, kind, .rgba8, false);
+pub fn linearTargetPrimitivesDesc(kind: PrimitivesKind) gpu.Pipeline.Desc {
+    return primitivesDescForTarget(kind, .rgba8, false);
 }
 
-fn primitivesDescForTarget(backend: GPUBackend, kind: PrimitivesKind, target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.Pipeline.Desc {
+fn primitivesDescForTarget(kind: PrimitivesKind, target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.Pipeline.Desc {
     const vbs: []const gpu.Pipeline.VertexBufferLayout = switch (kind) {
         .vertex => &vertex_buffers,
         .instance => &instance_buffers,
@@ -107,7 +105,7 @@ fn primitivesDescForTarget(backend: GPUBackend, kind: PrimitivesKind, target_for
     };
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
-    const shader: gpu.Pipeline.ShaderSource = switch (backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
         .wgpu => .{ .wgsl = shaders.primitives_wgsl },
         .vulkan => .{ .spirv = .{
             .vs = switch (kind) {
@@ -130,18 +128,18 @@ fn primitivesDescForTarget(backend: GPUBackend, kind: PrimitivesKind, target_for
     };
 }
 
-pub fn slugDesc(backend: GPUBackend, srgb_surface: bool) gpu.Pipeline.Desc {
-    return slugDescForTarget(backend, null, !srgb_surface);
+pub fn slugDesc(srgb_surface: bool) gpu.Pipeline.Desc {
+    return slugDescForTarget(null, !srgb_surface);
 }
 
-pub fn linearTargetSlugDesc(backend: GPUBackend) gpu.Pipeline.Desc {
-    return slugDescForTarget(backend, .rgba8, false);
+pub fn linearTargetSlugDesc() gpu.Pipeline.Desc {
+    return slugDescForTarget(.rgba8, false);
 }
 
-fn slugDescForTarget(backend: GPUBackend, target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.Pipeline.Desc {
+fn slugDescForTarget(target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.Pipeline.Desc {
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
-    const shader: gpu.Pipeline.ShaderSource = switch (backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
         .wgpu => .{ .wgsl = shaders.slug_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.slug_vert_spv, .fs = shaders.slug_frag_spv, .srgb_encode_constant = 0 } },
     };

@@ -4,6 +4,11 @@ const GPUBackend = @import("knots").GPUBackend;
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const gpu_backend: GPUBackend = switch (target.result.os.tag) {
+        .macos, .emscripten => .wgpu,
+        .windows, .linux => .vulkan,
+        else => .wgpu,
+    };
 
     const tracy_dep = b.dependency("tracy", .{});
 
@@ -41,7 +46,7 @@ pub fn build(b: *std.Build) void {
     const knots = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
-        .gpu_backends = &[_]GPUBackend{ .wgpu, .vulkan },
+        .gpu_backend = gpu_backend,
     });
 
     const exe = b.addExecutable(.{

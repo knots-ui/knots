@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
+const CommonTexture = @import("gpu").Texture;
+
 const Context = @import("Context.zig");
 
 const NativeHandle = struct {
@@ -13,7 +14,10 @@ const NativeHandle = struct {
 
 const Texture = @This();
 
-allocator: std.mem.Allocator,
+pub const Format = CommonTexture.Format;
+pub const Usage = CommonTexture.Usage;
+pub const Desc = CommonTexture.Desc;
+
 image: vk.Image,
 memory: vk.DeviceMemory,
 image_view: vk.ImageView,
@@ -21,14 +25,15 @@ ready: bool,
 layout: vk.ImageLayout,
 width: u32,
 height: u32,
-format: gpu.Texture.Format,
+format: Format,
 ctx: *Context,
 staging_buffer: vk.Buffer = .null_handle,
 staging_memory: vk.DeviceMemory = .null_handle,
 staging_size: usize = 0,
-_native_handle: NativeHandle = undefined,
+upload_submission: ?Context.SingleTimeSubmission = null,
+native_handle: NativeHandle,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Texture.Desc) !gpu.Texture {
+pub fn create(_: std.mem.Allocator, ctx: *Context, desc: Desc) !Texture {
     const vk_format = toVkFormat(desc.format);
 
     const image = try ctx.vkd.createImage(ctx.device, &.{
@@ -68,9 +73,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Texture.Des
     }, null);
     errdefer ctx.vkd.destroyImageView(ctx.device, image_view, null);
 
-    const self = try allocator.create(Texture);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .image = image,
         .memory = memory,
         .image_view = image_view,
@@ -80,19 +83,18 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Texture.Des
         .height = desc.height,
         .format = desc.format,
         .ctx = ctx,
+        .native_handle = .{
+            .image = image,
+            .image_view = image_view,
+            .format = vk_format,
+            .width = desc.width,
+            .height = desc.height,
+        },
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Texture.VTable{
-    .deinit = &deinit,
-    .write = &write,
-    .is_ready = &isReady,
-    .nativeHandle = &nativeHandle,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Texture) void {
+    self.finishUpload() catch {};
     if (self.staging_size != 0) {
         self.ctx.vkd.destroyBuffer(self.ctx.device, self.staging_buffer, null);
         self.ctx.vkd.freeMemory(self.ctx.device, self.staging_memory, null);
@@ -100,7 +102,6 @@ fn deinit(ptr: *anyopaque) void {
     self.ctx.vkd.destroyImageView(self.ctx.device, self.image_view, null);
     self.ctx.vkd.destroyImage(self.ctx.device, self.image, null);
     self.ctx.vkd.freeMemory(self.ctx.device, self.memory, null);
-    self.allocator.destroy(self);
 }
 
 fn ensureStaging(self: *Texture, len: usize) !void {
@@ -132,14 +133,16 @@ fn ensureStaging(self: *Texture, len: usize) !void {
     self.staging_size = len;
 }
 
-fn write(ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
-    try writeImpl(self, data, len, x, y, width, height, bytes_per_row);
+fn finishUpload(self: *Texture) !void {
+    const submission = self.upload_submission orelse return;
+    try self.ctx.finishSingleTimeCommands(submission);
+    self.upload_submission = null;
 }
 
-fn writeImpl(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
+pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
     const ctx = self.ctx;
 
+    try self.finishUpload();
     try self.ensureStaging(len);
 
     const mapped: [*]u8 = @ptrCast(try ctx.vkd.mapMemory(ctx.device, self.staging_memory, 0, @intCast(len), .{}));
@@ -188,17 +191,16 @@ fn writeImpl(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, widt
         .subresource_range = .{ .aspect_mask = .{ .color_bit = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
     }});
 
-    try ctx.endSingleTimeCommands(cmd);
+    self.upload_submission = try ctx.endSingleTimeCommands(cmd);
     self.ready = true;
     self.layout = .shader_read_only_optimal;
 }
 
-fn isReady(ptr: *anyopaque) bool {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
+pub fn isReady(self: *const Texture) bool {
     return self.ready;
 }
 
-fn bytesPerPixel(format: gpu.Texture.Format) u32 {
+fn bytesPerPixel(format: Format) u32 {
     return switch (format) {
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .r8 => 1,
@@ -206,7 +208,7 @@ fn bytesPerPixel(format: gpu.Texture.Format) u32 {
     };
 }
 
-fn toVkFormat(format: gpu.Texture.Format) vk.Format {
+fn toVkFormat(format: Format) vk.Format {
     return switch (format) {
         .rgba8 => .r8g8b8a8_unorm,
         .rgba8_srgb => .r8g8b8a8_srgb,
@@ -218,14 +220,13 @@ fn toVkFormat(format: gpu.Texture.Format) vk.Format {
     };
 }
 
-fn nativeHandle(ptr: *anyopaque) *anyopaque {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
-    self._native_handle = .{
+pub fn nativeHandle(self: *Texture) *anyopaque {
+    self.native_handle = .{
         .image = self.image,
         .image_view = self.image_view,
         .format = toVkFormat(self.format),
         .width = self.width,
         .height = self.height,
     };
-    return &self._native_handle;
+    return &self.native_handle;
 }

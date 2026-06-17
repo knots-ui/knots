@@ -1,7 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vk");
+
 const gpu = @import("gpu");
+
 const Buffer = @import("Buffer.zig");
 const Frame = @import("Frame.zig");
 const Pipeline = @import("Pipeline.zig");
@@ -56,7 +58,7 @@ framebuffers: []vk.Framebuffer,
 transient_command_pool: vk.CommandPool,
 command_pools: []vk.CommandPool,
 descriptor_pools: std.ArrayList(DescriptorPoolEntry),
-gpu_cfg: gpu.Context.Config,
+cfg: gpu.Context.Config,
 _current_image_index: u32 = 0,
 
 fn openVulkan(path: []const u8) !VulkanLoader {
@@ -106,7 +108,7 @@ fn loadVulkan() !VulkanLoader {
     }
 }
 
-pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !gpu.Context {
+pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !Context {
     var loader = try loadVulkan();
     errdefer if (builtin.os.tag != .windows) loader.lib.close();
     const vkb = vk.BaseWrapper.load(loader.get_instance_proc_addr);
@@ -205,8 +207,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     const initial_pool = try createDescriptorPool(vkd, device);
     try descriptor_pools.append(allocator, .{ .pool = initial_pool });
 
-    const self = try allocator.create(Context);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .loader = loader,
         .vkb = vkb,
@@ -229,9 +230,8 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .command_pools = command_pools,
         .transient_command_pool = transient_command_pool,
         .descriptor_pools = descriptor_pools,
-        .gpu_cfg = cfg,
+        .cfg = cfg,
     };
-    return .{ .ptr = self, .vtable = &vtable, .cfg = cfg };
 }
 
 fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device) !vk.DescriptorPool {
@@ -270,26 +270,11 @@ pub fn allocateDescriptorSetWithPool(self: *Context, layout: vk.DescriptorSetLay
     return .{ .set = set[0], .pool = new_pool };
 }
 
-const vtable = gpu.Context.VTable{
-    .deinit = &deinit,
-    .createBuffer = &createBuffer,
-    .createFrame = &createFrame,
-    .createPipeline = &createPipeline,
-    .createBindGroup = &createBindGroup,
-    .createTexture = &createTexture,
-    .createSampler = &createSampler,
-    .resize = &resize,
-    .surfaceFormat = &surfaceFormat,
-    .surfaceIsSrgb = &surfaceIsSrgb,
-    .clipSpaceYDown = &clipSpaceYDown,
-};
-
-fn clipSpaceYDown(_: *anyopaque) bool {
+pub fn clipSpaceYDown(_: *const Context) bool {
     return true;
 }
 
-fn deinit(ptr: *anyopaque) void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Context) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
     for (self.descriptor_pools.items) |entry| {
         self.vkd.destroyDescriptorPool(self.device, entry.pool, null);
@@ -311,52 +296,55 @@ fn deinit(ptr: *anyopaque) void {
     self.vki.destroySurfaceKHR(self.instance, self.surface, null);
     self.vki.destroyInstance(self.instance, null);
     if (builtin.os.tag != .windows) self.loader.lib.close();
-    self.allocator.destroy(self);
 }
 
-fn createBuffer(ptr: *anyopaque, size: usize, usage: gpu.Buffer.Usage) anyerror!gpu.Buffer {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBuffer(self: *Context, size: usize, usage: gpu.Buffer.Usage) !Buffer {
     return Buffer.create(self.allocator, self, size, usage);
 }
 
-fn createFrame(ptr: *anyopaque) anyerror!gpu.Frame {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createFrame(self: *Context) !Frame {
     return Frame.create(self.allocator, self);
 }
 
-fn createPipeline(ptr: *anyopaque, desc: gpu.Pipeline.Desc) anyerror!gpu.Pipeline {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createPipeline(self: *Context, desc: gpu.Pipeline.Desc) !Pipeline {
     return Pipeline.create(self.allocator, self, desc);
 }
 
-fn createBindGroup(ptr: *anyopaque, desc: gpu.BindGroup.Desc) anyerror!gpu.BindGroup {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBindGroup(self: *Context, desc: BindGroup.Desc) !BindGroup {
     return BindGroup.create(self.allocator, self, desc);
 }
 
-fn createTexture(ptr: *anyopaque, desc: gpu.Texture.Desc) anyerror!gpu.Texture {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createTexture(self: *Context, desc: Texture.Desc) !Texture {
     return Texture.create(self.allocator, self, desc);
 }
 
-fn createSampler(ptr: *anyopaque, desc: gpu.Sampler.Desc) anyerror!gpu.Sampler {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createSampler(self: *Context, desc: gpu.Sampler.Desc) !Sampler {
     return Sampler.create(self.allocator, self, desc);
 }
 
-fn resize(ptr: *anyopaque, width: u32, height: u32) anyerror!void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn resize(self: *Context, width: u32, height: u32) !void {
     try self.vkd.deviceWaitIdle(self.device);
     try self.recreateSwapchain(width, height);
+    self.cfg.window_width = width;
+    self.cfg.window_height = height;
 }
 
-fn surfaceFormat(ptr: *anyopaque) gpu.Texture.Format {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn reconfigure(self: *Context, cfg: gpu.Context.Config) !void {
+    try self.vkd.deviceWaitIdle(self.device);
+
+    const old_cfg = self.cfg;
+    self.cfg = cfg;
+    self.recreateSwapchain(cfg.window_width, cfg.window_height) catch |err| {
+        self.cfg = old_cfg;
+        return err;
+    };
+}
+
+pub fn surfaceFormat(self: *const Context) gpu.Texture.Format {
     return vkFormatToGpu(self.swapchain_format);
 }
 
-fn surfaceIsSrgb(ptr: *anyopaque) bool {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn surfaceIsSrgb(self: *const Context) bool {
     return self.swapchain_is_srgb;
 }
 
@@ -374,38 +362,41 @@ fn vkFormatToGpu(f: vk.Format) gpu.Texture.Format {
 }
 
 pub fn recreateSwapchain(self: *Context, width: u32, height: u32) !void {
-    const old_image_count = self.swapchain_images.len;
+    const old_swapchain = self.swapchain;
+    const sc = try createSwapchain(self.vki, self.vkd, self.physical_device, self.device, self.surface, width, height, old_swapchain, self.cfg);
+    errdefer self.vkd.destroySwapchainKHR(self.device, sc.swapchain, null);
+    if (sc.format != self.swapchain_format) return error.SwapchainFormatChanged;
+
+    const new_images = try getSwapchainImages(self.allocator, self.vkd, self.device, sc.swapchain);
+    errdefer self.allocator.free(new_images);
+
+    const new_views = try createImageViews(self.allocator, self.vkd, self.device, new_images, sc.format);
+    errdefer {
+        for (new_views) |v| self.vkd.destroyImageView(self.device, v, null);
+        self.allocator.free(new_views);
+    }
+
+    const new_framebuffers = try createFramebuffers(self.allocator, self.vkd, self.device, new_views, self.render_pass, sc.extent);
+    errdefer {
+        for (new_framebuffers) |fb| self.vkd.destroyFramebuffer(self.device, fb, null);
+        self.allocator.free(new_framebuffers);
+    }
 
     for (self.framebuffers) |fb| self.vkd.destroyFramebuffer(self.device, fb, null);
     self.allocator.free(self.framebuffers);
-
     for (self.swapchain_views) |v| self.vkd.destroyImageView(self.device, v, null);
     self.allocator.free(self.swapchain_views);
     self.allocator.free(self.swapchain_images);
-
-    const old_swapchain = self.swapchain;
-    const sc = try createSwapchain(self.vki, self.vkd, self.physical_device, self.device, self.surface, width, height, old_swapchain, self.gpu_cfg);
     self.vkd.destroySwapchainKHR(self.device, old_swapchain, null);
 
     self.swapchain = sc.swapchain;
+    self.swapchain_images = new_images;
+    self.swapchain_views = new_views;
+    self.swapchain_format = sc.format;
+    self.swapchain_is_srgb = sc.is_srgb;
     self.swapchain_extent = sc.extent;
-
-    self.swapchain_images = try getSwapchainImages(self.allocator, self.vkd, self.device, sc.swapchain);
-    self.swapchain_views = try createImageViews(self.allocator, self.vkd, self.device, self.swapchain_images, sc.format);
-    self.framebuffers = try createFramebuffers(self.allocator, self.vkd, self.device, self.swapchain_views, self.render_pass, sc.extent);
-
-    if (self.swapchain_images.len != old_image_count) {
-        for (self.command_pools) |pool| self.vkd.destroyCommandPool(self.device, pool, null);
-        self.allocator.free(self.command_pools);
-        const new_pools = try self.allocator.alloc(vk.CommandPool, self.swapchain_images.len);
-        for (new_pools) |*pool| {
-            pool.* = try self.vkd.createCommandPool(self.device, &.{
-                .queue_family_index = self.graphics_queue_family,
-                .flags = .{ .reset_command_buffer_bit = true },
-            }, null);
-        }
-        self.command_pools = new_pools;
-    }
+    self.framebuffers = new_framebuffers;
+    self._current_image_index = 0;
 }
 
 pub fn findMemoryType(self: *const Context, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
@@ -433,16 +424,27 @@ pub fn beginSingleTimeCommands(self: *const Context) !vk.CommandBuffer {
     return cmd[0];
 }
 
-pub fn endSingleTimeCommands(self: *const Context, cmd: vk.CommandBuffer) !void {
+pub const SingleTimeSubmission = struct {
+    command_buffer: vk.CommandBuffer,
+    fence: vk.Fence,
+};
+
+pub fn endSingleTimeCommands(self: *const Context, cmd: vk.CommandBuffer) !SingleTimeSubmission {
+    errdefer self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{cmd});
     try self.vkd.endCommandBuffer(cmd);
     const fence = try self.vkd.createFence(self.device, &.{ .flags = .{} }, null);
-    defer self.vkd.destroyFence(self.device, fence, null);
+    errdefer self.vkd.destroyFence(self.device, fence, null);
     try self.vkd.queueSubmit(self.graphics_queue, &.{.{
         .command_buffer_count = 1,
         .p_command_buffers = @ptrCast(&cmd),
     }}, fence);
-    _ = try self.vkd.waitForFences(self.device, &.{fence}, .true, std.math.maxInt(u64));
-    self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{cmd});
+    return .{ .command_buffer = cmd, .fence = fence };
+}
+
+pub fn finishSingleTimeCommands(self: *const Context, submission: SingleTimeSubmission) !void {
+    _ = try self.vkd.waitForFences(self.device, &.{submission.fence}, .true, std.math.maxInt(u64));
+    self.vkd.destroyFence(self.device, submission.fence, null);
+    self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{submission.command_buffer});
 }
 
 fn getMetalLayer(ns_window: *anyopaque) ?*anyopaque {
@@ -594,6 +596,7 @@ fn createSwapchain(vki: vk.InstanceWrapper, vkd: vk.DeviceWrapper, physical_devi
         .width = std.math.clamp(width, caps.min_image_extent.width, caps.max_image_extent.width),
         .height = std.math.clamp(height, caps.min_image_extent.height, caps.max_image_extent.height),
     };
+    const present_mode = try choosePresentMode(vki, physical_device, surface, cfg.present_mode);
     var image_count = caps.min_image_count + 1;
     if (caps.max_image_count > 0 and image_count > caps.max_image_count) image_count = caps.max_image_count;
     const swapchain = try vkd.createSwapchainKHR(device, &.{
@@ -607,16 +610,30 @@ fn createSwapchain(vki: vk.InstanceWrapper, vkd: vk.DeviceWrapper, physical_devi
         .image_sharing_mode = .exclusive,
         .pre_transform = caps.current_transform,
         .composite_alpha = .{ .opaque_bit_khr = true },
-        .present_mode = switch (cfg.present_mode) {
-            .fifo => .fifo_khr,
-            .fifo_relaxed => .fifo_relaxed_khr,
-            .immediate => .immediate_khr,
-            .mailbox => .mailbox_khr,
-        },
+        .present_mode = present_mode,
         .clipped = .true,
         .old_swapchain = old_swapchain,
     }, null);
     return .{ .swapchain = swapchain, .format = cf.format, .extent = extent, .is_srgb = is_srgb };
+}
+
+fn choosePresentMode(vki: vk.InstanceWrapper, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR, requested: gpu.Context.PresentMode) !vk.PresentModeKHR {
+    const desired: vk.PresentModeKHR = switch (requested) {
+        .fifo => .fifo_khr,
+        .fifo_relaxed => .fifo_relaxed_khr,
+        .immediate => .immediate_khr,
+        .mailbox => .mailbox_khr,
+    };
+
+    var count: u32 = 0;
+    _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, null);
+    var modes_buf: [16]vk.PresentModeKHR = undefined;
+    if (count > modes_buf.len) count = @intCast(modes_buf.len);
+    _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, &modes_buf);
+    for (modes_buf[0..@as(usize, @intCast(count))]) |mode| {
+        if (mode == desired) return desired;
+    }
+    return error.UnsupportedPresentMode;
 }
 
 fn getSwapchainImages(allocator: std.mem.Allocator, vkd: vk.DeviceWrapper, device: vk.Device, swapchain: vk.SwapchainKHR) ![]vk.Image {

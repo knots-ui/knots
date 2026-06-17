@@ -1,6 +1,7 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
 const gpu = @import("gpu");
+
 const Buffer = @import("Buffer.zig");
 const Frame = @import("Frame.zig");
 const Pipeline = @import("Pipeline.zig");
@@ -26,8 +27,9 @@ surface_is_srgb: bool,
 present_mode: wgpu.types.PresentMode,
 surface_width: u32,
 surface_height: u32,
+cfg: gpu.Context.Config,
 
-pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !gpu.Context {
+pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !Context {
     const wgpu_handle: wgpu.RawWindowHandle = switch (window_handle) {
         .macos => |mac| .{ .macos = switch (mac) {
             .ns_view => |v| .{ .ns_view = v },
@@ -73,8 +75,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .present_mode = chosen_present_mode,
     });
 
-    const self = try allocator.create(Context);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .instance = instance,
         .adapter = adapter,
@@ -86,73 +87,58 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .present_mode = chosen_present_mode,
         .surface_width = cfg.window_width,
         .surface_height = cfg.window_height,
+        .cfg = cfg,
     };
-
-    return .{ .ptr = self, .vtable = &vtable, .cfg = cfg };
 }
 
-const vtable = gpu.Context.VTable{
-    .deinit = &deinit,
-    .createBuffer = &createBuffer,
-    .createFrame = &createFrame,
-    .createPipeline = &createPipeline,
-    .createBindGroup = &createBindGroup,
-    .createTexture = &createTexture,
-    .createSampler = &createSampler,
-    .resize = &resize,
-    .surfaceFormat = &surfaceFormat,
-    .surfaceIsSrgb = &surfaceIsSrgb,
-    .clipSpaceYDown = &clipSpaceYDown,
-};
-
-fn clipSpaceYDown(_: *anyopaque) bool {
+pub fn clipSpaceYDown(_: *const Context) bool {
     return false;
 }
 
-fn deinit(ptr: *anyopaque) void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Context) void {
     self.queue.deinit();
     self.device.deinit();
     self.adapter.deinit();
     self.surface.unconfigure();
     self.surface.deinit();
     self.instance.deinit();
-    self.allocator.destroy(self);
 }
 
-fn createBuffer(ptr: *anyopaque, size: usize, usage: gpu.Buffer.Usage) anyerror!gpu.Buffer {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBuffer(self: *Context, size: usize, usage: gpu.Buffer.Usage) !Buffer {
     return Buffer.create(self.allocator, self.device, self.queue, size, usage);
 }
 
-fn createFrame(ptr: *anyopaque) anyerror!gpu.Frame {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createFrame(self: *Context) !Frame {
     return Frame.create(self.allocator, self);
 }
 
-fn createPipeline(ptr: *anyopaque, desc: gpu.Pipeline.Desc) anyerror!gpu.Pipeline {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createPipeline(self: *Context, desc: gpu.Pipeline.Desc) !Pipeline {
     return Pipeline.create(self.allocator, self, desc);
 }
 
-fn createBindGroup(ptr: *anyopaque, desc: gpu.BindGroup.Desc) anyerror!gpu.BindGroup {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBindGroup(self: *Context, desc: BindGroup.Desc) !BindGroup {
     return BindGroup.create(self.allocator, self, desc);
 }
 
-fn createTexture(ptr: *anyopaque, desc: gpu.Texture.Desc) anyerror!gpu.Texture {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createTexture(self: *Context, desc: gpu.Texture.Desc) !Texture {
     return Texture.create(self.allocator, self.device, self.queue, desc);
 }
 
-fn createSampler(ptr: *anyopaque, desc: gpu.Sampler.Desc) anyerror!gpu.Sampler {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createSampler(self: *Context, desc: gpu.Sampler.Desc) !Sampler {
     return Sampler.create(self.allocator, self.device, desc);
 }
 
-fn resize(ptr: *anyopaque, width: u32, height: u32) anyerror!void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn resize(self: *Context, width: u32, height: u32) !void {
     self.reconfigureSurface(width, height);
+    self.cfg.window_width = width;
+    self.cfg.window_height = height;
+}
+
+pub fn reconfigure(self: *Context, cfg: gpu.Context.Config) !void {
+    const capabilities = try self.surface.getCapabilities(self.adapter.adapter);
+    self.present_mode = try choosePresentMode(capabilities, cfg.present_mode);
+    self.reconfigureSurface(cfg.window_width, cfg.window_height);
+    self.cfg = cfg;
 }
 
 pub fn reconfigureSurface(self: *Context, width: u32, height: u32) void {
@@ -167,13 +153,11 @@ pub fn reconfigureSurface(self: *Context, width: u32, height: u32) void {
     self.surface_height = height;
 }
 
-fn surfaceFormat(ptr: *anyopaque) gpu.Texture.Format {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn surfaceFormat(self: *const Context) gpu.Texture.Format {
     return wgpuFormatToGpu(self.surface_format);
 }
 
-fn surfaceIsSrgb(ptr: *anyopaque) bool {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn surfaceIsSrgb(self: *const Context) bool {
     return self.surface_is_srgb;
 }
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
 const Context = @import("Context.zig");
+const CommonPipeline = @import("gpu").Pipeline;
 
 const Pipeline = @This();
 
@@ -9,11 +9,10 @@ allocator: std.mem.Allocator,
 pipeline: vk.Pipeline,
 pipeline_layout: vk.PipelineLayout,
 descriptor_set_layouts: []vk.DescriptorSetLayout,
-ctx: *Context,
 vkd: vk.DeviceWrapper,
 device: vk.Device,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
+pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: CommonPipeline.Desc) !Pipeline {
     const vkd = ctx.vkd;
     const device = ctx.device;
 
@@ -191,37 +190,28 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
         .base_pipeline_index = -1,
     }}, null, vk_pipeline[0..1]);
 
-    const self = try allocator.create(Pipeline);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .pipeline = vk_pipeline[0],
         .pipeline_layout = pipeline_layout,
         .descriptor_set_layouts = dsls,
-        .ctx = ctx,
         .vkd = vkd,
         .device = device,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Pipeline.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Pipeline = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Pipeline) void {
     self.vkd.destroyPipeline(self.device, self.pipeline, null);
     self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
     for (self.descriptor_set_layouts) |dsl| self.vkd.destroyDescriptorSetLayout(self.device, dsl, null);
     self.allocator.free(self.descriptor_set_layouts);
-    self.allocator.destroy(self);
 }
 
 pub fn descriptorSetLayout(self: *const Pipeline, index: u32) vk.DescriptorSetLayout {
     return self.descriptor_set_layouts[index];
 }
 
-fn toVkDescriptorType(t: gpu.Pipeline.BindingType) vk.DescriptorType {
+fn toVkDescriptorType(t: CommonPipeline.BindingType) vk.DescriptorType {
     return switch (t) {
         .uniform_buffer => .uniform_buffer,
         .read_only_storage_buffer => .storage_buffer,
@@ -230,7 +220,7 @@ fn toVkDescriptorType(t: gpu.Pipeline.BindingType) vk.DescriptorType {
     };
 }
 
-fn toVkVertexFormat(f: gpu.Pipeline.VertexFormat) vk.Format {
+fn toVkVertexFormat(f: CommonPipeline.VertexFormat) vk.Format {
     return switch (f) {
         .f32 => .r32_sfloat,
         .f32x2 => .r32g32_sfloat,
@@ -239,7 +229,7 @@ fn toVkVertexFormat(f: gpu.Pipeline.VertexFormat) vk.Format {
     };
 }
 
-fn toVkBlendFactor(f: gpu.Pipeline.BlendFactor) vk.BlendFactor {
+fn toVkBlendFactor(f: CommonPipeline.BlendFactor) vk.BlendFactor {
     return switch (f) {
         .zero => .zero,
         .one => .one,
@@ -248,7 +238,7 @@ fn toVkBlendFactor(f: gpu.Pipeline.BlendFactor) vk.BlendFactor {
     };
 }
 
-fn toVkBlendOp(o: gpu.Pipeline.BlendOp) vk.BlendOp {
+fn toVkBlendOp(o: CommonPipeline.BlendOp) vk.BlendOp {
     return switch (o) {
         .add => .add,
     };

@@ -34,7 +34,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
 
     try app.ui.font.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
 
-    var debug_devtools = try knots.debug.DevTools.init(allocator, app.renderer.cfg.gpu_backend, app.renderer.cfg.present_mode);
+    var debug_devtools = try knots.debug.DevTools.init(allocator, app.renderer.cfg.present_mode);
     errdefer debug_devtools.deinit(allocator);
 
     return Self{

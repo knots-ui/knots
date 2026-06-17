@@ -1,7 +1,5 @@
 const Texture = @import("Texture.zig");
 
-const Pipeline = @This();
-
 pub const ShaderSource = union(enum) {
     wgsl: []const u8,
     spirv: struct {
@@ -83,17 +81,6 @@ pub const Desc = struct {
     bind_group_layouts: []const BindGroupLayoutDesc,
     color_target: ColorTargetState,
 };
-
-ptr: *anyopaque,
-vtable: *const VTable,
-
-pub const VTable = struct {
-    deinit: *const fn (ptr: *anyopaque) void,
-};
-
-pub inline fn deinit(self: *const Pipeline) void {
-    self.vtable.deinit(self.ptr);
-}
 
 pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".fields.len]VertexAttribute {
     const fields = @typeInfo(T).@"struct".fields;

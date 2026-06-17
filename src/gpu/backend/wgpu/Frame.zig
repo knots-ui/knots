@@ -1,51 +1,49 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
-const Context = @import("Context.zig");
+const GpuContext = @import("Context.zig");
 const RenderPass = @import("RenderPass.zig");
 
 const Frame = @This();
 
-allocator: std.mem.Allocator,
 surface_texture: ?wgpu.Texture,
 view: ?wgpu.TextureView,
 encoder: ?wgpu.CommandEncoder,
-ctx: *Context,
+ctx: *GpuContext,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context) !gpu.Frame {
-    const self = try allocator.create(Frame);
-    self.* = .{
-        .allocator = allocator,
+pub const ContextHandle = struct {
+    frame: *Frame,
+    upload_slot: u32,
+
+    pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
+        return self.frame.beginRenderPass(desc);
+    }
+
+    pub fn submit(self: *ContextHandle) !void {
+        return self.frame.submit();
+    }
+};
+
+pub const Context = ContextHandle;
+
+pub fn create(_: std.mem.Allocator, ctx: *GpuContext) !Frame {
+    return .{
         .surface_texture = null,
         .view = null,
         .encoder = null,
         .ctx = ctx,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Frame.VTable{
-    .deinit = &deinit,
-    .begin = &begin,
-    .uploadSlotCount = &uploadSlotCount,
-    .prepareResize = &prepareResize,
-    .beginRenderPass = &beginRenderPass,
-    .submit = &submit,
-    .waitForCompletion = &waitForCompletion,
-};
-
-fn begin(ptr: *anyopaque) !u32 {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn begin(self: *Frame) !ContextHandle {
     _ = self.ctx.device.poll(true);
-    return 0;
+    return .{ .frame = self, .upload_slot = 0 };
 }
 
-fn uploadSlotCount(_: *anyopaque) u32 {
+pub fn uploadSlotCount(_: *const Frame) u32 {
     return 1;
 }
 
-fn prepareResize(ptr: *anyopaque) void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn prepareResize(self: *Frame) void {
     if (self.view) |v| v.deinit();
     self.view = null;
     if (self.surface_texture) |t| t.deinit();
@@ -53,24 +51,19 @@ fn prepareResize(ptr: *anyopaque) void {
     _ = self.ctx.device.poll(true);
 }
 
-fn deinit(ptr: *anyopaque) void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Frame) void {
     if (self.encoder) |e| e.deinit();
     if (self.view) |v| v.deinit();
     if (self.surface_texture) |t| t.deinit();
-    self.allocator.destroy(self);
 }
 
-fn beginRenderPass(ptr: *anyopaque, desc: gpu.RenderPass.Desc) anyerror!gpu.RenderPass {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
-
+fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
     if (self.encoder == null) {
         self.encoder = try self.ctx.device.createCommandEncoder(.{ .label = "frame_encoder" });
     }
 
     const target_view = if (desc.color_attachment.target) |target| blk: {
-        const tex: *@import("Texture.zig") = @ptrCast(@alignCast(target.ptr));
-        break :blk tex.view;
+        break :blk target.view;
     } else blk: {
         if (self.surface_texture == null) {
             self.surface_texture = self.ctx.surface.getCurrentTexture() catch |err| switch (err) {
@@ -86,11 +79,10 @@ fn beginRenderPass(ptr: *anyopaque, desc: gpu.RenderPass.Desc) anyerror!gpu.Rend
         break :blk self.view.?;
     };
 
-    return RenderPass.create(self.allocator, self.encoder.?, target_view, desc);
+    return RenderPass.create(self.ctx.allocator, self.encoder.?, target_view, desc);
 }
 
-fn submit(ptr: *anyopaque) anyerror!void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+fn submit(self: *Frame) !void {
     const cmd = try self.encoder.?.finish(.{});
     self.ctx.queue.submitCommands(&.{cmd});
     try self.ctx.surface.present();
@@ -103,7 +95,6 @@ fn submit(ptr: *anyopaque) anyerror!void {
     self.surface_texture = null;
 }
 
-fn waitForCompletion(ptr: *anyopaque) !void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn waitForCompletion(self: *Frame) !void {
     _ = self.ctx.device.poll(true);
 }

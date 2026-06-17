@@ -1,6 +1,6 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
+const CommonTexture = @import("gpu").Texture;
 
 pub const NativeHandle = struct {
     texture: wgpu.Texture,
@@ -12,17 +12,20 @@ pub const NativeHandle = struct {
 
 const Texture = @This();
 
-allocator: std.mem.Allocator,
+const Format = CommonTexture.Format;
+const Usage = CommonTexture.Usage;
+const Desc = CommonTexture.Desc;
+
 texture: wgpu.Texture,
 view: wgpu.TextureView,
 queue: wgpu.Queue,
 width: u32,
 height: u32,
-format: gpu.Texture.Format,
+format: Format,
 ready: bool,
-_native_handle: NativeHandle = undefined,
+native_handle: NativeHandle,
 
-pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Queue, desc: gpu.Texture.Desc) !gpu.Texture {
+pub fn create(_: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Queue, desc: Desc) !Texture {
     const wgpu_format = toWgpuFormat(desc.format);
 
     const texture = try device.createTexture(.{
@@ -34,14 +37,13 @@ pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Que
         .sample_count = 1,
         .dimension = .@"2d",
     });
+    errdefer texture.deinit();
 
     const view = try texture.createView(.{
         .format = wgpu_format,
     });
 
-    const self = try allocator.create(Texture);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .texture = texture,
         .view = view,
         .queue = queue,
@@ -49,26 +51,22 @@ pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Que
         .height = desc.height,
         .format = desc.format,
         .ready = false,
+        .native_handle = .{
+            .texture = texture,
+            .view = view,
+            .format = wgpu_format,
+            .width = desc.width,
+            .height = desc.height,
+        },
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Texture.VTable{
-    .deinit = &deinit,
-    .write = &write,
-    .is_ready = &isReady,
-    .nativeHandle = &nativeHandle,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Texture) void {
     self.view.deinit();
     self.texture.deinit();
-    self.allocator.destroy(self);
 }
 
-fn write(ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
+pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
     const bpr = bytes_per_row orelse width * bytesPerPixel(self.format);
     self.queue.writeTexture(
         u8,
@@ -80,12 +78,11 @@ fn write(ptr: *anyopaque, data: [*]const u8, len: usize, x: u32, y: u32, width: 
     self.ready = true;
 }
 
-fn isReady(ptr: *anyopaque) bool {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
+pub fn isReady(self: *const Texture) bool {
     return self.ready;
 }
 
-fn bytesPerPixel(format: gpu.Texture.Format) u32 {
+fn bytesPerPixel(format: Format) u32 {
     return switch (format) {
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .r8 => 1,
@@ -93,7 +90,7 @@ fn bytesPerPixel(format: gpu.Texture.Format) u32 {
     };
 }
 
-fn toWgpuFormat(format: gpu.Texture.Format) wgpu.Texture.Format {
+fn toWgpuFormat(format: Format) wgpu.Texture.Format {
     return switch (format) {
         .rgba8 => .rgba8_unorm,
         .rgba8_srgb => .rgba8_unorm_srgb,
@@ -105,7 +102,7 @@ fn toWgpuFormat(format: gpu.Texture.Format) wgpu.Texture.Format {
     };
 }
 
-fn toWgpuUsage(usage: gpu.Texture.Usage) wgpu.Texture.Usage {
+fn toWgpuUsage(usage: Usage) wgpu.Texture.Usage {
     return .{
         .texture_binding = usage.texture_binding,
         .copy_dst = usage.copy_dst,
@@ -114,14 +111,13 @@ fn toWgpuUsage(usage: gpu.Texture.Usage) wgpu.Texture.Usage {
     };
 }
 
-fn nativeHandle(ptr: *anyopaque) *anyopaque {
-    const self: *Texture = @ptrCast(@alignCast(ptr));
-    self._native_handle = .{
+pub fn nativeHandle(self: *Texture) *anyopaque {
+    self.native_handle = .{
         .texture = self.texture,
         .view = self.view,
         .format = toWgpuFormat(self.format),
         .width = self.width,
         .height = self.height,
     };
-    return &self._native_handle;
+    return &self.native_handle;
 }

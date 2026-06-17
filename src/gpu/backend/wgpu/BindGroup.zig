@@ -1,6 +1,5 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
 const Context = @import("Context.zig");
 const Pipeline = @import("Pipeline.zig");
 const Buffer = @import("Buffer.zig");
@@ -9,12 +8,35 @@ const Sampler = @import("Sampler.zig");
 
 const BindGroup = @This();
 
-allocator: std.mem.Allocator,
 bind_group: wgpu.BindGroup,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.Desc) !gpu.BindGroup {
-    const wgpu_pipeline: *Pipeline = @ptrCast(@alignCast(desc.pipeline.ptr));
-    const layout = wgpu_pipeline.bindGroupLayout(desc.layout_index);
+pub const BufferBinding = struct {
+    buffer: *const Buffer,
+    offset: u64 = 0,
+    size: u64 = 0,
+};
+
+pub const Entry = union(enum) {
+    buffer: BufferBinding,
+    read_only_storage_buffer: BufferBinding,
+    texture_view: *const Texture,
+    sampler: *const Sampler,
+};
+
+pub const BindingEntry = struct {
+    binding: u32,
+    resource: Entry,
+};
+
+pub const Desc = struct {
+    label: []const u8 = "",
+    pipeline: *const Pipeline,
+    layout_index: u32,
+    entries: []const BindingEntry,
+};
+
+pub fn create(_: std.mem.Allocator, ctx: *Context, desc: Desc) !BindGroup {
+    const layout = desc.pipeline.bindGroupLayout(desc.layout_index);
 
     var entry_buf: [16]wgpu.BindGroup.Entry = undefined;
     if (desc.entries.len > entry_buf.len) return error.TooManyBindGroupEntries;
@@ -22,24 +44,20 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
         var w: wgpu.BindGroup.Entry = .{ .binding = e.binding };
         switch (e.resource) {
             .buffer => |b| {
-                const wbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
-                w.buffer = wbuf.buffer;
+                w.buffer = b.buffer.buffer;
                 w.offset = b.offset;
-                w.size = if (b.size == 0) wbuf.size - b.offset else b.size;
+                w.size = if (b.size == 0) @intCast(b.buffer.size - @as(usize, @intCast(b.offset))) else b.size;
             },
             .read_only_storage_buffer => |b| {
-                const wbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
-                w.buffer = wbuf.buffer;
+                w.buffer = b.buffer.buffer;
                 w.offset = b.offset;
-                w.size = if (b.size == 0) wbuf.size - b.offset else b.size;
+                w.size = if (b.size == 0) @intCast(b.buffer.size - @as(usize, @intCast(b.offset))) else b.size;
             },
             .texture_view => |t| {
-                const wtex: *Texture = @ptrCast(@alignCast(t.ptr));
-                w.texture_view = wtex.view;
+                w.texture_view = t.view;
             },
             .sampler => |s| {
-                const wsamp: *Sampler = @ptrCast(@alignCast(s.ptr));
-                w.sampler = wsamp.sampler;
+                w.sampler = s.sampler;
             },
         }
         entry_buf[i] = w;
@@ -51,20 +69,11 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
         .entries = entry_buf[0..desc.entries.len],
     });
 
-    const self = try allocator.create(BindGroup);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .bind_group = bg,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.BindGroup.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *BindGroup = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *BindGroup) void {
     self.bind_group.deinit();
-    self.allocator.destroy(self);
 }

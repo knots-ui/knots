@@ -1,7 +1,6 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
-const Context = @import("Context.zig");
+const GpuContext = @import("Context.zig");
 const RenderPass = @import("RenderPass.zig");
 
 const FrameData = struct {
@@ -14,22 +13,27 @@ const FrameData = struct {
 const Frame = @This();
 
 allocator: std.mem.Allocator,
-ctx: *Context,
+ctx: *GpuContext,
 frames: []FrameData,
 current: u32,
 image_index: u32,
 
-const vtable = gpu.Frame.VTable{
-    .deinit = &deinit,
-    .begin = &begin,
-    .uploadSlotCount = &uploadSlotCount,
-    .prepareResize = &prepareResize,
-    .beginRenderPass = &beginRenderPass,
-    .submit = &submit,
-    .waitForCompletion = &waitForCompletion,
+pub const ContextHandle = struct {
+    frame: *Frame,
+    upload_slot: u32,
+
+    pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
+        return self.frame.beginRenderPass(desc);
+    }
+
+    pub fn submit(self: *ContextHandle) !void {
+        return self.frame.submit();
+    }
 };
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context) !gpu.Frame {
+pub const Context = ContextHandle;
+
+pub fn create(allocator: std.mem.Allocator, ctx: *GpuContext) !Frame {
     const frame_count = ctx.swapchain_images.len;
     const frames = try allocator.alloc(FrameData, frame_count);
     var created: usize = 0;
@@ -46,34 +50,49 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context) !gpu.Frame {
 
     for (frames, ctx.command_pools) |*f, pool| {
         var cmd: [1]vk.CommandBuffer = undefined;
+        var committed = false;
+        var command_buffer_allocated = false;
+        var image_available: vk.Semaphore = .null_handle;
+        var render_finished: vk.Semaphore = .null_handle;
+        var in_flight: vk.Fence = .null_handle;
+
+        errdefer if (!committed) {
+            if (command_buffer_allocated) ctx.vkd.freeCommandBuffers(ctx.device, pool, &.{cmd[0]});
+            if (image_available != .null_handle) ctx.vkd.destroySemaphore(ctx.device, image_available, null);
+            if (render_finished != .null_handle) ctx.vkd.destroySemaphore(ctx.device, render_finished, null);
+            if (in_flight != .null_handle) ctx.vkd.destroyFence(ctx.device, in_flight, null);
+        };
+
         try ctx.vkd.allocateCommandBuffers(ctx.device, &.{
             .command_pool = pool,
             .level = .primary,
             .command_buffer_count = 1,
         }, &cmd);
+        command_buffer_allocated = true;
+        image_available = try ctx.vkd.createSemaphore(ctx.device, &.{}, null);
+        render_finished = try ctx.vkd.createSemaphore(ctx.device, &.{}, null);
+        in_flight = try ctx.vkd.createFence(ctx.device, &.{ .flags = .{ .signaled_bit = true } }, null);
 
         f.* = .{
             .command_buffer = cmd[0],
-            .image_available = try ctx.vkd.createSemaphore(ctx.device, &.{}, null),
-            .render_finished = try ctx.vkd.createSemaphore(ctx.device, &.{}, null),
-            .in_flight = try ctx.vkd.createFence(ctx.device, &.{ .flags = .{ .signaled_bit = true } }, null),
+            .image_available = image_available,
+            .render_finished = render_finished,
+            .in_flight = in_flight,
         };
+        committed = true;
         created += 1;
     }
 
-    const self = try allocator.create(Frame);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .ctx = ctx,
         .frames = frames,
         .current = 0,
         .image_index = 0,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-fn deinit(ptr: *anyopaque) void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Frame) void {
     const ctx = self.ctx;
     ctx.vkd.deviceWaitIdle(ctx.device) catch {};
     for (self.frames, ctx.command_pools) |f, pool| {
@@ -83,30 +102,26 @@ fn deinit(ptr: *anyopaque) void {
         ctx.vkd.destroyFence(ctx.device, f.in_flight, null);
     }
     self.allocator.free(self.frames);
-    self.allocator.destroy(self);
 }
 
-fn begin(ptr: *anyopaque) !u32 {
-    const self: *const Frame = @ptrCast(@alignCast(ptr));
+pub fn begin(self: *Frame) !ContextHandle {
     const f = &self.frames[self.current];
     _ = try self.ctx.vkd.waitForFences(self.ctx.device, &.{f.in_flight}, .true, std.math.maxInt(u64));
-    return self.current;
+    return .{ .frame = self, .upload_slot = self.current };
 }
 
-fn uploadSlotCount(ptr: *anyopaque) u32 {
-    const self: *const Frame = @ptrCast(@alignCast(ptr));
+pub fn uploadSlotCount(self: *const Frame) u32 {
     return @intCast(self.frames.len);
 }
 
-fn prepareResize(_: *anyopaque) void {}
+pub fn prepareResize(_: *Frame) void {}
 
-fn acquireImage(ctx: *Context, semaphore: vk.Semaphore) !u32 {
+fn acquireImage(ctx: *GpuContext, semaphore: vk.Semaphore) !u32 {
     const result = try ctx.vkd.acquireNextImageKHR(ctx.device, ctx.swapchain, std.math.maxInt(u64), semaphore, .null_handle);
     return result.image_index;
 }
 
-fn beginRenderPass(ptr: *anyopaque, desc: gpu.RenderPass.Desc) !gpu.RenderPass {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
     const ctx = self.ctx;
     const f = &self.frames[self.current];
 
@@ -128,8 +143,7 @@ fn beginRenderPass(ptr: *anyopaque, desc: gpu.RenderPass.Desc) !gpu.RenderPass {
     return RenderPass.create(self.allocator, f.command_buffer, ctx, desc);
 }
 
-fn submit(ptr: *anyopaque) !void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+fn submit(self: *Frame) !void {
     const ctx = self.ctx;
     const f = &self.frames[self.current];
 
@@ -171,8 +185,7 @@ fn submit(ptr: *anyopaque) !void {
     self.current = (self.current + 1) % @as(u32, @intCast(self.frames.len));
 }
 
-fn waitForCompletion(ptr: *anyopaque) !void {
-    const self: *Frame = @ptrCast(@alignCast(ptr));
+pub fn waitForCompletion(self: *Frame) !void {
     const ctx = self.ctx;
     for (self.frames) |f| {
         _ = try ctx.vkd.waitForFences(ctx.device, &.{f.in_flight}, .true, std.math.maxInt(u64));

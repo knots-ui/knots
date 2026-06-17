@@ -231,10 +231,10 @@ pub fn consumeReconfigure(self: *App) bool {
 
 fn handleRendererReconfigure(self: *App) !void {
     const new_cfg = self.pending_renderer_cfg orelse return;
-    self.pending_renderer_cfg = null;
 
     try self.renderer.reconfigure(new_cfg);
 
+    self.pending_renderer_cfg = null;
     self.ui.font.glyph_builder.markAllDirty();
     self.pending_reconfigure = true;
 }

@@ -4,77 +4,53 @@ const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
 
-const SupportedBackends = struct {
-    wgpu: bool,
-    vulkan: bool,
-};
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const gpu_backends =
-        b.option([]const GPUBackend, "gpu_backends", "Which GPU backends to be available at runtime.") orelse
-        &[_]GPUBackend{ .wgpu, .vulkan };
-
-    var se = SupportedBackends{ .vulkan = false, .wgpu = false };
-    for (gpu_backends) |be| {
-        switch (be) {
-            .vulkan => se.vulkan = true,
-            .wgpu => se.wgpu = true,
-        }
-    }
+    const gpu_backend =
+        b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
+        defaultGpuBackend(target.result.os.tag);
 
     const truetype_dep = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
+
+    const gpu_impl_mod = blk: switch (gpu_backend) {
+        .wgpu => {
+            const wgpu = b.dependency("wgpu", .{ .target = target, .optimize = optimize });
+            break :blk b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/gpu/backend/wgpu/root.zig"),
+                .imports = &.{
+                    .{ .name = "wgpu", .module = wgpu.module("wgpu") },
+                },
+            });
+        },
+        .vulkan => {
+            const vulkan = b.dependency("vulkan", .{
+                .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
+            });
+            break :blk b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/gpu/backend/vulkan/root.zig"),
+                .imports = &.{
+                    .{ .name = "vk", .module = vulkan.module("vulkan-zig") },
+                },
+            });
+        },
+    };
 
     const gpu_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/gpu/root.zig"),
     });
+    gpu_impl_mod.addImport("gpu", gpu_mod);
 
-    const gpu_backend_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/gpu/backend/root.zig"),
-        .imports = &.{.{ .name = "gpu", .module = gpu_mod }},
-    });
-
-    var gpu_backend_opts = b.addOptions();
-    gpu_backend_opts.addOption(SupportedBackends, "gpu_backends", se);
-    gpu_backend_mod.addOptions("config", gpu_backend_opts);
-
-    for (gpu_backends) |gpu_backend| {
-        const backend_mod = blk: switch (gpu_backend) {
-            .wgpu => {
-                const wgpu = b.dependency("wgpu", .{ .target = target, .optimize = optimize });
-                break :blk b.createModule(.{
-                    .target = target,
-                    .optimize = optimize,
-                    .root_source_file = b.path("src/gpu/backend/wgpu/root.zig"),
-                    .imports = &.{
-                        .{ .name = "wgpu", .module = wgpu.module("wgpu") },
-                        .{ .name = "gpu", .module = gpu_mod },
-                    },
-                });
-            },
-            .vulkan => {
-                const vulkan = b.dependency("vulkan", .{
-                    .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
-                });
-                break :blk b.createModule(.{
-                    .target = target,
-                    .optimize = optimize,
-                    .root_source_file = b.path("src/gpu/backend/vulkan/root.zig"),
-                    .imports = &.{
-                        .{ .name = "vk", .module = vulkan.module("vulkan-zig") },
-                        .{ .name = "gpu", .module = gpu_mod },
-                    },
-                });
-            },
-        };
-        gpu_backend_mod.addImport(b.fmt("gpu_{s}", .{@tagName(gpu_backend)}), backend_mod);
-    }
+    var gpu_opts = b.addOptions();
+    gpu_opts.addOption(GPUBackend, "backend", gpu_backend);
+    gpu_mod.addOptions("config", gpu_opts);
 
     const window_impl_mod = blk: switch (target.result.os.tag) {
         .macos => {
@@ -175,7 +151,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/render/root.zig"),
         .imports = &.{
             .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "gpu_backend", .module = gpu_backend_mod },
+            .{ .name = "gpu_impl", .module = gpu_impl_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "window", .module = window_mod },
             .{ .name = "math", .module = math_mod },
@@ -183,15 +159,15 @@ pub fn build(b: *std.Build) void {
     });
 
     var render_shader_opts = b.addOptions();
-    render_shader_opts.addOption(bool, "has_wgpu_shaders", se.wgpu);
-    render_shader_opts.addOption(bool, "has_vulkan_shaders", se.vulkan);
+    render_shader_opts.addOption(bool, "has_wgpu_shaders", gpu_backend == .wgpu);
+    render_shader_opts.addOption(bool, "has_vulkan_shaders", gpu_backend == .vulkan);
     render_mod.addOptions("shader_config", render_shader_opts);
 
-    if (se.wgpu) {
+    if (gpu_backend == .wgpu) {
         render_mod.addAnonymousImport("primitives_wgsl", .{ .root_source_file = b.path("src/gpu/backend/wgpu/shaders/ui_primitives.wgsl") });
         render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/wgpu/shaders/slug.wgsl") });
     }
-    if (se.vulkan) {
+    if (gpu_backend == .vulkan) {
         embedZigSpirV(b, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
         embedZigSpirV(b, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
         embedZigSpirV(b, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
@@ -266,7 +242,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "component", .module = component_mod },
             .{ .name = "ui", .module = ui_mod },
             .{ .name = "layout", .module = layout_mod },
-            .{ .name = "gpu_backend", .module = gpu_backend_mod },
             .{ .name = "gpu", .module = gpu_mod },
         },
     });
@@ -310,6 +285,14 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_text_tests.step);
     test_step.dependOn(&run_math_tests.step);
+}
+
+fn defaultGpuBackend(os: std.Target.Os.Tag) GPUBackend {
+    return switch (os) {
+        .macos, .emscripten => .wgpu,
+        .windows, .linux => .vulkan,
+        else => .wgpu,
+    };
 }
 
 fn embedSpirV(b: *std.Build, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
