@@ -38,13 +38,19 @@ pub const dark: Theme = parse(@import("themes/dark.zon"));
 pub const light: Theme = parse(@import("themes/light.zon"));
 
 pub fn parse(comptime def: anytype) Theme {
-    const res: Theme = undefined;
-    return parseWithBase(res, def);
+    const Def = @TypeOf(def);
+    inline for (std.meta.fields(Theme)) |field| {
+        if (!@hasField(Def, field.name))
+            @compileError("theme is missing required field: " ++ field.name);
+    }
+    return parseWithBase(std.mem.zeroes(Theme), def);
 }
 
 pub fn parseWithBase(comptime base: Theme, comptime def: anytype) Theme {
     var res = base;
     inline for (std.meta.fields(@TypeOf(def))) |field| {
+        if (!@hasField(Theme, field.name))
+            @compileError("unknown theme field: " ++ field.name);
         const v = @field(def, field.name);
         const Field = @TypeOf(@field(res, field.name));
         if (Field == Radius) {
