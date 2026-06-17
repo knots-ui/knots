@@ -382,6 +382,7 @@ pub fn textureFromPixels(
     format: gpu.Texture.Format,
     bytes_per_row: ?u32,
     version: u64,
+    force_upload: bool,
 ) !u32 {
     const required = try requiredTextureBytes(width, height, bytesPerGpuPixel(format), bytes_per_row);
     if (data.len < required) return error.InvalidTextureWrite;
@@ -411,6 +412,7 @@ pub fn textureFromPixels(
     }
 
     const needs_upload =
+        force_upload or
         needs_recreate or
         entry.data_ptr != data_ptr or
         entry.len != data.len or
