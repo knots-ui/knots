@@ -58,14 +58,21 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
         .{ .rect = current_style.toRect(&ui.theme) }
     else
         .none;
-    return try ui.open(self.key, .{
+    const element_id = try ui.open(self.key, .{
         .width = self.width,
         .height = height,
         .overflow = .scroll_x,
         .interactive = true,
+        .focusable = true,
         .alignment = .center,
         .padding = self.padding,
     }, decoration);
+    try ui.setAccessibility(element_id, .{
+        .role = .text_input,
+        .name = self.placeholder,
+        .state = .{ .value_text = self.buf.items },
+    });
+    return element_id;
 }
 
 pub fn close(self: *const TextInput, app: *App) !void {
@@ -118,12 +125,11 @@ pub fn close(self: *const TextInput, app: *App) !void {
             const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
             defer ui.allocator.free(spans);
             for (spans, 0..) |sp, i| {
-                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
+                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x - scroll_x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
                 ui.close();
             }
         } else {
-            const p = util.posAtByte(shaped, s.cursor, scale);
-            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), p.x, p.y, 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
+            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), cursor_pos.x - scroll_x, cursor_pos.y, 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
             ui.close();
         }
 
@@ -138,4 +144,19 @@ pub fn close(self: *const TextInput, app: *App) !void {
     }
 
     ui.close();
+}
+
+fn ensureCaretVisibleX(scroll: *State.Scroll, caret_x: f32, viewport_w: f32, content_w: f32) void {
+    const max_off = @max(0, content_w - viewport_w);
+    if (viewport_w <= 0) {
+        scroll.offset[0] = std.math.clamp(scroll.offset[0], 0, max_off);
+        return;
+    }
+
+    if (caret_x < scroll.offset[0]) {
+        scroll.offset[0] = caret_x;
+    } else if (caret_x + 1 > scroll.offset[0] + viewport_w) {
+        scroll.offset[0] = caret_x + 1 - viewport_w;
+    }
+    scroll.offset[0] = std.math.clamp(scroll.offset[0], 0, max_off);
 }

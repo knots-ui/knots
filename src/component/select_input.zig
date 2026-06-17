@@ -22,10 +22,12 @@ fn enumTagNames(comptime T: type, comptime values: []const T) [][]const u8 {
 
 /// If `T` is an enum type, the values and labels will default to an auto-resolver if not provided.
 pub fn SelectInput(comptime T: type) type {
-    const default_values, const default_labels = switch (@typeInfo(T)) {
-        .@"enum" => .{ std.enums.values(T), enumTagNames(T, std.enums.values(T)) },
-        else => .{ undefined, undefined },
+    const has_implicit_options = switch (@typeInfo(T)) {
+        .@"enum" => true,
+        else => false,
     };
+    const default_values: []const T = if (has_implicit_options) std.enums.values(T) else &.{};
+    const default_labels: []const []const u8 = if (has_implicit_options) enumTagNames(T, std.enums.values(T)) else &.{};
     return struct {
         labels: []const []const u8 = default_labels,
         values: []const T = default_values,
@@ -50,7 +52,8 @@ pub fn SelectInput(comptime T: type) type {
         const Self = @This();
 
         pub fn open(self: *const Self, app: *App) !Element.Id {
-            std.debug.assert(self.labels.len == self.values.len);
+            if (self.labels.len != self.values.len) return error.SelectInputMismatchedOptions;
+            if (!has_implicit_options and self.values.len == 0) return error.SelectInputRequiresOptions;
             const ui = &app.ui;
 
             const id = self.key.hash();
@@ -59,6 +62,45 @@ pub fn SelectInput(comptime T: type) type {
             if (!existed) s.selected = self.initial_selected;
 
             if (ui.leftClicked(id)) s.open = !s.open;
+            if (ui.focused(id)) {
+                var next_selected: ?usize = null;
+                if (ui.input.containsKey(.escape)) {
+                    s.open = false;
+                    ui.input.consumeKeyboard();
+                } else if (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter)) {
+                    s.open = !s.open;
+                    ui.input.consumeKeyboard();
+                } else if (self.values.len > 0 and (ui.input.containsKey(.down) or ui.input.containsKey(.up) or ui.input.containsKey(.home) or ui.input.containsKey(.end))) {
+                    if (!s.open) {
+                        s.open = true;
+                    } else if (ui.input.containsKey(.home)) {
+                        next_selected = 0;
+                    } else if (ui.input.containsKey(.end)) {
+                        next_selected = self.values.len - 1;
+                    } else {
+                        const cur: usize = if (s.selected) |sel|
+                            @intCast(@min(sel, @as(u32, @intCast(self.values.len - 1))))
+                        else if (ui.input.containsKey(.up))
+                            self.values.len - 1
+                        else
+                            0;
+                        next_selected = if (ui.input.containsKey(.up))
+                            (cur + self.values.len - 1) % self.values.len
+                        else
+                            (cur + 1) % self.values.len;
+                    }
+                    if (next_selected) |i| {
+                        const idx_u32: u32 = @intCast(i);
+                        s.selected = idx_u32;
+                        if (self.onSelect) |cb| try cb(app, self.values[i], idx_u32);
+                    }
+                    ui.input.consumeKeyboard();
+                }
+            }
+            if (s.open and ui.acceptsInput(id) and ui.input.containsKey(.escape)) {
+                s.open = false;
+                ui.input.consumeKeyboard();
+            }
 
             if (s.open) {
                 for (self.labels, 0..) |_, i| {
@@ -70,11 +112,6 @@ pub fn SelectInput(comptime T: type) type {
                         if (self.onSelect) |cb| try cb(app, self.values[i], idx_u32);
                         break;
                     }
-                }
-
-                if (ui.acceptsInput(id) and ui.input.containsKey(.escape)) {
-                    s.open = false;
-                    ui.input.consumeKeyboard();
                 }
             }
 
@@ -99,7 +136,7 @@ pub fn SelectInput(comptime T: type) type {
             else
                 .none;
 
-            return try ui.open(self.key, .{
+            const element_id = try ui.open(self.key, .{
                 .width = self.width,
                 .height = h,
                 .direction = .row,
@@ -107,7 +144,18 @@ pub fn SelectInput(comptime T: type) type {
                 .justify = .space_between,
                 .padding = .init(6, 10, 6, 10),
                 .interactive = true,
+                .focusable = true,
             }, decoration);
+            const accessibility_name = if (s.selected) |sel|
+                if (sel < self.labels.len) self.labels[sel] else self.placeholder
+            else
+                self.placeholder;
+            try ui.setAccessibility(element_id, .{
+                .role = .select,
+                .name = accessibility_name,
+                .state = .{ .expanded = s.open },
+            });
+            return element_id;
         }
 
         pub fn close(self: *const Self, app: *App) !void {

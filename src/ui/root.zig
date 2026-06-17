@@ -5,6 +5,7 @@ pub const Input = @import("Input.zig");
 pub const Key = @import("Key.zig");
 pub const State = @import("State.zig");
 pub const Theme = @import("Theme.zig");
+pub const Accessibility = @import("Accessibility.zig");
 pub const Color = @import("Color.zig");
 pub const Radius = @import("Radius.zig");
 pub const BorderWidth = @import("BorderWidth.zig");

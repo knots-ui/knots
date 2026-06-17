@@ -87,11 +87,21 @@ pub fn open(self: *const Button, app: *App) !Element.Id {
         .height = self.height,
         .padding = self.padding,
         .interactive = !self.disabled,
+        .focusable = !self.disabled,
     }, .{ .rect = deco_rect });
+    try ui.setAccessibility(rect, .{
+        .role = .button,
+        .name = if (self.text) |t_| t_.content else &.{},
+        .state = .{ .disabled = self.disabled },
+    });
 
     if (!self.disabled) {
-        if (self.onClick) |cb|
-            if (ui.leftClickedWithin(rect)) try cb(app);
+        const key_activate = ui.focused(rect) and
+            (ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter) or ui.input.containsKey(.space));
+        if (self.onClick) |cb| {
+            if (ui.leftClickedWithin(rect) or key_activate) try cb(app);
+        }
+        if (key_activate) ui.input.consumeKeyboard();
 
         if (self.onHover) |cb|
             if (is_hovered) try cb(app);

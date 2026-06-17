@@ -193,6 +193,7 @@ pub const Config = struct {
     alignment: Align = .start,
     justify: Justify = .start,
     interactive: bool = false,
+    focusable: bool = false,
     overflow: Overflow = .visible,
     position: Position = .static,
     z_index: u8 = 0,

@@ -66,7 +66,7 @@ pub fn open(self: *const Dialog, app: *App) !Element.Id {
     } });
     ui.close();
 
-    _ = try ui.open(self.key.indexed(PANEL_INDEX), .{
+    const panel_id = try ui.open(self.key.indexed(PANEL_INDEX), .{
         .width = clampAxisToMax(self.width, panel_max_w),
         .height = clampAxisToMax(self.height, panel_max_h),
         .direction = self.dir,
@@ -75,6 +75,10 @@ pub fn open(self: *const Dialog, app: *App) !Element.Id {
         .overflow = .scroll_y,
         .interactive = true,
     }, .{ .rect = self.panel_style.toRect(&ui.theme) });
+    try ui.setAccessibility(panel_id, .{
+        .role = .dialog,
+        .state = .{ .expanded = true },
+    });
 
     return root_id;
 }

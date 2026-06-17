@@ -66,15 +66,23 @@ pub fn RadioButton(comptime T: type) type {
                 .alignment = .center,
                 .gap = self.gap,
                 .interactive = true,
+                .focusable = true,
             }, .none);
+            try ui.setAccessibility(id, .{
+                .role = .radio,
+                .name = self.label orelse &.{},
+                .state = .{ .checked = std.meta.eql(self.selected.*, self.value) },
+            });
 
-            const activate = ui.leftClickedWithin(id) or (ui.focused(id) and ui.input.containsKey(.space));
+            const key_activate = ui.focused(id) and
+                (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
+            const activate = ui.leftClickedWithin(id) or key_activate;
             if (activate) {
                 if (!std.meta.eql(self.selected.*, self.value)) {
                     self.selected.* = self.value;
                     if (self.onChange) |cb| try cb(app, self.value);
                 }
-                if (ui.focused(id)) ui.input.consumeKeyboard();
+                if (key_activate) ui.input.consumeKeyboard();
             }
 
             return id;
@@ -173,7 +181,33 @@ pub fn RadioGroup(comptime T: type) type {
         const Self = @This();
 
         pub fn open(self: *const Self, app: *App) !Element.Id {
-            std.debug.assert(self.values.len == self.labels.len);
+            if (self.values.len != self.labels.len) return error.RadioGroupMismatchedOptions;
+            if (self.values.len > 0 and
+                (app.ui.input.containsKey(.left) or app.ui.input.containsKey(.up) or
+                    app.ui.input.containsKey(.right) or app.ui.input.containsKey(.down)))
+            {
+                var focused_index: ?usize = null;
+                for (self.values, 0..) |_, i| {
+                    if (app.ui.state.focused == self.key.indexed(1 + i).hash()) {
+                        focused_index = i;
+                        break;
+                    }
+                }
+                if (focused_index) |i| {
+                    const backward = app.ui.input.containsKey(.left) or app.ui.input.containsKey(.up);
+                    const next_i = if (backward)
+                        (i + self.values.len - 1) % self.values.len
+                    else
+                        (i + 1) % self.values.len;
+                    const next = self.values[next_i];
+                    if (!std.meta.eql(self.selected.*, next)) {
+                        self.selected.* = next;
+                        if (self.onChange) |cb| try cb(app, next);
+                    }
+                    app.ui.state.focused = self.key.indexed(1 + next_i).hash();
+                    app.ui.input.consumeKeyboard();
+                }
+            }
             return try app.ui.open(self.key, .{
                 .width = self.width,
                 .height = self.height,

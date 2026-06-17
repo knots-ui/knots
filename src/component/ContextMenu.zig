@@ -76,7 +76,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             else
                 .none;
 
-            return try ui.open(self.key, .{
+            const element_id = try ui.open(self.key, .{
                 .alignment = self.@"align",
                 .justify = self.justify,
                 .width = self.width,
@@ -90,6 +90,11 @@ pub fn ContextMenu(comptime Menu: type) type {
                 .grid_template = self.grid_template,
                 .grid_placement = self.grid_placement,
             }, decoration);
+            try ui.setAccessibility(element_id, .{
+                .role = .menu,
+                .state = .{ .expanded = s.open },
+            });
+            return element_id;
         }
 
         pub fn close(self: *const Self, app: *App) !void {

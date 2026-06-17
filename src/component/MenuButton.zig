@@ -106,8 +106,14 @@ pub fn MenuButton(comptime Menu: type) type {
                 .height = self.height,
                 .padding = self.padding,
                 .interactive = true,
+                .focusable = true,
                 .grid_placement = self.grid_placement,
             }, .{ .rect = deco_rect });
+            try ui.setAccessibility(rect, .{
+                .role = .button,
+                .name = if (self.text) |t_| t_.content else &.{},
+                .state = .{ .expanded = s.open },
+            });
 
             if (self.text) |text| {
                 const text_color: Color.Input =
