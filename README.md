@@ -96,3 +96,4 @@ Below goals are listed in order of importance.
 ## Known limitations
 
 - Linux windowing is Wayland-only.
+- Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.
