@@ -82,7 +82,10 @@ pub fn build(b: *std.Build) void {
             });
         },
         .emscripten => {
-            const emcc_path = b.findProgram(&.{"emcc"}, &.{}) catch
+            const names: []const []const u8 = &.{"emcc"};
+            const emcc_path = b.findProgram(.{
+                .names = names,
+            }) orelse
                 @panic("emcc not found. Put emcc on PATH when targeting Emscripten.");
             const bridge = b.addSystemCommand(&.{ emcc_path, "-c" });
             bridge.addFileArg(b.path("src/window/backend/emscripten/bridge.c"));

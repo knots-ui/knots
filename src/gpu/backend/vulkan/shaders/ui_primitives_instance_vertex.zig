@@ -1,4 +1,4 @@
-const gpu = @import("std").gpu;
+const gpu = @import("std").spirv;
 
 const Vec4f = @import("common.zig").Vec4f;
 const Vec2f = @import("common.zig").Vec2f;
@@ -58,5 +58,4 @@ export fn main() callconv(.spirv_vertex) void {
         out_half_size.* = .{ 0.0, 0.0 };
         out_uv.* = in_uv0.* + (in_uv1.* - in_uv0.*) * corner;
     }
-
 }
