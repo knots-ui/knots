@@ -33,9 +33,31 @@ pub const NSDragOperationCopy: c_ulong = 1;
 pub const NSUTF8StringEncoding: c_ulong = 4;
 
 pub extern const NSDefaultRunLoopMode: c.id;
-pub extern const NSEventTrackingRunLoopMode: c.id;
 pub extern const NSPasteboardTypeFileURL: c.id;
 pub extern const NSPasteboardTypeString: c.id;
+
+pub const CFRunLoopSourceRef = *anyopaque;
+pub const CFRunLoopSourceContext = extern struct {
+    version: c_long,
+    info: ?*anyopaque,
+    retain: ?*const anyopaque,
+    release: ?*const anyopaque,
+    copy_description: ?*const anyopaque,
+    equal: ?*const anyopaque,
+    hash: ?*const anyopaque,
+    schedule: ?*const anyopaque,
+    cancel: ?*const anyopaque,
+    perform: *const fn (?*anyopaque) callconv(.c) void,
+};
+
+pub extern const kCFRunLoopCommonModes: ?*const anyopaque;
+pub extern fn CFRunLoopGetMain() *anyopaque;
+pub extern fn CFRunLoopSourceCreate(allocator: ?*const anyopaque, order: c_long, context: *CFRunLoopSourceContext) ?CFRunLoopSourceRef;
+pub extern fn CFRunLoopAddSource(run_loop: *anyopaque, source: CFRunLoopSourceRef, mode: ?*const anyopaque) void;
+pub extern fn CFRunLoopSourceSignal(source: CFRunLoopSourceRef) void;
+pub extern fn CFRunLoopSourceInvalidate(source: CFRunLoopSourceRef) void;
+pub extern fn CFRunLoopWakeUp(run_loop: *anyopaque) void;
+pub extern fn CFRelease(value: *const anyopaque) void;
 
 pub fn boolParam(b: bool) c.BOOL {
     return switch (c.BOOL) {
@@ -54,17 +76,9 @@ pub fn defaultRunLoopMode() objc.Object {
     return .{ .value = NSDefaultRunLoopMode };
 }
 
-pub fn eventTrackingRunLoopMode() objc.Object {
-    return .{ .value = NSEventTrackingRunLoopMode };
-}
-
 pub fn nsstring(s: []const u8) objc.Object {
-    var buf: [512]u8 = undefined;
-    const len = @min(s.len, buf.len - 1);
-    @memcpy(buf[0..len], s[0..len]);
-    buf[len] = 0;
     const NSString = objc.getClass("NSString").?;
-    return NSString.msgSend(objc.Object, "stringWithUTF8String:", .{@as([*:0]const u8, @ptrCast(&buf))});
+    return NSString.msgSend(objc.Object, "stringWithBytes:length:encoding:", .{ s.ptr, @as(c_ulong, @intCast(s.len)), NSUTF8StringEncoding });
 }
 
 pub fn wrapPointer(ptr: anytype) objc.Object {

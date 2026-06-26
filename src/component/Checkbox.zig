@@ -38,11 +38,19 @@ pub fn open(self: *const Checkbox, app: *App) !Element.Id {
         .alignment = .center,
         .gap = self.gap,
         .interactive = true,
+        .focusable = true,
     }, .none);
+    try ui.setAccessibility(id, .{
+        .role = .checkbox,
+        .name = self.label orelse &.{},
+        .state = .{ .checked = self.checked.* },
+    });
 
-    if (ui.leftClickedWithin(id) or (ui.focused(id) and ui.input.containsKey(.space))) {
+    const key_activate = ui.focused(id) and
+        (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
+    if (ui.leftClickedWithin(id) or key_activate) {
         self.checked.* = !self.checked.*;
-        ui.input.consumeKeyboard();
+        if (key_activate) ui.input.consumeKeyboard();
         if (self.onChange) |cb| try cb(app);
     }
 

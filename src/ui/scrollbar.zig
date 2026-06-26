@@ -2,6 +2,7 @@ const std = @import("std");
 const math = @import("math");
 const layout = @import("layout");
 const gpu = @import("gpu");
+const window = @import("window");
 const DrawList = @import("render").DrawList;
 const Clip = @import("render").Clip;
 
@@ -183,14 +184,14 @@ pub fn route(ui: *UI) !void {
 
         for (geom.bars) |maybe_bar| {
             const bar = maybe_bar orelse continue;
-            if (ui.input.mouse_left_pressed and bar.thumb.contains(p))
+            if (ui.input.mouseButton(.left).pressed and bar.thumb.contains(p))
                 press_target = .{ .slot = slot, .bar = bar };
         }
 
         const s = ui.state.get(.scroll, el.id) orelse continue;
         if (s.drag_axis == .none) continue;
 
-        if (!ui.input.mouse_left_down) {
+        if (!ui.input.mouseButton(.left).down) {
             s.drag_axis = .none;
             continue;
         }
@@ -379,28 +380,22 @@ fn buildScrollYTree(u: *UI) !void {
     u.close();
 }
 
-fn wheelInput(delta: math.Vec2) @import("window").Input {
+fn wheelInput(delta: math.Vec2) window.Input {
     return .{
         .pos = .{ 50, 50 },
-        .mouse_left_down_now = false,
-        .mouse_right_down_now = false,
         .scroll = .{ .pixel = delta },
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
     };
 }
 
-fn scrollInput(scroll: @import("window").ScrollInput) @import("window").Input {
+fn scrollInput(scroll: window.ScrollInput) window.Input {
     return .{
         .pos = .{ 50, 50 },
-        .mouse_left_down_now = false,
-        .mouse_right_down_now = false,
         .scroll = scroll,
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -515,11 +510,13 @@ test "scrollbar drag moves scroll offset proportionally" {
 
     try ui.resolveWindow(.{
         .pos = .{ bar.thumb.x() + 1, thumb_top_y + 4 },
-        .mouse_left_down_now = true,
-        .mouse_right_down_now = false,
+        .mouse = blk: {
+            var buttons: [window.mouse_button_count]window.MouseButtonState = @splat(.{});
+            buttons[@intFromEnum(window.MouseButton.left)].down = true;
+            break :blk buttons;
+        },
         .scroll = .{},
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -535,11 +532,13 @@ test "scrollbar drag moves scroll offset proportionally" {
     const drag_target_y = thumb_top_y + 30;
     try ui.resolveWindow(.{
         .pos = .{ bar.thumb.x() + 1, drag_target_y },
-        .mouse_left_down_now = true,
-        .mouse_right_down_now = false,
+        .mouse = blk: {
+            var buttons: [window.mouse_button_count]window.MouseButtonState = @splat(.{});
+            buttons[@intFromEnum(window.MouseButton.left)].down = true;
+            break :blk buttons;
+        },
         .scroll = .{},
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -555,11 +554,8 @@ test "scrollbar drag moves scroll offset proportionally" {
 
     try ui.resolveWindow(.{
         .pos = .{ bar.thumb.x() + 1, drag_target_y },
-        .mouse_left_down_now = false,
-        .mouse_right_down_now = false,
         .scroll = .{},
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -600,11 +596,8 @@ test "wheel scroll over container updates offset" {
 
     try ui.resolveWindow(.{
         .pos = .{ 50, 50 },
-        .mouse_left_down_now = false,
-        .mouse_right_down_now = false,
         .scroll = .{ .pixel = .{ 0, 25 } },
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,

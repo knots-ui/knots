@@ -14,6 +14,7 @@ pub fn modsFromKeyState() window.Mods {
     return .{
         .shift = keyDown(win32.VK_SHIFT),
         .ctrl = keyDown(win32.VK_CONTROL),
+        .alt = keyDown(win32.VK_MENU),
         .super = keyDown(win32.VK_LWIN) or keyDown(win32.VK_RWIN),
     };
 }
@@ -46,7 +47,9 @@ pub fn onChar(owner: *window.Window, high_surrogate: *u16, w: u16) void {
         cp = @intCast(w);
     }
 
-    if (keyDown(win32.VK_CONTROL) or keyDown(win32.VK_LWIN) or keyDown(win32.VK_RWIN)) return;
+    const ctrl = keyDown(win32.VK_CONTROL);
+    const alt = keyDown(win32.VK_MENU);
+    if ((ctrl and !alt) or keyDown(win32.VK_LWIN) or keyDown(win32.VK_RWIN)) return;
     owner.pushChar(cp);
 }
 

@@ -36,6 +36,7 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
     const ui = &app.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);
+    _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     if (is_focused) {
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
@@ -43,6 +44,7 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
     }
 
     const is_hovered = ui.hovering(id);
+    if (is_hovered) ui.requestCursor(.text);
     const current_style = if (is_focused)
         self.focused_style
     else if (is_hovered)
@@ -57,14 +59,21 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
         .{ .rect = current_style.toRect(&ui.theme) }
     else
         .none;
-    return try ui.open(self.key, .{
+    const element_id = try ui.open(self.key, .{
         .width = self.width,
         .height = height,
         .overflow = .scroll_x,
         .interactive = true,
+        .focusable = true,
         .alignment = .center,
         .padding = self.padding,
     }, decoration);
+    try ui.setAccessibility(element_id, .{
+        .role = .text_input,
+        .name = self.placeholder,
+        .state = .{ .value_text = self.buf.items },
+    });
+    return element_id;
 }
 
 pub fn close(self: *const TextInput, app: *App) !void {
@@ -87,6 +96,14 @@ pub fn close(self: *const TextInput, app: *App) !void {
         const face = try ui.font.getFace(null);
         const shaped = try face.shapeWrapped(items, size.value * scale, 0);
         const line_h = shaped.line_height / scale;
+        const measured = try ui.state.getOrCreate(.measured, ui.allocator, id);
+        const scroll = try ui.state.getOrCreate(.scroll, ui.allocator, id);
+        const content_origin = [2]f32{
+            measured.box.x() + self.padding.left(),
+            measured.box.y() + self.padding.top(),
+        };
+
+        edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
 
         try edit.processInputLate(self.buf, false, ui, s, shaped, line_h);
         ui.input.consumeKeyboard();
@@ -94,6 +111,10 @@ pub fn close(self: *const TextInput, app: *App) !void {
         const sel_lo = @min(s.cursor, s.sel_anchor);
         const sel_hi = @max(s.cursor, s.sel_anchor);
         const has_sel = sel_lo != sel_hi;
+        const cursor_pos = util.posAtByte(shaped, s.cursor, scale);
+        const viewport_w = @max(0, measured.width - self.padding.left() - self.padding.right());
+        ensureCaretVisibleX(scroll, cursor_pos.x, viewport_w, shaped.width / scale);
+        const scroll_x = scroll.offset[0];
 
         if (has_sel) {
             const sel_color = blk: {
@@ -105,12 +126,11 @@ pub fn close(self: *const TextInput, app: *App) !void {
             const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
             defer ui.allocator.free(spans);
             for (spans, 0..) |sp, i| {
-                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
+                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x - scroll_x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
                 ui.close();
             }
         } else {
-            const p = util.posAtByte(shaped, s.cursor, scale);
-            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), p.x, p.y, 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
+            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), cursor_pos.x - scroll_x, cursor_pos.y, 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
             ui.close();
         }
 
@@ -125,4 +145,19 @@ pub fn close(self: *const TextInput, app: *App) !void {
     }
 
     ui.close();
+}
+
+fn ensureCaretVisibleX(scroll: *State.Scroll, caret_x: f32, viewport_w: f32, content_w: f32) void {
+    const max_off = @max(0, content_w - viewport_w);
+    if (viewport_w <= 0) {
+        scroll.offset[0] = std.math.clamp(scroll.offset[0], 0, max_off);
+        return;
+    }
+
+    if (caret_x < scroll.offset[0]) {
+        scroll.offset[0] = caret_x;
+    } else if (caret_x + 1 > scroll.offset[0] + viewport_w) {
+        scroll.offset[0] = caret_x + 1 - viewport_w;
+    }
+    scroll.offset[0] = std.math.clamp(scroll.offset[0], 0, max_off);
 }

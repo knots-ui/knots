@@ -1,10 +1,9 @@
 const std = @import("std");
 const gpu = @import("gpu");
-const GPUBackend = @import("gpu_backend").Backend;
+const gpu_impl = @import("gpu_impl");
 const text = @import("text");
 const Window = @import("window").Window;
 const math = @import("math");
-const builtin = @import("builtin");
 
 const DrawList = @import("DrawList.zig");
 const Clip = @import("Clip.zig");
@@ -20,37 +19,24 @@ const CURVE_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
 const BAND_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
 const INITIAL_TEX_HEIGHT: u32 = 256;
 
+pub const EndFrameError =
+    gpu.Context.SurfaceError ||
+    gpu.SurfaceReadback.Error ||
+    gpu.Context.BackendError;
+
+const FrameError = gpu.Context.SurfaceError || gpu.Context.BackendError;
+
 pub const Config = struct {
     present_mode: gpu.Context.PresentMode = .fifo,
-    gpu_backend: GPUBackend = .preferred(),
     clear_color: [4]f32 = .{ 0.0, 0.0, 0.0, 1.0 },
-
-    pub const ValidationError = error{
-        BackendNotAvailable,
-        UnsupportedPresentMode,
-    };
-
-    pub fn validate(cfg: Config) ValidationError!void {
-        if (!cfg.gpu_backend.isAvailable()) return error.BackendNotAvailable;
-
-        switch (builtin.os.tag) {
-            .macos => switch (cfg.present_mode) {
-                // Metal/MoltenVK only supports fifo and immediate.
-                .fifo_relaxed, .mailbox => return error.UnsupportedPresentMode,
-                .fifo, .immediate => {},
-            },
-            .emscripten => switch (cfg.present_mode) {
-                .fifo => {},
-                else => return error.UnsupportedPresentMode,
-            },
-            else => {},
-        }
-    }
 };
 
+pub const ResizeError = FrameError;
+pub const ReconfigureError = error{UnsupportedPresentMode} || FrameError;
+
 const TextureBinding = struct {
-    texture: gpu.Texture,
-    sampler: gpu.Sampler,
+    texture: gpu_impl.Texture,
+    sampler: gpu_impl.Sampler,
     width: u32,
     height: u32,
     format: gpu.Texture.Format,
@@ -58,7 +44,7 @@ const TextureBinding = struct {
 
 const TextureSlot = struct {
     binding: ?TextureBinding,
-    bg: ?gpu.BindGroup = null,
+    bg: ?gpu_impl.BindGroup = null,
     gen: u16,
 };
 
@@ -94,43 +80,48 @@ const PixelTextureCache = std.HashMapUnmanaged(
 allocator: std.mem.Allocator,
 window: Window,
 cfg: Config,
-ctx: gpu.Context,
-pipeline: gpu.Pipeline,
-instance_pipeline: gpu.Pipeline,
-text_pipeline: gpu.Pipeline,
-linear_pipeline: ?gpu.Pipeline = null,
-linear_instance_pipeline: ?gpu.Pipeline = null,
-linear_text_pipeline: ?gpu.Pipeline = null,
+ctx: *gpu_impl.Context,
+pipeline: gpu_impl.Pipeline,
+instance_pipeline: gpu_impl.Pipeline,
+text_pipeline: gpu_impl.Pipeline,
+linear_pipeline: ?gpu_impl.Pipeline = null,
+linear_instance_pipeline: ?gpu_impl.Pipeline = null,
+linear_text_pipeline: ?gpu_impl.Pipeline = null,
 
-atlas_texture_bg: gpu.BindGroup,
-text_curveband_bg: gpu.BindGroup,
+atlas_texture_bg: gpu_impl.BindGroup,
+text_curveband_bg: gpu_impl.BindGroup,
 
 frame_uploads: []FrameUploads,
-unit_index_buf: gpu.Buffer,
-atlas_texture: gpu.Texture,
-atlas_sampler: gpu.Sampler,
-linear_target: ?gpu.Texture = null,
-linear_target_bg: ?gpu.BindGroup = null,
-linear_sampler: ?gpu.Sampler = null,
+unit_index_buf: gpu_impl.Buffer,
+atlas_texture: gpu_impl.Texture,
+atlas_sampler: gpu_impl.Sampler,
+linear_target: ?gpu_impl.Texture = null,
+linear_target_bg: ?gpu_impl.BindGroup = null,
+linear_sampler: ?gpu_impl.Sampler = null,
 linear_target_width: u32 = 0,
 linear_target_height: u32 = 0,
-curve_texture: gpu.Texture,
-band_texture: gpu.Texture,
+curve_texture: gpu_impl.Texture,
+band_texture: gpu_impl.Texture,
 curve_tex_height: u32,
 band_tex_height: u32,
-frame: gpu.Frame,
+frame: gpu_impl.Frame,
 texture_slots: std.ArrayList(TextureSlot),
 free_slot_indices: std.ArrayList(u32),
 pixel_texture_cache: PixelTextureCache,
 pixel_texture_scratch: std.ArrayList(PixelTextureKey),
 pixel_texture_frame: u32,
 draw_list: DrawList,
+readback: ReadbackState,
 
 const Renderer = @This();
 
-pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer {
-    try cfg.validate();
+const ReadbackState = union(enum) {
+    idle,
+    requested: std.mem.Allocator,
+    ready: gpu.SurfaceReadback,
+};
 
+pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer {
     const fb = window.getFramebufferSize();
     const ctx_cfg = gpu.Context.Config{
         .window_width = fb.width,
@@ -138,40 +129,42 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
         .present_mode = cfg.present_mode,
     };
 
-    const ctx = try cfg.gpu_backend.init(allocator, window.getWindowHandle(), ctx_cfg);
+    const ctx = try allocator.create(gpu_impl.Context);
+    errdefer allocator.destroy(ctx);
+    ctx.* = try gpu_impl.Context.init(allocator, window.getWindowHandle(), ctx_cfg);
     errdefer ctx.deinit();
 
     const srgb_surface = ctx.surfaceIsSrgb();
 
-    const pipeline = try ctx.createPipeline(pipelines.primitivesDesc(cfg.gpu_backend, .vertex, srgb_surface));
+    var pipeline = try ctx.createPipeline(pipelines.primitivesDesc(.vertex, srgb_surface));
     errdefer pipeline.deinit();
 
-    const instance_pipeline = try ctx.createPipeline(pipelines.primitivesDesc(cfg.gpu_backend, .instance, srgb_surface));
+    var instance_pipeline = try ctx.createPipeline(pipelines.primitivesDesc(.instance, srgb_surface));
     errdefer instance_pipeline.deinit();
 
-    const text_pipeline = try ctx.createPipeline(pipelines.slugDesc(cfg.gpu_backend, srgb_surface));
+    var text_pipeline = try ctx.createPipeline(pipelines.slugDesc(srgb_surface));
     errdefer text_pipeline.deinit();
 
-    const use_linear_target = cfg.gpu_backend == .wgpu and !srgb_surface;
-    const linear_pipeline: ?gpu.Pipeline = if (use_linear_target)
-        try ctx.createPipeline(pipelines.linearTargetPrimitivesDesc(cfg.gpu_backend, .vertex))
+    const use_linear_target = gpu.Backend == .wgpu and !srgb_surface;
+    var linear_pipeline: ?gpu_impl.Pipeline = if (use_linear_target)
+        try ctx.createPipeline(pipelines.linearTargetPrimitivesDesc(.vertex))
     else
         null;
-    errdefer if (linear_pipeline) |p| p.deinit();
+    errdefer if (linear_pipeline) |*p| p.deinit();
 
-    const linear_instance_pipeline: ?gpu.Pipeline = if (use_linear_target)
-        try ctx.createPipeline(pipelines.linearTargetPrimitivesDesc(cfg.gpu_backend, .instance))
+    var linear_instance_pipeline: ?gpu_impl.Pipeline = if (use_linear_target)
+        try ctx.createPipeline(pipelines.linearTargetPrimitivesDesc(.instance))
     else
         null;
-    errdefer if (linear_instance_pipeline) |p| p.deinit();
+    errdefer if (linear_instance_pipeline) |*p| p.deinit();
 
-    const linear_text_pipeline: ?gpu.Pipeline = if (use_linear_target)
-        try ctx.createPipeline(pipelines.linearTargetSlugDesc(cfg.gpu_backend))
+    var linear_text_pipeline: ?gpu_impl.Pipeline = if (use_linear_target)
+        try ctx.createPipeline(pipelines.linearTargetSlugDesc())
     else
         null;
-    errdefer if (linear_text_pipeline) |p| p.deinit();
+    errdefer if (linear_text_pipeline) |*p| p.deinit();
 
-    const atlas_texture = try ctx.createTexture(.{
+    var atlas_texture = try ctx.createTexture(.{
         .width = 1,
         .height = 1,
         .format = .r8,
@@ -179,22 +172,22 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer atlas_texture.deinit();
 
-    const atlas_sampler = try ctx.createSampler(.{
+    var atlas_sampler = try ctx.createSampler(.{
         .mag_filter = .nearest,
         .min_filter = .nearest,
     });
     errdefer atlas_sampler.deinit();
 
-    const linear_sampler: ?gpu.Sampler = if (use_linear_target)
+    var linear_sampler: ?gpu_impl.Sampler = if (use_linear_target)
         try ctx.createSampler(.{ .mag_filter = .nearest, .min_filter = .nearest })
     else
         null;
-    errdefer if (linear_sampler) |s| s.deinit();
+    errdefer if (linear_sampler) |*s| s.deinit();
 
     const dummy_pixel = [_]u8{0};
     try atlas_texture.write(&dummy_pixel, 1, 0, 0, 1, 1, null);
 
-    const atlas_texture_bg = try ctx.createBindGroup(.{
+    var atlas_texture_bg = try ctx.createBindGroup(.{
         .label = "atlas_texture_bg",
         .pipeline = &pipeline,
         .layout_index = 1,
@@ -205,7 +198,7 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer atlas_texture_bg.deinit();
 
-    const curve_texture = try ctx.createTexture(.{
+    var curve_texture = try ctx.createTexture(.{
         .width = CURVE_TEX_WIDTH,
         .height = INITIAL_TEX_HEIGHT,
         .format = .rgba32f,
@@ -213,7 +206,7 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer curve_texture.deinit();
 
-    const band_texture = try ctx.createTexture(.{
+    var band_texture = try ctx.createTexture(.{
         .width = BAND_TEX_WIDTH,
         .height = INITIAL_TEX_HEIGHT,
         .format = .rgba32u,
@@ -221,7 +214,7 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer band_texture.deinit();
 
-    const text_curveband_bg = try ctx.createBindGroup(.{
+    var text_curveband_bg = try ctx.createBindGroup(.{
         .label = "text_curveband_bg",
         .pipeline = &text_pipeline,
         .layout_index = 1,
@@ -232,7 +225,7 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     });
     errdefer text_curveband_bg.deinit();
 
-    const unit_index_buf = try ctx.createBuffer(6 * @sizeOf(u32), .{ .index = true, .copy_dst = true });
+    var unit_index_buf = try ctx.createBuffer(6 * @sizeOf(u32), .{ .index = true, .copy_dst = true });
     errdefer unit_index_buf.deinit();
     const unit_indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
     unit_index_buf.load(u32, &unit_indices);
@@ -245,7 +238,7 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
     var upload_count: usize = 0;
     errdefer for (uploads[0..upload_count]) |*u| u.deinit();
     for (uploads) |*u| {
-        u.* = try .init(&ctx, &pipeline, &instance_pipeline, &text_pipeline);
+        u.* = try .init(ctx, &pipeline, &instance_pipeline, &text_pipeline);
         upload_count += 1;
     }
 
@@ -278,10 +271,15 @@ pub fn init(allocator: std.mem.Allocator, window: Window, cfg: Config) !Renderer
         .pixel_texture_cache = .empty,
         .pixel_texture_scratch = .empty,
         .pixel_texture_frame = 0,
+        .readback = .idle,
     };
 }
 
 pub fn deinit(self: *Renderer) void {
+    switch (self.readback) {
+        .ready => |*readback| readback.deinit(),
+        else => {},
+    }
     self.draw_list.deinit();
     self.frame.deinit();
 
@@ -291,7 +289,7 @@ pub fn deinit(self: *Renderer) void {
     self.allocator.free(self.frame_uploads);
 
     for (self.texture_slots.items) |*slot| {
-        if (slot.bg) |bg| bg.deinit();
+        if (slot.bg) |*bg| bg.deinit();
         if (slot.binding) |*reg| {
             reg.texture.deinit();
             reg.sampler.deinit();
@@ -304,24 +302,25 @@ pub fn deinit(self: *Renderer) void {
     self.pipeline.deinit();
     self.instance_pipeline.deinit();
     self.text_pipeline.deinit();
-    if (self.linear_pipeline) |p| p.deinit();
-    if (self.linear_instance_pipeline) |p| p.deinit();
-    if (self.linear_text_pipeline) |p| p.deinit();
-    if (self.linear_target_bg) |bg| bg.deinit();
-    if (self.linear_target) |t| t.deinit();
-    if (self.linear_sampler) |s| s.deinit();
+    if (self.linear_pipeline) |*p| p.deinit();
+    if (self.linear_instance_pipeline) |*p| p.deinit();
+    if (self.linear_text_pipeline) |*p| p.deinit();
+    if (self.linear_target_bg) |*bg| bg.deinit();
+    if (self.linear_target) |*t| t.deinit();
+    if (self.linear_sampler) |*s| s.deinit();
     self.unit_index_buf.deinit();
     self.atlas_texture.deinit();
     self.atlas_sampler.deinit();
     self.curve_texture.deinit();
     self.band_texture.deinit();
     self.ctx.deinit();
+    self.allocator.destroy(self.ctx);
 }
 
 pub fn createTexture(self: *Renderer, width: u32, height: u32, format: gpu.Texture.Format) !u32 {
-    const sampler = try self.ctx.createSampler(.{ .mag_filter = .linear, .min_filter = .linear });
+    var sampler = try self.ctx.createSampler(.{ .mag_filter = .linear, .min_filter = .linear });
     errdefer sampler.deinit();
-    const texture = try self.ctx.createTexture(.{
+    var texture = try self.ctx.createTexture(.{
         .width = width,
         .height = height,
         .format = format,
@@ -363,7 +362,7 @@ pub fn destroyTexture(self: *Renderer, id: u32) !void {
     if ((id >> TEX_INDEX_BITS) != slot.gen) return error.InvalidTextureId;
     if (slot.binding) |*reg| {
         try self.free_slot_indices.ensureUnusedCapacity(self.allocator, 1);
-        if (slot.bg) |bg| bg.deinit();
+        if (slot.bg) |*bg| bg.deinit();
         slot.bg = null;
         reg.texture.deinit();
         reg.sampler.deinit();
@@ -382,6 +381,7 @@ pub fn textureFromPixels(
     format: gpu.Texture.Format,
     bytes_per_row: ?u32,
     version: u64,
+    force_upload: bool,
 ) !u32 {
     const required = try requiredTextureBytes(width, height, bytesPerGpuPixel(format), bytes_per_row);
     if (data.len < required) return error.InvalidTextureWrite;
@@ -411,6 +411,7 @@ pub fn textureFromPixels(
     }
 
     const needs_upload =
+        force_upload or
         needs_recreate or
         entry.data_ptr != data_ptr or
         entry.len != data.len or
@@ -481,24 +482,33 @@ fn requiredTextureBytes(width: u32, height: u32, bpp: usize, bytes_per_row: ?u32
         return error.InvalidTextureWrite;
 }
 
-pub fn resize(self: *Renderer, width: u32, height: u32) !void {
+pub fn resize(self: *Renderer, width: u32, height: u32) ResizeError!void {
     if (width == self.ctx.cfg.window_width and height == self.ctx.cfg.window_height) return;
     self.frame.prepareResize();
-    try self.ctx.resize(width, height);
+    self.ctx.resize(width, height) catch |err| return mapFrameError(err);
 }
 
-/// Tears down all GPU state and re-creates the renderer with the new config.
-/// All textures registered via `createTexture` are dropped and their ids invalidated.
-pub fn reconfigure(self: *Renderer, new_cfg: Config) !void {
+/// Re-creates GPU state with the new config. The old renderer remains usable if
+/// replacement initialization fails. Registered texture ids are invalidated only
+/// after the replacement has been created successfully.
+pub fn reconfigure(self: *Renderer, new_cfg: Config) ReconfigureError!void {
     if (std.meta.eql(new_cfg, self.cfg)) return;
-    try new_cfg.validate();
 
-    const allocator = self.allocator;
-    const window = self.window;
+    if (new_cfg.present_mode != self.cfg.present_mode) {
+        self.frame.waitForCompletion() catch |err| return mapFrameError(err);
+        self.frame.prepareResize();
+        var ctx_cfg = self.ctx.cfg;
+        ctx_cfg.present_mode = new_cfg.present_mode;
+        self.ctx.reconfigure(ctx_cfg) catch |err| switch (err) {
+            error.UnsupportedPresentMode => return error.UnsupportedPresentMode,
+            else => return mapFrameError(err),
+        };
+    }
+    self.cfg = new_cfg;
+}
 
-    try self.frame.waitForCompletion();
-    self.deinit();
-    self.* = try Renderer.init(allocator, window, new_cfg);
+pub fn supportedPresentModes(self: *const Renderer) gpu.Context.PresentModes {
+    return self.ctx.supportedPresentModes();
 }
 
 pub fn beginFrame(self: *Renderer) *DrawList {
@@ -506,10 +516,76 @@ pub fn beginFrame(self: *Renderer) *DrawList {
     return &self.draw_list;
 }
 
-pub fn endFrame(self: *Renderer, glyph_builder: *text.GlyphBuilder, content_scale: f32) !void {
-    try self.draw(&self.draw_list, glyph_builder, content_scale);
-    try self.sweepPixelTextureCache();
+pub fn requestReadback(self: *Renderer, allocator: std.mem.Allocator) !void {
+    switch (self.readback) {
+        .idle => self.readback = .{ .requested = allocator },
+        else => return error.ReadbackPending,
+    }
+}
+
+pub fn takeReadback(self: *Renderer) ?gpu.SurfaceReadback {
+    return switch (self.readback) {
+        .ready => |readback| blk: {
+            self.readback = .idle;
+            break :blk readback;
+        },
+        else => null,
+    };
+}
+
+pub fn endFrame(self: *Renderer, glyph_builder: *text.GlyphBuilder, content_scale: f32) EndFrameError!void {
+    self.draw(&self.draw_list, glyph_builder, content_scale) catch |err| return mapEndFrameError(err);
+    self.sweepPixelTextureCache() catch |err| return mapEndFrameError(err);
     self.pixel_texture_frame +%= 1;
+}
+
+fn mapEndFrameError(err: anyerror) EndFrameError {
+    return switch (err) {
+        error.SurfaceReadbackUnsupported => error.SurfaceReadbackUnsupported,
+        error.SurfaceReadbackUnavailable => error.SurfaceReadbackUnavailable,
+        error.SurfaceReadbackTooLarge => error.SurfaceReadbackTooLarge,
+        error.SurfaceReadbackMapFailed,
+        error.SurfaceReadbackFailed,
+        => error.SurfaceReadbackFailed,
+
+        else => mapFrameError(err),
+    };
+}
+
+fn mapFrameError(err: anyerror) FrameError {
+    return switch (err) {
+        error.SurfaceUnavailable,
+        error.OutOfDateKHR,
+        error.CurrentTextureOutdated,
+        error.CurrentTextureTimeout,
+        error.Timeout,
+        error.NotReady,
+        => error.SurfaceUnavailable,
+
+        error.SurfaceLostKHR,
+        error.CurrentTextureLost,
+        error.FullScreenExclusiveModeLostEXT,
+        error.SwapchainFormatChanged,
+        => error.SurfaceLost,
+
+        else => mapBackendError(err),
+    };
+}
+
+fn mapBackendError(err: anyerror) gpu.Context.BackendError {
+    return switch (err) {
+        error.OutOfMemory,
+        error.OutOfHostMemory,
+        error.OutOfDeviceMemory,
+        error.CurrentTextureOutOfMemory,
+        => error.OutOfMemory,
+
+        error.DeviceLost,
+        error.CurrentTextureDeviceLost,
+        => error.DeviceLost,
+
+        else => error.BackendFailure,
+    };
 }
 
 fn sweepPixelTextureCache(self: *Renderer) !void {
@@ -549,7 +625,7 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     if (!has_work) {
         var pass = try frame_ctx.beginRenderPass(.{ .color_attachment = .{ .clear_color = self.cfg.clear_color } });
         pass.end();
-        try frame_ctx.submit();
+        try self.submitFrame(&frame_ctx);
         return;
     }
 
@@ -593,7 +669,16 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     pass.end();
 
     if (use_linear_target) try self.compositeLinearTarget(&frame_ctx, upload, content_scale);
-    try frame_ctx.submit();
+    try self.submitFrame(&frame_ctx);
+}
+
+fn submitFrame(self: *Renderer, frame: *gpu_impl.Frame.Context) !void {
+    const allocator = switch (self.readback) {
+        .requested => |allocator| allocator,
+        else => return frame.submit(),
+    };
+    self.readback = .idle;
+    self.readback = .{ .ready = try frame.submitReadback(allocator) };
 }
 
 fn updateViewport(self: *Renderer, uploads: *FrameUploads, content_scale: f32) void {
@@ -625,7 +710,7 @@ fn uploadFrameData(self: *Renderer, uploads: *FrameUploads, dl: *const DrawList)
     try ensureAndLoad(&uploads.index_buf, u32, dl.indices.items);
     try ensureAndLoad(&uploads.text_vertex_buf, gpu.SlugVertex, tverts);
     try ensureAndLoad(&uploads.text_index_buf, u32, dl.text_indices.items);
-    try uploads.ensureClipNodeCapacity(&self.ctx, &self.pipeline, &self.instance_pipeline, &self.text_pipeline, clip_nodes.len * @sizeOf(Clip.Node));
+    try uploads.ensureClipNodeCapacity(self.ctx, &self.pipeline, &self.instance_pipeline, &self.text_pipeline, clip_nodes.len * @sizeOf(Clip.Node));
     uploads.clip_node_buf.load(Clip.Node, clip_nodes);
     return .{
         .verts_bytes = verts.len * @sizeOf(gpu.Vertex),
@@ -636,7 +721,7 @@ fn uploadFrameData(self: *Renderer, uploads: *FrameUploads, dl: *const DrawList)
     };
 }
 
-fn bindKind(self: *Renderer, pass: *gpu.RenderPass, uploads: *FrameUploads, kind: DrawList.CommandKind, sizes: FrameSizes, linear_target: bool) void {
+fn bindKind(self: *Renderer, pass: *gpu_impl.RenderPass, uploads: *FrameUploads, kind: DrawList.CommandKind, sizes: FrameSizes, linear_target: bool) void {
     switch (kind) {
         .vertex => {
             const pipeline = if (linear_target) &self.linear_pipeline.? else &self.pipeline;
@@ -668,7 +753,7 @@ fn bindKind(self: *Renderer, pass: *gpu.RenderPass, uploads: *FrameUploads, kind
     }
 }
 
-fn bindTextureForCommand(self: *Renderer, pass: *gpu.RenderPass, texture: ?u32) !void {
+fn bindTextureForCommand(self: *Renderer, pass: *gpu_impl.RenderPass, texture: ?u32) !void {
     if (texture) |tex_id| {
         const idx = tex_id & TEX_INDEX_MASK;
         if (idx >= self.texture_slots.items.len) {
@@ -693,9 +778,9 @@ fn ensureLinearTarget(self: *Renderer) !void {
     if (self.linear_target != null and self.linear_target_width == w and self.linear_target_height == h) return;
 
     try self.frame.waitForCompletion();
-    if (self.linear_target_bg) |bg| bg.deinit();
+    if (self.linear_target_bg) |*bg| bg.deinit();
     self.linear_target_bg = null;
-    if (self.linear_target) |t| t.deinit();
+    if (self.linear_target) |*t| t.deinit();
     self.linear_target = null;
 
     self.linear_target = try self.ctx.createTexture(.{
@@ -719,7 +804,7 @@ fn ensureLinearTarget(self: *Renderer) !void {
     });
 }
 
-fn compositeLinearTarget(self: *Renderer, frame_ctx: *gpu.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
+fn compositeLinearTarget(self: *Renderer, frame_ctx: *gpu_impl.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
     const logical_w: f32 = @as(f32, @floatFromInt(self.ctx.cfg.window_width)) / content_scale;
     const logical_h: f32 = @as(f32, @floatFromInt(self.ctx.cfg.window_height)) / content_scale;
     const inst = gpu.Instance{
@@ -747,7 +832,7 @@ fn compositeLinearTarget(self: *Renderer, frame_ctx: *gpu.Frame.Context, uploads
     pass.end();
 }
 
-fn getOrCreateTextureBg(self: *Renderer, slot: *TextureSlot) !gpu.BindGroup {
+fn getOrCreateTextureBg(self: *Renderer, slot: *TextureSlot) !gpu_impl.BindGroup {
     if (slot.bg) |bg| return bg;
     const reg = &slot.binding.?;
     const bg = try self.ctx.createBindGroup(.{
@@ -763,7 +848,7 @@ fn getOrCreateTextureBg(self: *Renderer, slot: *TextureSlot) !gpu.BindGroup {
     return bg;
 }
 
-fn applyClip(pass: *gpu.RenderPass, clip_rect: ?math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) void {
+fn applyClip(pass: *gpu_impl.RenderPass, clip_rect: ?math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) void {
     const vw: f32 = @floatFromInt(phys_w);
     const vh: f32 = @floatFromInt(phys_h);
     if (sanitizeClip(clip_rect)) |clip| {
@@ -777,7 +862,7 @@ fn applyClip(pass: *gpu.RenderPass, clip_rect: ?math.Rect, content_scale: f32, p
     }
 }
 
-fn dispatchCommand(pass: *gpu.RenderPass, cmd: DrawList.Command) void {
+fn dispatchCommand(pass: *gpu_impl.RenderPass, cmd: DrawList.Command) void {
     switch (cmd.kind) {
         .vertex => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
         .instance => pass.drawIndexed(6, cmd.count, 0, 0, cmd.offset),
@@ -789,35 +874,70 @@ fn syncGlyphBuilder(self: *Renderer, gb: *text.GlyphBuilder) !void {
     const needed_curve_h = gb.curveTextureHeight();
     const needed_band_h = gb.bandTextureHeight();
 
-    var curveband_dirty = false;
+    var new_curve_texture: ?gpu_impl.Texture = null;
+    var new_band_texture: ?gpu_impl.Texture = null;
+    var new_curve_h = self.curve_tex_height;
+    var new_band_h = self.band_tex_height;
+    var new_curveband_bg: ?gpu_impl.BindGroup = null;
+    errdefer if (new_curve_texture) |*t| t.deinit();
+    errdefer if (new_band_texture) |*t| t.deinit();
+    errdefer if (new_curveband_bg) |*bg| bg.deinit();
 
     if (needed_curve_h > self.curve_tex_height) {
-        try self.frame.waitForCompletion();
-        self.curve_texture.deinit();
-        const new_h = std.math.ceilPowerOfTwo(u32, needed_curve_h) catch needed_curve_h;
-        self.curve_texture = try self.ctx.createTexture(.{
+        new_curve_h = std.math.ceilPowerOfTwo(u32, needed_curve_h) catch needed_curve_h;
+        new_curve_texture = try self.ctx.createTexture(.{
             .width = CURVE_TEX_WIDTH,
-            .height = new_h,
+            .height = new_curve_h,
             .format = .rgba32f,
             .usage = .{ .texture_binding = true, .copy_dst = true },
         });
-        self.curve_tex_height = new_h;
-        gb.markCurveDirtyTo(needed_curve_h);
-        curveband_dirty = true;
     }
     if (needed_band_h > self.band_tex_height) {
-        try self.frame.waitForCompletion();
-        self.band_texture.deinit();
-        const new_h = std.math.ceilPowerOfTwo(u32, needed_band_h) catch needed_band_h;
-        self.band_texture = try self.ctx.createTexture(.{
+        new_band_h = std.math.ceilPowerOfTwo(u32, needed_band_h) catch needed_band_h;
+        new_band_texture = try self.ctx.createTexture(.{
             .width = BAND_TEX_WIDTH,
-            .height = new_h,
+            .height = new_band_h,
             .format = .rgba32u,
             .usage = .{ .texture_binding = true, .copy_dst = true },
         });
-        self.band_tex_height = new_h;
-        gb.markBandDirtyTo(needed_band_h);
-        curveband_dirty = true;
+    }
+
+    if (new_curve_texture != null or new_band_texture != null) {
+        const curve_for_bg = if (new_curve_texture) |*t| t else &self.curve_texture;
+        const band_for_bg = if (new_band_texture) |*t| t else &self.band_texture;
+        new_curveband_bg = try self.ctx.createBindGroup(.{
+            .label = "text_curveband_bg",
+            .pipeline = &self.text_pipeline,
+            .layout_index = 1,
+            .entries = &.{
+                .{ .binding = 0, .resource = .{ .texture_view = curve_for_bg } },
+                .{ .binding = 1, .resource = .{ .texture_view = band_for_bg } },
+            },
+        });
+
+        try self.frame.waitForCompletion();
+
+        var old_curveband_bg = self.text_curveband_bg;
+        self.text_curveband_bg = new_curveband_bg.?;
+        new_curveband_bg = null;
+        old_curveband_bg.deinit();
+
+        if (new_curve_texture) |tex| {
+            var old = self.curve_texture;
+            self.curve_texture = tex;
+            self.curve_tex_height = new_curve_h;
+            new_curve_texture = null;
+            old.deinit();
+            gb.markCurveDirtyTo(needed_curve_h);
+        }
+        if (new_band_texture) |tex| {
+            var old = self.band_texture;
+            self.band_texture = tex;
+            self.band_tex_height = new_band_h;
+            new_band_texture = null;
+            old.deinit();
+            gb.markBandDirtyTo(needed_band_h);
+        }
     }
 
     if (gb.curveDirtyRange()) |r| {
@@ -843,25 +963,12 @@ fn syncGlyphBuilder(self: *Renderer, gb: *text.GlyphBuilder) !void {
         );
     }
     gb.markClean();
-
-    if (curveband_dirty) {
-        self.text_curveband_bg.deinit();
-        self.text_curveband_bg = try self.ctx.createBindGroup(.{
-            .label = "text_curveband_bg",
-            .pipeline = &self.text_pipeline,
-            .layout_index = 1,
-            .entries = &.{
-                .{ .binding = 0, .resource = .{ .texture_view = &self.curve_texture } },
-                .{ .binding = 1, .resource = .{ .texture_view = &self.band_texture } },
-            },
-        });
-    }
 }
 
 fn uploadDirtyRows(
     comptime T: type,
     allocator: std.mem.Allocator,
-    texture: *gpu.Texture,
+    texture: *gpu_impl.Texture,
     items: []const T,
     width: u32,
     y0: u32,
@@ -896,14 +1003,14 @@ fn sanitizeClip(c: ?math.Rect) ?[4]f32 {
     return v;
 }
 
-fn ensureBufferCapacity(buf: *gpu.Buffer, required: usize) !void {
+fn ensureBufferCapacity(buf: *gpu_impl.Buffer, required: usize) !void {
     const current_size = buf.getSize();
     if (required <= current_size) return;
     const new_size = @max(required, current_size + current_size / 2);
     try buf.resize(new_size);
 }
 
-fn ensureAndLoad(buf: *gpu.Buffer, comptime T: type, items: []const T) !void {
+fn ensureAndLoad(buf: *gpu_impl.Buffer, comptime T: type, items: []const T) !void {
     if (items.len == 0) return;
     try ensureBufferCapacity(buf, items.len * @sizeOf(T));
     buf.load(T, items);

@@ -19,6 +19,9 @@ pub const mouse_methods = .{
     .{ "rightMouseDown:", mouseRightDown },
     .{ "rightMouseUp:", mouseRightUp },
     .{ "rightMouseDragged:", rightMouseDragged },
+    .{ "otherMouseDown:", otherMouseDown },
+    .{ "otherMouseUp:", otherMouseUp },
+    .{ "otherMouseDragged:", otherMouseDragged },
     .{ "scrollWheel:", scrollWheel },
 };
 
@@ -35,10 +38,12 @@ pub const drag_methods = .{
 
 pub const delegate_methods = .{
     .{ "windowShouldClose:", windowShouldClose },
-    .{ "windowWillStartLiveResize:", windowWillStartLiveResize },
+    .{ "windowDidBecomeKey:", windowDidBecomeKey },
+    .{ "windowDidResignKey:", windowDidResignKey },
+    .{ "windowDidEnterFullScreen:", windowDidEnterFullScreen },
+    .{ "windowDidExitFullScreen:", windowDidExitFullScreen },
     .{ "windowDidResize:", windowDidResize },
     .{ "windowDidEndLiveResize:", windowDidEndLiveResize },
-    .{ "liveResizeTick:", liveResizeTick },
 };
 
 fn acceptsFirstResponder(_: c.id, _: c.SEL) callconv(.c) c.BOOL {
@@ -92,6 +97,37 @@ fn rightMouseDragged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     owner.setCursorPos(eventPos(self, event_id));
 }
 
+fn otherMouseDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    const event = objc.Object.fromId(event_id);
+    const number = event.msgSend(c_long, "buttonNumber", .{});
+    const button: window.MouseButton = switch (number) {
+        2 => .middle,
+        3 => .back,
+        4 => .forward,
+        else => return,
+    };
+    owner.setMouseButton(button, true, eventPos(self, event_id));
+}
+
+fn otherMouseUp(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    const event = objc.Object.fromId(event_id);
+    const number = event.msgSend(c_long, "buttonNumber", .{});
+    const button: window.MouseButton = switch (number) {
+        2 => .middle,
+        3 => .back,
+        4 => .forward,
+        else => return,
+    };
+    owner.setMouseButton(button, false, eventPos(self, event_id));
+}
+
+fn otherMouseDragged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    owner.setCursorPos(eventPos(self, event_id));
+}
+
 fn scrollWheel(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
     owner.setCursorPos(eventPos(self, event_id));
@@ -111,11 +147,17 @@ fn keyDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const kc = event.msgSend(u16, "keyCode", .{});
     const flags = event.msgSend(c_ulong, "modifierFlags", .{});
     const key = keymap.translateKeyCode(kc);
-    owner.pushKey(@intFromEnum(key), .press, modsFromFlags(flags));
+    const mods = modsFromFlags(flags);
+    owner.pushKey(@intFromEnum(key), .press, mods);
 
     const skip_chars = (flags & ak.NSEventModifierFlagCommand) != 0 or
         (flags & ak.NSEventModifierFlagControl) != 0;
     if (skip_chars) return;
+
+    const view = objc.Object.fromId(self);
+    const input_context = view.msgSend(objc.Object, "inputContext", .{});
+    if (input_context.value != null and input_context.msgSend(bool, "handleEvent:", .{event})) return;
+
     const characters = event.msgSend(objc.Object, "characters", .{});
     if (characters.value == null) return;
     const utf8: [*:0]const u8 = characters.msgSend([*:0]const u8, "UTF8String", .{});
@@ -188,32 +230,34 @@ fn windowShouldClose(self: c.id, _: c.SEL, _: c.id) callconv(.c) c.BOOL {
     return ak.boolParam(false);
 }
 
-fn windowWillStartLiveResize(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+fn windowDidBecomeKey(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
-    if (owner.backend.live_resize_timer) |old| {
-        old.msgSend(void, "invalidate", .{});
-        old.msgSend(void, "release", .{});
-        owner.backend.live_resize_timer = null;
-    }
+    owner.setFocused(true);
+    const NSEvent = objc.getClass("NSEvent").?;
+    owner.setMods(modsFromFlags(NSEvent.msgSend(c_ulong, "modifierFlags", .{})));
+}
 
-    const NSTimer = objc.getClass("NSTimer").?;
-    const NSRunLoop = objc.getClass("NSRunLoop").?;
-    const selector = c.sel_registerName("liveResizeTick:").?;
-    const timer = NSTimer.msgSend(
-        objc.Object,
-        "timerWithTimeInterval:target:selector:userInfo:repeats:",
-        .{
-            window.live_resize_tick_seconds,
-            objc.Object.fromId(self),
-            selector,
-            @as(c.id, null),
-            ak.boolParam(true),
-        },
-    );
-    const run_loop = NSRunLoop.msgSend(objc.Object, "currentRunLoop", .{});
-    run_loop.msgSend(void, "addTimer:forMode:", .{ timer, ak.eventTrackingRunLoopMode() });
-    _ = timer.msgSend(objc.Object, "retain", .{});
-    owner.backend.live_resize_timer = timer;
+fn windowDidResignKey(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    owner.setFocused(false);
+}
+
+fn windowDidEnterFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    owner.backend.display_mode = .fullscreen;
+    if (!owner.backend.display_mode_transition) owner.backend.desired_display_mode = .fullscreen;
+    owner.backend.display_mode_transition = false;
+    owner.requestFrame();
+    owner.backend.reconcileDisplayMode();
+}
+
+fn windowDidExitFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    owner.backend.display_mode = .windowed;
+    if (!owner.backend.display_mode_transition) owner.backend.desired_display_mode = .windowed;
+    owner.backend.display_mode_transition = false;
+    owner.requestFrame();
+    owner.backend.reconcileDisplayMode();
 }
 
 fn windowDidResize(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
@@ -224,25 +268,15 @@ fn windowDidResize(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
 
 fn windowDidEndLiveResize(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
-    if (owner.backend.live_resize_timer) |timer| {
-        timer.msgSend(void, "invalidate", .{});
-        timer.msgSend(void, "release", .{});
-        owner.backend.live_resize_timer = null;
-    }
     owner.markResized();
-    owner.stepFrame();
-}
-
-fn liveResizeTick(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
-    const owner = ak.unwrapOwner(self) orelse return;
-    if (!owner.resized) return;
-    owner.stepFrame();
+    owner.requestFrame();
 }
 
 fn modsFromFlags(flags: c_ulong) window.Mods {
     return .{
         .shift = (flags & ak.NSEventModifierFlagShift) != 0,
         .ctrl = (flags & ak.NSEventModifierFlagControl) != 0,
+        .alt = (flags & ak.NSEventModifierFlagOption) != 0,
         .super = (flags & ak.NSEventModifierFlagCommand) != 0,
     };
 }

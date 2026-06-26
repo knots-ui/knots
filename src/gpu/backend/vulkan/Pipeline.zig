@@ -1,7 +1,8 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
 const Context = @import("Context.zig");
+const Texture = @import("Texture.zig");
+const CommonPipeline = @import("gpu").Pipeline;
 
 const Pipeline = @This();
 
@@ -9,11 +10,10 @@ allocator: std.mem.Allocator,
 pipeline: vk.Pipeline,
 pipeline_layout: vk.PipelineLayout,
 descriptor_set_layouts: []vk.DescriptorSetLayout,
-ctx: *Context,
 vkd: vk.DeviceWrapper,
 device: vk.Device,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
+pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: CommonPipeline.Desc) !Pipeline {
     const vkd = ctx.vkd;
     const device = ctx.device;
 
@@ -139,8 +139,18 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
     @memcpy(fs_entry_buf[0..spirv.fs_entry.len], spirv.fs_entry);
     fs_entry_buf[spirv.fs_entry.len] = 0;
 
+    const color_format = if (desc.color_target.format) |format| Texture.toVkFormat(format) else ctx.swapchain_format;
+    const rendering_info = vk.PipelineRenderingCreateInfo{
+        .view_mask = 0,
+        .color_attachment_count = 1,
+        .p_color_attachment_formats = &[_]vk.Format{color_format},
+        .depth_attachment_format = .undefined,
+        .stencil_attachment_format = .undefined,
+    };
+
     var vk_pipeline: [1]vk.Pipeline = undefined;
     _ = try vkd.createGraphicsPipelines(device, .null_handle, &.{.{
+        .p_next = &rendering_info,
         .stage_count = 2,
         .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
             .{ .stage = .{ .vertex_bit = true }, .module = vert_module, .p_name = @ptrCast(&vs_entry_buf) },
@@ -186,42 +196,33 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
             .p_dynamic_states = &[_]vk.DynamicState{ .viewport, .scissor },
         },
         .layout = pipeline_layout,
-        .render_pass = ctx.render_pass,
+        .render_pass = .null_handle,
         .subpass = 0,
         .base_pipeline_index = -1,
     }}, null, vk_pipeline[0..1]);
 
-    const self = try allocator.create(Pipeline);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .pipeline = vk_pipeline[0],
         .pipeline_layout = pipeline_layout,
         .descriptor_set_layouts = dsls,
-        .ctx = ctx,
         .vkd = vkd,
         .device = device,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Pipeline.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Pipeline = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Pipeline) void {
     self.vkd.destroyPipeline(self.device, self.pipeline, null);
     self.vkd.destroyPipelineLayout(self.device, self.pipeline_layout, null);
     for (self.descriptor_set_layouts) |dsl| self.vkd.destroyDescriptorSetLayout(self.device, dsl, null);
     self.allocator.free(self.descriptor_set_layouts);
-    self.allocator.destroy(self);
 }
 
 pub fn descriptorSetLayout(self: *const Pipeline, index: u32) vk.DescriptorSetLayout {
     return self.descriptor_set_layouts[index];
 }
 
-fn toVkDescriptorType(t: gpu.Pipeline.BindingType) vk.DescriptorType {
+fn toVkDescriptorType(t: CommonPipeline.BindingType) vk.DescriptorType {
     return switch (t) {
         .uniform_buffer => .uniform_buffer,
         .read_only_storage_buffer => .storage_buffer,
@@ -230,7 +231,7 @@ fn toVkDescriptorType(t: gpu.Pipeline.BindingType) vk.DescriptorType {
     };
 }
 
-fn toVkVertexFormat(f: gpu.Pipeline.VertexFormat) vk.Format {
+fn toVkVertexFormat(f: CommonPipeline.VertexFormat) vk.Format {
     return switch (f) {
         .f32 => .r32_sfloat,
         .f32x2 => .r32g32_sfloat,
@@ -239,7 +240,7 @@ fn toVkVertexFormat(f: gpu.Pipeline.VertexFormat) vk.Format {
     };
 }
 
-fn toVkBlendFactor(f: gpu.Pipeline.BlendFactor) vk.BlendFactor {
+fn toVkBlendFactor(f: CommonPipeline.BlendFactor) vk.BlendFactor {
     return switch (f) {
         .zero => .zero,
         .one => .one,
@@ -248,7 +249,7 @@ fn toVkBlendFactor(f: gpu.Pipeline.BlendFactor) vk.BlendFactor {
     };
 }
 
-fn toVkBlendOp(o: gpu.Pipeline.BlendOp) vk.BlendOp {
+fn toVkBlendOp(o: CommonPipeline.BlendOp) vk.BlendOp {
     return switch (o) {
         .add => .add,
     };

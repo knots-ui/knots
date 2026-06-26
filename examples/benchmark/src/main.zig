@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
 
     var ctx = Context{
         .app = app,
-        .dev_tools = try .init(init.gpa, app.renderer.cfg.gpu_backend, app.renderer.cfg.present_mode),
+        .dev_tools = try .init(init.gpa, app.renderer.cfg.present_mode),
     };
     defer {
         ctx.dev_tools.deinit(init.gpa);

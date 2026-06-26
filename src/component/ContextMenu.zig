@@ -51,7 +51,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.context_menu, ui.allocator, id);
 
-            if (s.open and (ui.input.mouse_left_pressed or ui.input.mouse_right_pressed)) {
+            if (s.open and (ui.input.mouseButton(.left).pressed or ui.input.mouseButton(.right).pressed)) {
                 if (!isPointerInside(s, ui.input.mouse_pos)) {
                     s.open = false;
                 }
@@ -62,7 +62,7 @@ pub fn ContextMenu(comptime Menu: type) type {
                 ui.input.consumeKeyboard();
             }
 
-            if (ui.input.mouse_right_pressed and containsInputPoint(s.anchor_box, ui.input.mouse_pos)) {
+            if (ui.input.mouseButton(.right).pressed and containsInputPoint(s.anchor_box, ui.input.mouse_pos)) {
                 openAtPointer(s, ui.input.mouse_pos);
                 try app.signal(.redraw);
             } else if (ui.focused(id) and ui.input.containsKey(.menu)) {
@@ -76,7 +76,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             else
                 .none;
 
-            return try ui.open(self.key, .{
+            const element_id = try ui.open(self.key, .{
                 .alignment = self.@"align",
                 .justify = self.justify,
                 .width = self.width,
@@ -90,6 +90,11 @@ pub fn ContextMenu(comptime Menu: type) type {
                 .grid_template = self.grid_template,
                 .grid_placement = self.grid_placement,
             }, decoration);
+            try ui.setAccessibility(element_id, .{
+                .role = .menu,
+                .state = .{ .expanded = s.open },
+            });
+            return element_id;
         }
 
         pub fn close(self: *const Self, app: *App) !void {
@@ -103,7 +108,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             try self.renderPopup(app, s);
 
             const popup_id = self.key.indexed(POPUP_INDEX).hash();
-            if (ui.input.mouse_left_released and ui.isHoveredWithin(popup_id)) {
+            if (ui.input.mouseButton(.left).released and ui.isHoveredWithin(popup_id)) {
                 s.open = false;
                 try app.signal(.redraw);
             }

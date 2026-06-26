@@ -38,7 +38,8 @@ timer: Timer,
 cfg: Config,
 pending_renderer_cfg: ?render.Renderer.Config = null,
 pending_reconfigure: bool = false,
-frame_cb: Callback = undefined,
+renderer_reconfigure_error: ?render.Renderer.ReconfigureError = null,
+frame_cb: ?Callback = null,
 frame_active: bool = false,
 frame_pending: bool = false,
 frame_event_error: ?anyerror = null,
@@ -94,18 +95,18 @@ pub fn start(self: *App, frameCb: Callback) !void {
     self.frame_cb = frameCb;
     self.window.setFrameHandler(.{
         .ctx = self,
-        .request = requestFrameHook,
         .step = stepFrameHook,
     });
     self.timer.start(self.io);
+    self.window.requestFrame();
     self.window.pollEvents(self.io);
 
     switch (builtin.os.tag) {
-        inline .emscripten => std.os.emscripten.emscripten_set_main_loop_arg(emscriptenMain, @ptrCast(self), 0, 0),
+        inline .emscripten => {},
         inline else => {
             defer self.window.clearFrameHandler();
+            try self.takeFrameEventError();
             while (self.window.isOpen()) {
-                try self.stepFrame();
                 self.window.waitEvents(self.io);
                 try self.takeFrameEventError();
             }
@@ -128,36 +129,35 @@ fn renderFrame(self: *App, frameCb: Callback) !void {
         if (ev.physical.width == 0 or ev.physical.height == 0) return;
         try self.renderer.resize(ev.physical.width, ev.physical.height);
     }
-    try self.handleRendererReconfigure();
+    self.handleRendererReconfigure();
 
-    try self.ui.resolveWindow(self.window.collectInput(), self.timer.ms(), self.window.getContentScale());
+    const input = try self.window.collectInput();
+    defer self.window.finishInputFrame();
+    try self.ui.resolveWindow(input, self.timer.ms(), self.window.getContentScale());
     self.ui.reset();
 
     try self.completion_queue.consume(self, self.io);
 
     try @call(.auto, frameCb, .{self});
 
-    try self.ui.endFrame();
+    try self.ui.endFrame(&self.window);
     if (self.drainSignals()) return;
 
     try self.ui.resolve();
     const draw_list = self.renderer.beginFrame();
     try self.ui.tessellate(self.frame_arena.allocator(), draw_list);
     const hover_changed = self.ui.resolveHit();
-    try self.renderer.endFrame(self.ui.font.glyph_builder, self.ui.content_scale);
+    self.renderer.endFrame(self.ui.font.glyph_builder, self.ui.content_scale) catch |err| switch (err) {
+        error.SurfaceUnavailable => return,
+        else => return err,
+    };
 
     if (hover_changed or self.ui.anim_active) try self.signal(.redraw);
     _ = self.drainSignals();
 }
 
-fn emscriptenMain(ud: ?*anyopaque) callconv(.c) void {
-    const self: *App = @ptrCast(@alignCast(ud orelse return));
-    self.stepFrame() catch |err| {
-        std.os.emscripten.emscripten_log(std.os.emscripten.LOG.ERROR, "error in presenting frame: %s", (@errorName(err)).ptr);
-    };
-}
-
 fn stepFrame(self: *App) !void {
+    const frame_cb = self.frame_cb orelse return error.AppNotStarted;
     if (self.frame_active) {
         self.frame_pending = true;
         return;
@@ -165,10 +165,10 @@ fn stepFrame(self: *App) !void {
     self.frame_active = true;
     defer self.frame_active = false;
 
-    try self.renderFrame(self.frame_cb);
+    try self.renderFrame(frame_cb);
     while (self.frame_pending) {
         self.frame_pending = false;
-        try self.renderFrame(self.frame_cb);
+        try self.renderFrame(frame_cb);
     }
 }
 
@@ -192,16 +192,16 @@ fn drainSignals(self: *App) bool {
     return should_exit;
 }
 
-fn requestFrameHook(ctx: *anyopaque) void {
-    const self: *App = @ptrCast(@alignCast(ctx));
-    self.window.postEmptyEvent();
-}
-
 fn stepFrameHook(ctx: *anyopaque) void {
     const self: *App = @ptrCast(@alignCast(ctx));
     if (self.frame_event_error != null) return;
     self.stepFrame() catch |err| {
         self.frame_event_error = err;
+        self.window.postEmptyEvent();
+        switch (builtin.os.tag) {
+            inline .emscripten => std.os.emscripten.emscripten_log(std.os.emscripten.LOG.ERROR, "error in presenting frame: %s", (@errorName(err)).ptr),
+            inline else => {},
+        }
     };
 }
 
@@ -228,12 +228,20 @@ pub fn consumeReconfigure(self: *App) bool {
     return v;
 }
 
-fn handleRendererReconfigure(self: *App) !void {
+pub fn rendererReconfigureError(self: *const App) ?render.Renderer.ReconfigureError {
+    return self.renderer_reconfigure_error;
+}
+
+fn handleRendererReconfigure(self: *App) void {
     const new_cfg = self.pending_renderer_cfg orelse return;
     self.pending_renderer_cfg = null;
 
-    try self.renderer.reconfigure(new_cfg);
+    self.renderer.reconfigure(new_cfg) catch |err| {
+        self.renderer_reconfigure_error = err;
+        return;
+    };
 
+    self.renderer_reconfigure_error = null;
     self.ui.font.glyph_builder.markAllDirty();
     self.pending_reconfigure = true;
 }
@@ -254,8 +262,8 @@ pub fn e(self: *App, tree: anytype) !void {
         _ = try tree.open(self);
         try tree.close(self);
     } else switch (@typeInfo(T)) {
-        inline .@"fn" => try @call(.always_inline, tree, .{self}),
-        inline .@"struct" => |s| if (comptime isRenderable(T))
+        .@"fn" => try @call(.always_inline, tree, .{self}),
+        .@"struct" => |s| if (comptime isRenderable(T))
             try tree.render(self)
         else {
             comptime var i: usize = 0;
@@ -270,22 +278,22 @@ pub fn e(self: *App, tree: anytype) !void {
                 } else try self.e(val);
             }
         },
-        inline else => @compileError("unexpected type in component tree: " ++ @typeName(T)),
+        else => @compileError("unexpected type in component tree: " ++ @typeName(T)),
     }
 }
 
 fn isControlFlow(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        inline .@"struct" => @hasDecl(T, "eval"),
-        inline else => false,
+        .@"struct" => @hasDecl(T, "eval"),
+        else => false,
     };
 }
 
 fn isComponent(comptime T: type) bool {
     const S = switch (@typeInfo(T)) {
-        inline .@"struct" => T,
-        inline .pointer => |p| p.child,
-        inline else => return false,
+        .@"struct" => T,
+        .pointer => |p| p.child,
+        else => return false,
     };
     return @hasDecl(S, "open") and @hasDecl(S, "close");
 }
@@ -297,7 +305,7 @@ fn isRenderable(comptime T: type) bool {
 
 fn isChildren(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        inline .@"struct" => |s| s.is_tuple,
-        inline else => false,
+        .@"struct" => |s| s.is_tuple,
+        else => false,
     };
 }

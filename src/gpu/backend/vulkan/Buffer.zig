@@ -1,11 +1,10 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
+const Usage = @import("gpu").Buffer.Usage;
 const Context = @import("Context.zig");
 
 const Buffer = @This();
 
-allocator: std.mem.Allocator,
 ctx: *Context,
 buffer: vk.Buffer,
 memory: vk.DeviceMemory,
@@ -42,7 +41,7 @@ fn allocate(ctx: *Context, size: usize, usage: vk.BufferUsageFlags) !Allocation 
     return .{ .buffer = buffer, .memory = memory, .mapped = @ptrCast(mapped) };
 }
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, size: usize, usage: gpu.Buffer.Usage) !gpu.Buffer {
+pub fn create(_: std.mem.Allocator, ctx: *Context, size: usize, usage: Usage) !Buffer {
     const vk_usage = toVkUsage(usage);
     const a = try allocate(ctx, size, vk_usage);
     errdefer {
@@ -51,9 +50,7 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, size: usize, usage: g
         ctx.vkd.freeMemory(ctx.device, a.memory, null);
     }
 
-    const self = try allocator.create(Buffer);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .ctx = ctx,
         .buffer = a.buffer,
         .memory = a.memory,
@@ -61,10 +58,9 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, size: usize, usage: g
         .size = size,
         .usage = vk_usage,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-fn toVkUsage(usage: gpu.Buffer.Usage) vk.BufferUsageFlags {
+fn toVkUsage(usage: Usage) vk.BufferUsageFlags {
     return vk.BufferUsageFlags{
         .vertex_buffer_bit = usage.vertex,
         .index_buffer_bit = usage.index,
@@ -75,34 +71,22 @@ fn toVkUsage(usage: gpu.Buffer.Usage) vk.BufferUsageFlags {
     };
 }
 
-const vtable = gpu.Buffer.VTable{
-    .deinit = &deinit,
-    .load = &load,
-    .getSize = &getSize,
-    .resize = &resize,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Buffer) void {
     self.ctx.vkd.unmapMemory(self.ctx.device, self.memory);
     self.ctx.vkd.destroyBuffer(self.ctx.device, self.buffer, null);
     self.ctx.vkd.freeMemory(self.ctx.device, self.memory, null);
-    self.allocator.destroy(self);
 }
 
-fn load(ptr: *anyopaque, data: [*]const u8, len: usize) void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
-    @memcpy(self.mapped[0..len], data[0..len]);
+pub fn load(self: *Buffer, comptime T: type, data: []const T) void {
+    const bytes: [*]const u8 = @ptrCast(data.ptr);
+    @memcpy(self.mapped[0 .. data.len * @sizeOf(T)], bytes[0 .. data.len * @sizeOf(T)]);
 }
 
-fn getSize(ptr: *anyopaque) usize {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
+pub fn getSize(self: *const Buffer) usize {
     return self.size;
 }
 
-fn resize(ptr: *anyopaque, new_size: usize) anyerror!void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
-
+pub fn resize(self: *Buffer, new_size: usize) !void {
     const a = try allocate(self.ctx, new_size, self.usage);
 
     self.ctx.vkd.unmapMemory(self.ctx.device, self.memory);

@@ -1,7 +1,5 @@
 const Texture = @import("Texture.zig");
 
-const Pipeline = @This();
-
 pub const ShaderSource = union(enum) {
     wgsl: []const u8,
     spirv: struct {
@@ -84,26 +82,14 @@ pub const Desc = struct {
     color_target: ColorTargetState,
 };
 
-ptr: *anyopaque,
-vtable: *const VTable,
-
-pub const VTable = struct {
-    deinit: *const fn (ptr: *anyopaque) void,
-};
-
-pub inline fn deinit(self: *const Pipeline) void {
-    self.vtable.deinit(self.ptr);
-}
-
-pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".field_names.len]VertexAttribute {
-    const field_names = @typeInfo(T).@"struct".field_names;
-    const field_types = @typeInfo(T).@"struct".field_types;
-    var attrs: [field_names.len]VertexAttribute = undefined;
-    inline for (field_names, field_types, 0..) |field_name, field_type, i| {
+pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".fields.len]VertexAttribute {
+    const fields = @typeInfo(T).@"struct".fields;
+    var attrs: [fields.len]VertexAttribute = undefined;
+    inline for (fields, 0..) |field, i| {
         attrs[i] = .{
             .location = i,
-            .offset = @offsetOf(T, field_name),
-            .format = switch (@typeInfo(field_type)) {
+            .offset = @offsetOf(T, field.name),
+            .format = switch (@typeInfo(field.type)) {
                 .array => |arr| switch (arr.child) {
                     f32 => switch (arr.len) {
                         2 => .f32x2,

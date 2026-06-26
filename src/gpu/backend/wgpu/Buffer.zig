@@ -1,21 +1,18 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
+const Usage = @import("gpu").Buffer.Usage;
 
 const Buffer = @This();
 
-allocator: std.mem.Allocator,
 buffer: wgpu.Buffer,
 queue: wgpu.Queue,
 device: wgpu.Device,
 size: usize,
 usage: wgpu.Buffer.Usage,
 
-pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Queue, size: usize, usage: gpu.Buffer.Usage) !gpu.Buffer {
+pub fn create(_: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Queue, size: usize, usage: Usage) !Buffer {
     const wgpu_usage = toWgpuUsage(usage);
-    const self = try allocator.create(Buffer);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .buffer = try device.createBuffer(.{
             .usage = wgpu_usage,
             .size = size,
@@ -26,10 +23,9 @@ pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Que
         .size = size,
         .usage = wgpu_usage,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-fn toWgpuUsage(usage: gpu.Buffer.Usage) wgpu.Buffer.Usage {
+fn toWgpuUsage(usage: Usage) wgpu.Buffer.Usage {
     return .{
         .vertex = usage.vertex,
         .index = usage.index,
@@ -40,31 +36,20 @@ fn toWgpuUsage(usage: gpu.Buffer.Usage) wgpu.Buffer.Usage {
     };
 }
 
-const vtable = gpu.Buffer.VTable{
-    .deinit = &deinit,
-    .load = &load,
-    .getSize = &getSize,
-    .resize = &resize,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Buffer) void {
     self.buffer.deinit();
-    self.allocator.destroy(self);
 }
 
-fn load(ptr: *anyopaque, data: [*]const u8, len: usize) void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
-    self.queue.writeBuffer(u8, self.buffer, 0, data[0..len]);
+pub fn load(self: *Buffer, comptime T: type, data: []const T) void {
+    const bytes: [*]const u8 = @ptrCast(data.ptr);
+    self.queue.writeBuffer(u8, self.buffer, 0, bytes[0 .. data.len * @sizeOf(T)]);
 }
 
-fn getSize(ptr: *anyopaque) usize {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
+pub fn getSize(self: *const Buffer) usize {
     return self.size;
 }
 
-fn resize(ptr: *anyopaque, new_size: usize) anyerror!void {
-    const self: *Buffer = @ptrCast(@alignCast(ptr));
+pub fn resize(self: *Buffer, new_size: usize) !void {
     const new_buffer = try self.device.createBuffer(.{
         .usage = self.usage,
         .size = new_size,

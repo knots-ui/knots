@@ -13,6 +13,7 @@ const Clip = render.Clip;
 const State = @import("State.zig");
 const Input = @import("Input.zig");
 const InputScope = @import("InputScope.zig");
+const Accessibility = @import("Accessibility.zig");
 const animation = @import("animation.zig");
 
 const Decoration = @import("decoration.zig").Decoration;
@@ -73,6 +74,8 @@ font: text.Font,
 state: State,
 input: Input,
 hit_records: std.ArrayList(HitRecord),
+focus_order: std.ArrayList(Element.Id),
+accessibility_nodes: std.ArrayList(Accessibility.Node),
 hit_counter: u32,
 scroll_geoms: std.ArrayList(scrollbar.SlotGeom),
 clip_shapes: std.ArrayList(?Clip.Shape),
@@ -85,6 +88,7 @@ scroll_line_size: Size.Input,
 anim_active: bool,
 theme: Theme,
 last_stats: Stats,
+cursor_shape: window.CursorShape,
 
 const UI = @This();
 
@@ -97,6 +101,8 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .input = .{},
         .font = try .init(allocator, cfg.fonts),
         .hit_records = .empty,
+        .focus_order = .empty,
+        .accessibility_nodes = .empty,
         .hit_counter = 0,
         .scroll_geoms = .empty,
         .clip_shapes = .empty,
@@ -109,6 +115,7 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .anim_active = false,
         .theme = cfg.theme,
         .last_stats = .{},
+        .cursor_shape = .default,
     };
 }
 
@@ -118,6 +125,9 @@ pub fn deinit(self: *UI) void {
     self.font.deinit();
     self.state.deinit();
     self.hit_records.deinit(self.allocator);
+    self.focus_order.deinit(self.allocator);
+    self.freeAccessibilityNodes();
+    self.accessibility_nodes.deinit(self.allocator);
     self.scroll_geoms.deinit(self.allocator);
     self.clip_shapes.deinit(self.allocator);
     self.slot_clips.deinit(self.allocator);
@@ -130,6 +140,7 @@ pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration
     const id = key.hash();
     try self.decorations.ensureUnusedCapacity(self.allocator, 1);
     try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
+    if (element.focusable) try self.focus_order.ensureUnusedCapacity(self.allocator, 1);
     const slot = try self.layout_ctx.open(id, element);
     const slot_index: usize = @intCast(slot);
     std.debug.assert(self.decorations.items.len == slot_index);
@@ -142,6 +153,7 @@ pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration
         el.intrinsic_w = decoration.text.intrinsic_w;
         el.intrinsic_h = decoration.text.intrinsic_h;
     }
+    if (element.focusable) self.focus_order.appendAssumeCapacity(id);
     return id;
 }
 
@@ -160,6 +172,7 @@ pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, dec
     const id = key.hash();
     try self.decorations.ensureUnusedCapacity(self.allocator, 1);
     try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
+    if (cfg.focusable) try self.focus_order.ensureUnusedCapacity(self.allocator, 1);
     const slot = try self.layout_ctx.openRoot(id, cfg);
     const slot_index: usize = @intCast(slot);
     std.debug.assert(self.decorations.items.len == slot_index);
@@ -174,6 +187,7 @@ pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, dec
         el.intrinsic_w = decoration.text.intrinsic_w;
         el.intrinsic_h = decoration.text.intrinsic_h;
     }
+    if (cfg.focusable) self.focus_order.appendAssumeCapacity(id);
     return id;
 }
 
@@ -275,6 +289,9 @@ pub fn reset(self: *UI) void {
     self.decorations.clearRetainingCapacity();
     self.clip_shapes.clearRetainingCapacity();
     self.hit_records.clearRetainingCapacity();
+    self.focus_order.clearRetainingCapacity();
+    self.freeAccessibilityNodes();
+    self.accessibility_nodes.clearRetainingCapacity();
     self.hit_counter = 0;
     self.scroll_geoms.clearRetainingCapacity();
     self.slot_clips.clearRetainingCapacity();
@@ -282,6 +299,11 @@ pub fn reset(self: *UI) void {
     self.clip_nodes.clearRetainingCapacity();
     self.input_scopes.resetFrame();
     self.anim_active = false;
+    self.cursor_shape = .default;
+}
+
+pub fn requestCursor(self: *UI, shape: window.CursorShape) void {
+    self.cursor_shape = shape;
 }
 
 /// Drive a time-based animation toward `target` for the given (element_id, channel)
@@ -345,6 +367,12 @@ fn sampleAnim(s: *const State.Anim, now_ms: i64) AnimSample {
 }
 
 pub fn resolve(self: *UI) !void {
+    if (self.layout_ctx.root_slot == Element.INVALID_SLOT) {
+        try self.layout_ctx.buildZOrder();
+        self.updateStats();
+        return;
+    }
+
     const scroll: layout.Context.ScrollLookup = .{
         .ctx = @ptrCast(&self.state),
         .getFn = @ptrCast(&State.getScroll),
@@ -361,6 +389,58 @@ pub fn resolve(self: *UI) !void {
 
     try self.layout_ctx.buildZOrder();
     self.syncStateBounds();
+    self.syncAccessibility();
+}
+
+pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata) !void {
+    if (id == Element.INVALID_ID) return;
+
+    const name = try self.dupeAccessibilityText(meta.name);
+    errdefer self.freeAccessibilityText(name);
+    var state = meta.state;
+    if (meta.state.value_text) |value| {
+        state.value_text = try self.dupeAccessibilityText(value);
+    }
+    errdefer if (state.value_text) |value| self.freeAccessibilityText(value);
+
+    for (self.accessibility_nodes.items) |*node| {
+        if (node.id == id) {
+            self.freeAccessibilityNode(node);
+            node.role = meta.role;
+            node.name = name;
+            node.state = state;
+            return;
+        }
+    }
+    try self.accessibility_nodes.append(self.allocator, .{
+        .id = id,
+        .role = meta.role,
+        .name = name,
+        .state = state,
+    });
+}
+
+/// The returned nodes and their text remain valid until the next `reset`.
+pub fn accessibilitySnapshot(self: *const UI) []const Accessibility.Node {
+    return self.accessibility_nodes.items;
+}
+
+fn dupeAccessibilityText(self: *UI, content: []const u8) ![]const u8 {
+    if (content.len == 0) return &.{};
+    return self.allocator.dupe(u8, content);
+}
+
+fn freeAccessibilityText(self: *UI, content: []const u8) void {
+    if (content.len > 0) self.allocator.free(content);
+}
+
+fn freeAccessibilityNode(self: *UI, node: *Accessibility.Node) void {
+    self.freeAccessibilityText(node.name);
+    if (node.state.value_text) |value| self.freeAccessibilityText(value);
+}
+
+fn freeAccessibilityNodes(self: *UI) void {
+    for (self.accessibility_nodes.items) |*node| self.freeAccessibilityNode(node);
 }
 
 /// Returns true if any height changed, in which case the caller should re-run layout so ancestors fit the new heights.
@@ -387,6 +467,7 @@ fn reflowWrappedText(self: *UI) !bool {
 }
 
 fn syncStateBounds(self: *UI) void {
+    if (self.layout_ctx.root_slot == Element.INVALID_SLOT) return;
     const root_box = self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
     for (self.layout_ctx.pool.elements.items) |el| {
         if (self.state.get(.text_select, el.id)) |s| s.box = el.box;
@@ -432,7 +513,7 @@ pub fn pressing(self: *UI, id: Element.Id) bool {
 
 pub fn leftClicked(self: *UI, id: Element.Id) bool {
     if (!self.inputScopeAllowsId(id)) return false;
-    return self.input.mouse_left_pressed and self.state.press_origin == id;
+    return self.input.mouseButton(.left).pressed and self.state.press_origin == id;
 }
 
 pub fn focused(self: *UI, id: Element.Id) bool {
@@ -457,7 +538,7 @@ pub fn isFocusedWithin(self: *UI, ancestor_id: Element.Id) bool {
 
 pub fn leftClickedWithin(self: *UI, ancestor_id: Element.Id) bool {
     if (!self.inputScopeAllowsId(ancestor_id)) return false;
-    if (!self.input.mouse_left_released) return false;
+    if (!self.input.mouseButton(.left).released) return false;
     if (self.state.press_drag) return false;
     if (!self.isDescendantOrSelf(self.state.press_origin, ancestor_id)) return false;
     return self.isDescendantOrSelf(self.state.hovered, ancestor_id);
@@ -484,6 +565,12 @@ pub fn resolveWindow(self: *UI, input: window.Input, now_ms: i64, content_scale:
     self.state.selection_text = &.{};
     self.input.collect(input, now_ms);
 
+    if (self.input.focus_lost or self.input.pointer_cancelled) {
+        self.state.active = Element.INVALID_ID;
+        self.state.press_origin = Element.INVALID_ID;
+        self.state.press_drag = false;
+    }
+
     if (self.layout_ctx.has_scroll) try scrollbar.route(self);
 
     if (self.input_scopes.hasActive()) {
@@ -493,10 +580,15 @@ pub fn resolveWindow(self: *UI, input: window.Input, now_ms: i64, content_scale:
         if (!self.inputScopeAllowsId(self.state.press_origin)) self.state.press_origin = Element.INVALID_ID;
     }
 
+    if (self.input.containsKey(.tab)) {
+        self.advanceFocus(self.input.shift_held);
+        self.input.consumeKeyboard();
+    }
+
     self.state.hovered = self.currentMouseHit();
 
-    if (self.input.mouse_left_pressed) {
-        const press_pos = self.input.mouse_left_pressed_pos orelse self.input.mouse_pos;
+    if (self.input.mouseButton(.left).pressed) {
+        const press_pos = self.input.mouseButton(.left).pressed_pos orelse self.input.mouse_pos;
         const press_hit = self.mouseHit(press_pos);
         self.state.active = press_hit;
         self.state.focused = press_hit;
@@ -506,20 +598,72 @@ pub fn resolveWindow(self: *UI, input: window.Input, now_ms: i64, content_scale:
 
         self.state.forEach(.text_select, press_hit, clearOtherTextSelect);
     }
-    if (self.input.mouse_left_down and !self.state.press_drag) {
+    if (self.input.mouseButton(.left).down and !self.state.press_drag) {
         const dx = self.input.mouse_pos[0] - self.state.press_pos[0];
         const dy = self.input.mouse_pos[1] - self.state.press_pos[1];
         if (dx * dx + dy * dy > press_drag_threshold_sq) self.state.press_drag = true;
     }
-    if (self.input.mouse_left_released and !self.input.mouse_left_down) self.state.active = Element.INVALID_ID;
+    if (self.input.mouseButton(.left).released and !self.input.mouseButton(.left).down) self.state.active = Element.INVALID_ID;
+}
+
+fn syncAccessibility(self: *UI) void {
+    for (self.accessibility_nodes.items) |*node| {
+        const slot = self.layout_ctx.slotForId(node.id) orelse continue;
+        const el = self.layout_ctx.pool.get(slot);
+        node.bounds = el.box;
+        node.state.focused = node.id == self.state.focused;
+        node.parent = if (el.parent == Element.INVALID_SLOT)
+            Element.INVALID_ID
+        else
+            self.layout_ctx.pool.get(el.parent).id;
+    }
+}
+
+fn advanceFocus(self: *UI, backward: bool) void {
+    const order = self.focus_order.items;
+    if (order.len == 0) {
+        self.state.focused = Element.INVALID_ID;
+        self.state.active = Element.INVALID_ID;
+        return;
+    }
+
+    var current_index: ?usize = null;
+    for (order, 0..) |id, i| {
+        if (id == self.state.focused) {
+            current_index = i;
+            break;
+        }
+    }
+
+    const start = if (current_index) |i|
+        if (backward) (i + order.len - 1) % order.len else (i + 1) % order.len
+    else if (backward)
+        order.len - 1
+    else
+        0;
+
+    var offset: usize = 0;
+    while (offset < order.len) : (offset += 1) {
+        const idx = if (backward)
+            (start + order.len - offset) % order.len
+        else
+            (start + offset) % order.len;
+        const id = order[idx];
+        if (self.inputScopeAllowsId(id)) {
+            self.state.focused = id;
+            self.state.active = Element.INVALID_ID;
+            return;
+        }
+    }
 }
 
 /// Advance the per widget state TTL clock. Call once per frame after the
 /// users frame callback has had a chance to touch its state, otherwise
 /// entries lose a frame of TTL grace before the sweep sees them.
-pub fn endFrame(self: *UI) !void {
+pub fn endFrame(self: *UI, host: *window.Window) !void {
     try self.state.endFrame();
     self.input_scopes.resolveActive();
+    host.setCursorShape(self.cursor_shape);
 }
 
 const press_drag_threshold_sq: f64 = 9.0;
@@ -890,11 +1034,8 @@ test "scroll routing uses previous frame elements" {
 
     try ui.resolveWindow(.{
         .pos = .{ 150, 100 },
-        .mouse_left_down_now = false,
-        .mouse_right_down_now = false,
         .scroll = .{ .pixel = .{ 0, 50 } },
         .chars = &.{},
-        .keys = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,

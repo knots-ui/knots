@@ -42,6 +42,8 @@ pub fn open(self: *const TextArea, app: *App) !Element.Id {
     const ui = &app.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);
+    if (ui.hovering(id)) ui.requestCursor(.text);
+    _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     if (is_focused) {
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
@@ -54,7 +56,7 @@ pub fn open(self: *const TextArea, app: *App) !Element.Id {
     const line_h = try ui.lineHeight(self.size.resolve(), null);
     const min_h = line_h + self.padding.top() + self.padding.bottom();
 
-    if (ui.pressing(handle_id) and ui.input.mouse_left_down and rs.box.h() > 0) {
+    if (ui.pressing(handle_id) and ui.input.mouseButton(.left).down and rs.box.h() > 0) {
         const my: f32 = @floatCast(ui.input.mouse_pos[1]);
         rs.height = @max(min_h, my - rs.box.y());
     }
@@ -75,13 +77,20 @@ pub fn open(self: *const TextArea, app: *App) !Element.Id {
     else
         .none;
 
-    return try ui.open(self.key, .{
+    const element_id = try ui.open(self.key, .{
         .width = self.width,
         .height = height,
         .overflow = .scroll_y,
         .interactive = true,
+        .focusable = true,
         .padding = self.padding,
     }, decoration);
+    try ui.setAccessibility(element_id, .{
+        .role = .text_input,
+        .name = self.placeholder,
+        .state = .{ .value_text = self.buf.items, .multiline = true },
+    });
+    return element_id;
 }
 
 pub fn close(self: *const TextArea, app: *App) !void {
@@ -107,6 +116,13 @@ pub fn close(self: *const TextArea, app: *App) !void {
         const wrap_px: f32 = @max(0, content_w * scale);
         const shaped = try face.shapeWrapped(items, size.value * scale, wrap_px);
         const line_h = shaped.line_height / scale;
+        const scroll = try ui.state.getOrCreate(.scroll, ui.allocator, id);
+        const content_origin = [2]f32{
+            m.box.x() + self.padding.left(),
+            m.box.y() + self.padding.top(),
+        };
+
+        edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
 
         try edit.processInputLate(self.buf, true, ui, s, shaped, line_h);
         ui.input.consumeKeyboard();
@@ -114,6 +130,10 @@ pub fn close(self: *const TextArea, app: *App) !void {
         const sel_lo = @min(s.cursor, s.sel_anchor);
         const sel_hi = @max(s.cursor, s.sel_anchor);
         const has_sel = sel_lo != sel_hi;
+        const cursor_pos = util.posAtByte(shaped, s.cursor, scale);
+        const viewport_h = @max(0, m.height - self.padding.top() - self.padding.bottom());
+        ensureCaretVisibleY(scroll, cursor_pos.y, line_h, viewport_h, shaped.height / scale);
+        const scroll_offset = scroll.offset;
 
         if (has_sel) {
             const sel_color = blk: {
@@ -125,12 +145,11 @@ pub fn close(self: *const TextArea, app: *App) !void {
             const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
             defer ui.allocator.free(spans);
             for (spans, 0..) |sp, i| {
-                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
+                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x - scroll_offset[0], sp.y - scroll_offset[1], sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
                 ui.close();
             }
         } else {
-            const p = util.posAtByte(shaped, s.cursor, scale);
-            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), p.x, p.y, 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
+            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), cursor_pos.x - scroll_offset[0], cursor_pos.y - scroll_offset[1], 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
             ui.close();
         }
 
@@ -148,6 +167,7 @@ pub fn close(self: *const TextArea, app: *App) !void {
     if (rs.box.h() > 0) {
         const handle_id = self.key.indexed(HANDLE_INDEX).hash();
         const active = ui.hovering(handle_id) or ui.pressing(handle_id);
+        if (active) ui.requestCursor(.resize_vertical);
         var grip: Color.Input = .text;
         var grip_color = grip.resolve(&ui.theme);
         grip_color[3] = if (active) 0.6 else 0.35;
@@ -167,4 +187,19 @@ pub fn close(self: *const TextArea, app: *App) !void {
     }
 
     ui.close();
+}
+
+fn ensureCaretVisibleY(scroll: *State.Scroll, caret_y: f32, line_h: f32, viewport_h: f32, content_h: f32) void {
+    const max_off = @max(0, content_h - viewport_h);
+    if (viewport_h <= 0) {
+        scroll.offset[1] = std.math.clamp(scroll.offset[1], 0, max_off);
+        return;
+    }
+
+    if (caret_y < scroll.offset[1]) {
+        scroll.offset[1] = caret_y;
+    } else if (caret_y + line_h > scroll.offset[1] + viewport_h) {
+        scroll.offset[1] = caret_y + line_h - viewport_h;
+    }
+    scroll.offset[1] = std.math.clamp(scroll.offset[1], 0, max_off);
 }

@@ -9,7 +9,6 @@ const keymap = @import("keymap.zig");
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("KnotsWindow");
 const system_theme_registry_key = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
 
-const live_resize_timer_id: usize = 1;
 const WHEEL_PAGESCROLL: u32 = std.math.maxInt(u32);
 const WheelAxis = enum { x, y };
 var class_registered: bool = false;
@@ -78,23 +77,27 @@ fn systemPrefersDarkTheme() bool {
 }
 
 pub const Backend = struct {
+    allocator: std.mem.Allocator,
     hwnd: win32.HWND,
     hinstance: win32.HINSTANCE,
     high_surrogate: u16 = 0,
     cursor_visible: bool = true,
+    cursor_shape: window.CursorShape = .default,
     is_fullscreen: bool = false,
     should_close: bool = false,
-    live_resize_timer_active: bool = false,
     wheel_scroll_lines: u32 = 3,
     wheel_scroll_chars: u32 = 3,
     saved_placement: win32.WINDOWPLACEMENT = std.mem.zeroes(win32.WINDOWPLACEMENT),
     saved_style: win32.WINDOW_STYLE = .{},
     drop_paths_buf: [64][260]u8 = undefined,
     drop_slices: [64][]const u8 = undefined,
+    min_size: ?window.Size,
+    max_size: ?window.Size,
 
     const Self = @This();
 
     pub fn deinit(self: *const Self) void {
+        _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWLP_USERDATA, 0);
         _ = win32.DestroyWindow(self.hwnd);
     }
 
@@ -122,6 +125,10 @@ pub const Backend = struct {
 
     pub fn postEmptyEvent(self: *const Self) void {
         _ = win32.PostMessageW(self.hwnd, win32.WM_NULL, 0, 0);
+    }
+
+    pub fn requestFrame(self: *const Self, _: *window.Window) void {
+        _ = win32.InvalidateRect(self.hwnd, null, 0);
     }
 
     pub fn isOpen(self: *const Self) bool {
@@ -175,17 +182,32 @@ pub const Backend = struct {
         } };
     }
 
-    pub fn setCursorVisible(self: *const Self, visible: bool) void {
-        const m: *Self = @constCast(self);
-        if (visible == m.cursor_visible) return;
-        _ = win32.ShowCursor(if (visible) 1 else 0);
-        m.cursor_visible = visible;
+    pub fn setCursorVisible(self: *Self, visible: bool) void {
+        if (visible == self.cursor_visible) return;
+        if (visible) {
+            while (win32.ShowCursor(1) < 0) {}
+        } else {
+            while (win32.ShowCursor(0) >= 0) {}
+        }
+        self.cursor_visible = visible;
     }
 
-    pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) void {
+    pub fn setCursorShape(self: *Self, shape: window.CursorShape) void {
+        if (self.cursor_shape == shape) return;
+        self.cursor_shape = shape;
+        _ = win32.SetCursor(loadCursor(shape));
+    }
+
+    pub fn setTitle(self: *Self, title: []const u8) !void {
+        const wide = try std.unicode.utf8ToUtf16LeAllocZ(self.allocator, title);
+        defer self.allocator.free(wide);
+        if (win32.SetWindowTextW(self.hwnd, wide.ptr) == 0) return error.SetTitleFailed;
+    }
+
+    pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) bool {
         switch (mode) {
             .windowed => {
-                if (!self.is_fullscreen) return;
+                if (!self.is_fullscreen) return true;
                 const style_bits: u32 = @bitCast(self.saved_style);
                 _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWL_STYLE, @bitCast(@as(usize, style_bits)));
                 _ = win32.SetWindowPlacement(self.hwnd, &self.saved_placement);
@@ -196,22 +218,23 @@ pub const Backend = struct {
                     .DRAWFRAME = 1,
                 });
                 self.is_fullscreen = false;
+                return true;
             },
-            .fullscreen, .fullscreen_windowed => {
+            .fullscreen => {
                 if (!self.is_fullscreen) {
                     self.saved_placement.length = @sizeOf(win32.WINDOWPLACEMENT);
                     _ = win32.GetWindowPlacement(self.hwnd, &self.saved_placement);
                     const cur: u32 = @intCast(win32.GetWindowLongPtrW(self.hwnd, win32.GWL_STYLE) & 0xFFFFFFFF);
                     self.saved_style = @bitCast(cur);
                 }
-                const monitor = win32.MonitorFromWindow(self.hwnd, .NEAREST) orelse return;
+                const monitor = win32.MonitorFromWindow(self.hwnd, .NEAREST) orelse return false;
                 var mi: win32.MONITORINFO = .{
                     .cbSize = @sizeOf(win32.MONITORINFO),
                     .rcMonitor = undefined,
                     .rcWork = undefined,
                     .dwFlags = 0,
                 };
-                if (win32.GetMonitorInfoW(monitor, &mi) == 0) return;
+                if (win32.GetMonitorInfoW(monitor, &mi) == 0) return false;
                 var stripped = self.saved_style;
                 stripped.THICKFRAME = 0;
                 stripped.DLGFRAME = 0;
@@ -227,8 +250,13 @@ pub const Backend = struct {
                     .DRAWFRAME = 1,
                 });
                 self.is_fullscreen = true;
+                return true;
             },
         }
+    }
+
+    pub fn getDisplayMode(self: *const Self) window.DisplayMode {
+        return if (self.is_fullscreen) .fullscreen else .windowed;
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
@@ -335,7 +363,7 @@ fn applyWheelLines(owner: *window.Window, axis: WheelAxis, steps: f64, setting: 
     }
 }
 
-pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
+pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backend {
     _ = win32.SetProcessDpiAwarenessContext(win32.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     const hinstance = win32.GetModuleHandleW(null) orelse return error.NoModuleHandle;
@@ -403,8 +431,11 @@ pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
     win32.DragAcceptFiles(hwnd, 1);
 
     var backend = Backend{
+        .allocator = allocator,
         .hwnd = hwnd,
         .hinstance = hinstance,
+        .min_size = cfg.min_size,
+        .max_size = cfg.max_size,
     };
     backend.refreshWheelSettings();
     backend.applyTitleBarTheme();
@@ -418,6 +449,35 @@ fn ownerOf(hwnd: win32.HWND) ?*window.Window {
     return @ptrFromInt(raw);
 }
 
+fn loadCursor(shape: window.CursorShape) ?win32.HCURSOR {
+    const name = switch (shape) {
+        .default => win32.IDC_ARROW,
+        .text => win32.IDC_IBEAM,
+        .pointer => win32.IDC_HAND,
+        .crosshair => win32.IDC_CROSS,
+        .move => win32.IDC_SIZEALL,
+        .resize_horizontal => win32.IDC_SIZEWE,
+        .resize_vertical => win32.IDC_SIZENS,
+        .resize_diagonal_nw_se => win32.IDC_SIZENWSE,
+        .resize_diagonal_ne_sw => win32.IDC_SIZENESW,
+        .not_allowed => win32.IDC_NO,
+    };
+    return win32.LoadCursorW(null, name);
+}
+
+fn trackSize(hwnd: win32.HWND, size: window.Size, scale: f32) win32.POINT {
+    var outer: win32.RECT = undefined;
+    var client: win32.RECT = undefined;
+    _ = win32.GetWindowRect(hwnd, &outer);
+    _ = win32.GetClientRect(hwnd, &client);
+    const non_client_width = (outer.right - outer.left) - (client.right - client.left);
+    const non_client_height = (outer.bottom - outer.top) - (client.bottom - client.top);
+    return .{
+        .x = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.width)) * scale)) + non_client_width,
+        .y = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.height)) * scale)) + non_client_height,
+    };
+}
+
 fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) callconv(.winapi) win32.LRESULT {
     switch (msg) {
         win32.WM_CLOSE => {
@@ -427,40 +487,33 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
             return 0;
         },
+        win32.WM_GETMINMAXINFO => {
+            if (ownerOf(hwnd)) |o| {
+                const info: *win32.MINMAXINFO = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                const scale = o.backend.computeContentScale();
+                if (o.backend.min_size) |size| {
+                    info.ptMinTrackSize = trackSize(hwnd, size, scale);
+                }
+                if (o.backend.max_size) |size| {
+                    info.ptMaxTrackSize = trackSize(hwnd, size, scale);
+                }
+            }
+            return 0;
+        },
         win32.WM_DESTROY => return 0,
+        win32.WM_PAINT => {
+            var paint: win32.PAINTSTRUCT = undefined;
+            _ = win32.BeginPaint(hwnd, &paint);
+            defer _ = win32.EndPaint(hwnd, &paint);
+            if (ownerOf(hwnd)) |o| if (o.isOpen()) o.stepFrame();
+            return 0;
+        },
         win32.WM_SIZE => {
             if (ownerOf(hwnd)) |o| {
                 o.markResized();
                 o.requestFrame();
             }
             return 0;
-        },
-        win32.WM_ENTERSIZEMOVE => {
-            if (ownerOf(hwnd)) |o| {
-                o.backend.live_resize_timer_active = true;
-                _ = win32.SetTimer(hwnd, live_resize_timer_id, window.live_resize_tick_ms, null);
-            }
-            return 0;
-        },
-        win32.WM_EXITSIZEMOVE => {
-            if (ownerOf(hwnd)) |o| {
-                if (o.backend.live_resize_timer_active) {
-                    _ = win32.KillTimer(hwnd, live_resize_timer_id);
-                    o.backend.live_resize_timer_active = false;
-                }
-                o.markResized();
-                o.stepFrame();
-            }
-            return 0;
-        },
-        win32.WM_TIMER => {
-            if (wparam == live_resize_timer_id) {
-                if (ownerOf(hwnd)) |o| {
-                    if (o.backend.live_resize_timer_active and o.resized) o.stepFrame();
-                }
-                return 0;
-            }
-            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
         win32.WM_MOUSEMOVE => {
             if (ownerOf(hwnd)) |o| o.setCursorPos(mousePos(hwnd, lparam));
@@ -494,7 +547,49 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
             return 0;
         },
+        win32.WM_MBUTTONDOWN, win32.WM_XBUTTONDOWN => {
+            _ = win32.SetCapture(hwnd);
+            if (ownerOf(hwnd)) |o| {
+                const button: window.MouseButton = if (msg == win32.WM_MBUTTONDOWN) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
+                o.setMouseButton(button, true, mousePos(hwnd, lparam));
+            }
+            return 0;
+        },
+        win32.WM_MBUTTONUP, win32.WM_XBUTTONUP => {
+            if (ownerOf(hwnd)) |o| {
+                const button: window.MouseButton = if (msg == win32.WM_MBUTTONUP) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
+                o.setMouseButton(button, false, mousePos(hwnd, lparam));
+                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+            }
+            return 0;
+        },
+        win32.WM_SETCURSOR => {
+            const hit_test: u16 = @truncate(@as(usize, @bitCast(lparam)));
+            if (hit_test == win32.HTCLIENT) {
+                if (ownerOf(hwnd)) |o| {
+                    _ = win32.SetCursor(loadCursor(o.backend.cursor_shape));
+                    return 1;
+                }
+            }
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
         win32.WM_CONTEXTMENU => return 0,
+        win32.WM_SETFOCUS => {
+            if (ownerOf(hwnd)) |o| {
+                o.setFocused(true);
+                o.setMods(events.modsFromKeyState());
+            }
+            return 0;
+        },
+        win32.WM_KILLFOCUS => {
+            if (ownerOf(hwnd)) |o| o.setFocused(false);
+            if (win32.GetCapture() == hwnd) _ = win32.ReleaseCapture();
+            return 0;
+        },
+        win32.WM_CAPTURECHANGED => {
+            if (ownerOf(hwnd)) |o| if (o.anyMouseButtonDown()) o.cancelPointerInput();
+            return 0;
+        },
         win32.WM_MOUSEWHEEL => {
             const hi: u16 = @truncate((wparam >> 16) & 0xFFFF);
             const delta: i16 = @bitCast(hi);

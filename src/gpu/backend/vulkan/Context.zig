@@ -1,7 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vk");
+
 const gpu = @import("gpu");
+
 const Buffer = @import("Buffer.zig");
 const Frame = @import("Frame.zig");
 const Pipeline = @import("Pipeline.zig");
@@ -10,18 +12,10 @@ const Texture = @import("Texture.zig");
 const Sampler = @import("Sampler.zig");
 
 const Context = @This();
+const required_api_version = vk.API_VERSION_1_3;
 
 const DescriptorPoolEntry = struct {
     pool: vk.DescriptorPool,
-};
-
-const NativeDevice = struct {
-    instance: vk.Instance,
-    physical_device: vk.PhysicalDevice,
-    device: vk.Device,
-    graphics_queue: vk.Queue,
-    graphics_queue_family: u32,
-    get_instance_proc_addr: *const fn (vk.Instance, [*:0]const u8) callconv(.c) vk.PfnVoidFunction,
 };
 
 const DescriptorAllocation = struct {
@@ -29,31 +23,44 @@ const DescriptorAllocation = struct {
     pool: vk.DescriptorPool,
 };
 
+const VulkanLoader = struct {
+    get_instance_proc_addr: vk.PfnGetInstanceProcAddr,
+    lib: if (builtin.os.tag == .windows) void else std.DynLib,
+};
+
 allocator: std.mem.Allocator,
-vkb: vk.BaseWrapper,
+loader: VulkanLoader,
 vki: vk.InstanceWrapper,
 vkd: vk.DeviceWrapper,
 instance: vk.Instance,
 physical_device: vk.PhysicalDevice,
 device: vk.Device,
 graphics_queue: vk.Queue,
-graphics_queue_family: u32,
 surface: vk.SurfaceKHR,
 swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_views: []vk.ImageView,
 swapchain_format: vk.Format,
 swapchain_is_srgb: bool,
+swapchain_copy_src: bool,
 swapchain_extent: vk.Extent2D,
-render_pass: vk.RenderPass,
-framebuffers: []vk.Framebuffer,
 transient_command_pool: vk.CommandPool,
 command_pools: []vk.CommandPool,
 descriptor_pools: std.ArrayList(DescriptorPoolEntry),
-gpu_cfg: gpu.Context.Config,
-_current_image_index: u32 = 0,
+cfg: gpu.Context.Config,
+present_modes: gpu.Context.PresentModes,
 
-fn loadVulkan() !vk.PfnGetInstanceProcAddr {
+fn openVulkan(path: []const u8) !VulkanLoader {
+    var lib = std.DynLib.open(path) catch return error.VulkanUnavailable;
+    errdefer lib.close();
+    return .{
+        .get_instance_proc_addr = lib.lookup(vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr") orelse
+            return error.VulkanUnavailable,
+        .lib = lib,
+    };
+}
+
+fn loadVulkan() !VulkanLoader {
     switch (builtin.os.tag) {
         inline .windows => {
             const HMODULE = *anyopaque;
@@ -65,19 +72,35 @@ fn loadVulkan() !vk.PfnGetInstanceProcAddr {
             };
             const handle = extern_LoadLibraryA.LoadLibraryA("vulkan-1.dll") orelse return error.VulkanUnavailable;
             const ptr = extern_GetProcAddress.GetProcAddress(handle, "vkGetInstanceProcAddr") orelse return error.VulkanUnavailable;
-            return @ptrCast(ptr);
+            return .{ .get_instance_proc_addr = @ptrCast(ptr), .lib = {} };
         },
-        inline else => {
-            const lib_name = if (builtin.os.tag.isDarwin()) "libvulkan.1.dylib" else "libvulkan.so.1";
-            var lib = std.DynLib.open(lib_name) catch return error.VulkanUnavailable;
-            return lib.lookup(vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr") orelse error.VulkanUnavailable;
+        inline .macos => {
+            var exe_path_buf: [std.posix.PATH_MAX + 1]u8 = undefined;
+            var exe_path_buf_len: u32 = exe_path_buf.len;
+            if (std.c._NSGetExecutablePath(&exe_path_buf, &exe_path_buf_len) == 0) {
+                if (std.fs.path.dirname(std.mem.sliceTo(&exe_path_buf, 0))) |exe_dir| {
+                    var bundled_loader_buf: [std.fs.max_path_bytes]u8 = undefined;
+                    if (std.fmt.bufPrint(
+                        &bundled_loader_buf,
+                        "{s}/../Frameworks/libvulkan.1.dylib",
+                        .{exe_dir},
+                    )) |bundled_loader| {
+                        if (openVulkan(bundled_loader)) |loader| return loader else |_| {}
+                    } else |_| {}
+                }
+            }
+
+            return openVulkan("libvulkan.1.dylib");
         },
+
+        inline else => return openVulkan("libvulkan.so.1"),
     }
 }
 
-pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !gpu.Context {
-    const vkGetInstanceProcAddr = try loadVulkan();
-    const vkb = vk.BaseWrapper.load(vkGetInstanceProcAddr);
+pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, cfg: gpu.Context.Config) !Context {
+    var loader = try loadVulkan();
+    errdefer if (builtin.os.tag != .windows) loader.lib.close();
+    const vkb = vk.BaseWrapper.load(loader.get_instance_proc_addr);
 
     const instance_extensions = getInstanceExtensions(window_handle);
     const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
@@ -87,7 +110,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
             .application_version = 0,
             .p_engine_name = "knots",
             .engine_version = 0,
-            .api_version = vk.API_VERSION_1_2.toU32(),
+            .api_version = required_api_version.toU32(),
         },
         .enabled_extension_count = @intCast(instance_extensions.len),
         .pp_enabled_extension_names = &instance_extensions,
@@ -110,6 +133,11 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     var vk12_features = vk.PhysicalDeviceVulkan12Features{
         .shader_int_8 = .true,
     };
+    var vk13_features = vk.PhysicalDeviceVulkan13Features{
+        .synchronization_2 = .true,
+        .dynamic_rendering = .true,
+    };
+    vk12_features.p_next = &vk13_features;
     const enabled_features = vk.PhysicalDeviceFeatures{
         .shader_int_16 = .true,
     };
@@ -140,14 +168,6 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         allocator.free(views);
     }
 
-    const render_pass = try createRenderPass(vkd, device, sc.format);
-
-    const framebuffers = try createFramebuffers(allocator, vkd, device, views, render_pass, sc.extent);
-    errdefer {
-        for (framebuffers) |fb| vkd.destroyFramebuffer(device, fb, null);
-        allocator.free(framebuffers);
-    }
-
     const command_pools = try allocator.alloc(vk.CommandPool, images.len);
     errdefer allocator.free(command_pools);
     var pools_created: usize = 0;
@@ -173,32 +193,29 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     const initial_pool = try createDescriptorPool(vkd, device);
     try descriptor_pools.append(allocator, .{ .pool = initial_pool });
 
-    const self = try allocator.create(Context);
-    self.* = .{
+    return .{
         .allocator = allocator,
-        .vkb = vkb,
+        .loader = loader,
         .vki = vki,
         .vkd = vkd,
         .instance = instance,
         .physical_device = phys.device,
         .device = device,
         .graphics_queue = graphics_queue,
-        .graphics_queue_family = phys.queue_family,
         .surface = surface,
         .swapchain = sc.swapchain,
         .swapchain_images = images,
         .swapchain_views = views,
         .swapchain_format = sc.format,
         .swapchain_is_srgb = sc.is_srgb,
+        .swapchain_copy_src = sc.copy_src,
         .swapchain_extent = sc.extent,
-        .render_pass = render_pass,
-        .framebuffers = framebuffers,
         .command_pools = command_pools,
         .transient_command_pool = transient_command_pool,
         .descriptor_pools = descriptor_pools,
-        .gpu_cfg = cfg,
+        .cfg = cfg,
+        .present_modes = sc.present_modes,
     };
-    return .{ .ptr = self, .vtable = &vtable, .cfg = cfg };
 }
 
 fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device) !vk.DescriptorPool {
@@ -237,26 +254,11 @@ pub fn allocateDescriptorSetWithPool(self: *Context, layout: vk.DescriptorSetLay
     return .{ .set = set[0], .pool = new_pool };
 }
 
-const vtable = gpu.Context.VTable{
-    .deinit = &deinit,
-    .createBuffer = &createBuffer,
-    .createFrame = &createFrame,
-    .createPipeline = &createPipeline,
-    .createBindGroup = &createBindGroup,
-    .createTexture = &createTexture,
-    .createSampler = &createSampler,
-    .resize = &resize,
-    .surfaceFormat = &surfaceFormat,
-    .surfaceIsSrgb = &surfaceIsSrgb,
-    .clipSpaceYDown = &clipSpaceYDown,
-};
-
-fn clipSpaceYDown(_: *anyopaque) bool {
+pub fn clipSpaceYDown(_: *const Context) bool {
     return true;
 }
 
-fn deinit(ptr: *anyopaque) void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Context) void {
     self.vkd.deviceWaitIdle(self.device) catch {};
     for (self.descriptor_pools.items) |entry| {
         self.vkd.destroyDescriptorPool(self.device, entry.pool, null);
@@ -267,9 +269,6 @@ fn deinit(ptr: *anyopaque) void {
         self.vkd.destroyCommandPool(self.device, pool, null);
     }
     self.allocator.free(self.command_pools);
-    for (self.framebuffers) |fb| self.vkd.destroyFramebuffer(self.device, fb, null);
-    self.allocator.free(self.framebuffers);
-    self.vkd.destroyRenderPass(self.device, self.render_pass, null);
     for (self.swapchain_views) |v| self.vkd.destroyImageView(self.device, v, null);
     self.allocator.free(self.swapchain_views);
     self.allocator.free(self.swapchain_images);
@@ -277,52 +276,60 @@ fn deinit(ptr: *anyopaque) void {
     self.vkd.destroyDevice(self.device, null);
     self.vki.destroySurfaceKHR(self.instance, self.surface, null);
     self.vki.destroyInstance(self.instance, null);
-    self.allocator.destroy(self);
+    if (builtin.os.tag != .windows) self.loader.lib.close();
 }
 
-fn createBuffer(ptr: *anyopaque, size: usize, usage: gpu.Buffer.Usage) anyerror!gpu.Buffer {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBuffer(self: *Context, size: usize, usage: gpu.Buffer.Usage) !Buffer {
     return Buffer.create(self.allocator, self, size, usage);
 }
 
-fn createFrame(ptr: *anyopaque) anyerror!gpu.Frame {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createFrame(self: *Context) !Frame {
     return Frame.create(self.allocator, self);
 }
 
-fn createPipeline(ptr: *anyopaque, desc: gpu.Pipeline.Desc) anyerror!gpu.Pipeline {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createPipeline(self: *Context, desc: gpu.Pipeline.Desc) !Pipeline {
     return Pipeline.create(self.allocator, self, desc);
 }
 
-fn createBindGroup(ptr: *anyopaque, desc: gpu.BindGroup.Desc) anyerror!gpu.BindGroup {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createBindGroup(self: *Context, desc: BindGroup.Desc) !BindGroup {
     return BindGroup.create(self.allocator, self, desc);
 }
 
-fn createTexture(ptr: *anyopaque, desc: gpu.Texture.Desc) anyerror!gpu.Texture {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createTexture(self: *Context, desc: Texture.Desc) !Texture {
     return Texture.create(self.allocator, self, desc);
 }
 
-fn createSampler(ptr: *anyopaque, desc: gpu.Sampler.Desc) anyerror!gpu.Sampler {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn createSampler(self: *Context, desc: gpu.Sampler.Desc) !Sampler {
     return Sampler.create(self.allocator, self, desc);
 }
 
-fn resize(ptr: *anyopaque, width: u32, height: u32) anyerror!void {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn resize(self: *Context, width: u32, height: u32) !void {
     try self.vkd.deviceWaitIdle(self.device);
     try self.recreateSwapchain(width, height);
+    self.cfg.window_width = width;
+    self.cfg.window_height = height;
 }
 
-fn surfaceFormat(ptr: *anyopaque) gpu.Texture.Format {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn reconfigure(self: *Context, cfg: gpu.Context.Config) !void {
+    try self.vkd.deviceWaitIdle(self.device);
+
+    const old_cfg = self.cfg;
+    self.cfg = cfg;
+    self.recreateSwapchain(cfg.window_width, cfg.window_height) catch |err| {
+        self.cfg = old_cfg;
+        return err;
+    };
+}
+
+pub fn supportedPresentModes(self: *const Context) gpu.Context.PresentModes {
+    return self.present_modes;
+}
+
+pub fn surfaceFormat(self: *const Context) gpu.Texture.Format {
     return vkFormatToGpu(self.swapchain_format);
 }
 
-fn surfaceIsSrgb(ptr: *anyopaque) bool {
-    const self: *Context = @ptrCast(@alignCast(ptr));
+pub fn surfaceIsSrgb(self: *const Context) bool {
     return self.swapchain_is_srgb;
 }
 
@@ -340,38 +347,33 @@ fn vkFormatToGpu(f: vk.Format) gpu.Texture.Format {
 }
 
 pub fn recreateSwapchain(self: *Context, width: u32, height: u32) !void {
-    const old_image_count = self.swapchain_images.len;
+    const old_swapchain = self.swapchain;
+    const sc = try createSwapchain(self.vki, self.vkd, self.physical_device, self.device, self.surface, width, height, old_swapchain, self.cfg);
+    errdefer self.vkd.destroySwapchainKHR(self.device, sc.swapchain, null);
+    if (sc.format != self.swapchain_format) return error.SwapchainFormatChanged;
 
-    for (self.framebuffers) |fb| self.vkd.destroyFramebuffer(self.device, fb, null);
-    self.allocator.free(self.framebuffers);
+    const new_images = try getSwapchainImages(self.allocator, self.vkd, self.device, sc.swapchain);
+    errdefer self.allocator.free(new_images);
+
+    const new_views = try createImageViews(self.allocator, self.vkd, self.device, new_images, sc.format);
+    errdefer {
+        for (new_views) |v| self.vkd.destroyImageView(self.device, v, null);
+        self.allocator.free(new_views);
+    }
 
     for (self.swapchain_views) |v| self.vkd.destroyImageView(self.device, v, null);
     self.allocator.free(self.swapchain_views);
     self.allocator.free(self.swapchain_images);
-
-    const old_swapchain = self.swapchain;
-    const sc = try createSwapchain(self.vki, self.vkd, self.physical_device, self.device, self.surface, width, height, old_swapchain, self.gpu_cfg);
     self.vkd.destroySwapchainKHR(self.device, old_swapchain, null);
 
     self.swapchain = sc.swapchain;
+    self.swapchain_images = new_images;
+    self.swapchain_views = new_views;
+    self.swapchain_format = sc.format;
+    self.swapchain_is_srgb = sc.is_srgb;
+    self.swapchain_copy_src = sc.copy_src;
     self.swapchain_extent = sc.extent;
-
-    self.swapchain_images = try getSwapchainImages(self.allocator, self.vkd, self.device, sc.swapchain);
-    self.swapchain_views = try createImageViews(self.allocator, self.vkd, self.device, self.swapchain_images, sc.format);
-    self.framebuffers = try createFramebuffers(self.allocator, self.vkd, self.device, self.swapchain_views, self.render_pass, sc.extent);
-
-    if (self.swapchain_images.len != old_image_count) {
-        for (self.command_pools) |pool| self.vkd.destroyCommandPool(self.device, pool, null);
-        self.allocator.free(self.command_pools);
-        const new_pools = try self.allocator.alloc(vk.CommandPool, self.swapchain_images.len);
-        for (new_pools) |*pool| {
-            pool.* = try self.vkd.createCommandPool(self.device, &.{
-                .queue_family_index = self.graphics_queue_family,
-                .flags = .{ .reset_command_buffer_bit = true },
-            }, null);
-        }
-        self.command_pools = new_pools;
-    }
+    self.present_modes = sc.present_modes;
 }
 
 pub fn findMemoryType(self: *const Context, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
@@ -399,16 +401,30 @@ pub fn beginSingleTimeCommands(self: *const Context) !vk.CommandBuffer {
     return cmd[0];
 }
 
-pub fn endSingleTimeCommands(self: *const Context, cmd: vk.CommandBuffer) !void {
+pub const SingleTimeSubmission = struct {
+    command_buffer: vk.CommandBuffer,
+    fence: vk.Fence,
+};
+
+pub fn endSingleTimeCommands(self: *const Context, cmd: vk.CommandBuffer) !SingleTimeSubmission {
+    errdefer self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{cmd});
     try self.vkd.endCommandBuffer(cmd);
     const fence = try self.vkd.createFence(self.device, &.{ .flags = .{} }, null);
-    defer self.vkd.destroyFence(self.device, fence, null);
-    try self.vkd.queueSubmit(self.graphics_queue, &.{.{
-        .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast(&cmd),
+    errdefer self.vkd.destroyFence(self.device, fence, null);
+    try self.vkd.queueSubmit2(self.graphics_queue, &.{.{
+        .command_buffer_info_count = 1,
+        .p_command_buffer_infos = &[_]vk.CommandBufferSubmitInfo{.{
+            .command_buffer = cmd,
+            .device_mask = 1,
+        }},
     }}, fence);
-    _ = try self.vkd.waitForFences(self.device, &.{fence}, .true, std.math.maxInt(u64));
-    self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{cmd});
+    return .{ .command_buffer = cmd, .fence = fence };
+}
+
+pub fn finishSingleTimeCommands(self: *const Context, submission: SingleTimeSubmission) !void {
+    _ = try self.vkd.waitForFences(self.device, &.{submission.fence}, .true, std.math.maxInt(u64));
+    self.vkd.destroyFence(self.device, submission.fence, null);
+    self.vkd.freeCommandBuffers(self.device, self.transient_command_pool, &.{submission.command_buffer});
 }
 
 fn getMetalLayer(ns_window: *anyopaque) ?*anyopaque {
@@ -502,6 +518,21 @@ fn pickPhysicalDevice(vki: vk.InstanceWrapper, instance: vk.Instance, surface: v
     if (device_count > 16) device_count = 16;
     _ = try vki.enumeratePhysicalDevices(instance, &device_count, &devices_buf);
     for (devices_buf[0..device_count]) |dev| {
+        if (vki.getPhysicalDeviceProperties(dev).api_version < required_api_version.toU32()) continue;
+
+        var vk12_features = vk.PhysicalDeviceVulkan12Features{};
+        var vk13_features = vk.PhysicalDeviceVulkan13Features{};
+        vk12_features.p_next = &vk13_features;
+        var features = vk.PhysicalDeviceFeatures2{ .p_next = &vk12_features, .features = .{} };
+        vki.getPhysicalDeviceFeatures2(dev, &features);
+        if (features.features.shader_int_16 != .true or
+            vk12_features.shader_int_8 != .true or
+            vk13_features.synchronization_2 != .true or
+            vk13_features.dynamic_rendering != .true)
+        {
+            continue;
+        }
+
         if (try findGraphicsQueueFamily(vki, dev, surface)) |qf| return .{ .device = dev, .queue_family = qf };
     }
     return error.NoSuitableDevice;
@@ -521,10 +552,18 @@ fn findGraphicsQueueFamily(vki: vk.InstanceWrapper, device: vk.PhysicalDevice, s
     return null;
 }
 
-const SwapchainInfo = struct { swapchain: vk.SwapchainKHR, format: vk.Format, extent: vk.Extent2D, is_srgb: bool };
+const SwapchainInfo = struct {
+    swapchain: vk.SwapchainKHR,
+    format: vk.Format,
+    extent: vk.Extent2D,
+    is_srgb: bool,
+    copy_src: bool,
+    present_modes: gpu.Context.PresentModes,
+};
 
 fn createSwapchain(vki: vk.InstanceWrapper, vkd: vk.DeviceWrapper, physical_device: vk.PhysicalDevice, device: vk.Device, surface: vk.SurfaceKHR, width: u32, height: u32, old_swapchain: vk.SwapchainKHR, cfg: gpu.Context.Config) !SwapchainInfo {
     const caps = try vki.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
+    const copy_src = caps.supported_usage_flags.transfer_src_bit;
     var format_count: u32 = 0;
     _ = try vki.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, null);
     var formats_buf: [32]vk.SurfaceFormatKHR = undefined;
@@ -560,6 +599,9 @@ fn createSwapchain(vki: vk.InstanceWrapper, vkd: vk.DeviceWrapper, physical_devi
         .width = std.math.clamp(width, caps.min_image_extent.width, caps.max_image_extent.width),
         .height = std.math.clamp(height, caps.min_image_extent.height, caps.max_image_extent.height),
     };
+    if (extent.width == 0 or extent.height == 0) return error.SurfaceUnavailable;
+    const present_modes = try queryPresentModes(vki, physical_device, surface);
+    const present_mode = choosePresentMode(present_modes, cfg.present_mode) orelse return error.UnsupportedPresentMode;
     var image_count = caps.min_image_count + 1;
     if (caps.max_image_count > 0 and image_count > caps.max_image_count) image_count = caps.max_image_count;
     const swapchain = try vkd.createSwapchainKHR(device, &.{
@@ -569,20 +611,42 @@ fn createSwapchain(vki: vk.InstanceWrapper, vkd: vk.DeviceWrapper, physical_devi
         .image_color_space = cf.color_space,
         .image_extent = extent,
         .image_array_layers = 1,
-        .image_usage = .{ .color_attachment_bit = true },
+        .image_usage = .{ .color_attachment_bit = true, .transfer_src_bit = copy_src },
         .image_sharing_mode = .exclusive,
         .pre_transform = caps.current_transform,
         .composite_alpha = .{ .opaque_bit_khr = true },
-        .present_mode = switch (cfg.present_mode) {
-            .fifo => .fifo_khr,
-            .fifo_relaxed => .fifo_relaxed_khr,
-            .immediate => .immediate_khr,
-            .mailbox => .mailbox_khr,
-        },
+        .present_mode = present_mode,
         .clipped = .true,
         .old_swapchain = old_swapchain,
     }, null);
-    return .{ .swapchain = swapchain, .format = cf.format, .extent = extent, .is_srgb = is_srgb };
+    return .{ .swapchain = swapchain, .format = cf.format, .extent = extent, .is_srgb = is_srgb, .copy_src = copy_src, .present_modes = present_modes };
+}
+
+fn choosePresentMode(modes: gpu.Context.PresentModes, requested: gpu.Context.PresentMode) ?vk.PresentModeKHR {
+    if (!modes.contains(requested)) return null;
+    return switch (requested) {
+        .fifo => .fifo_khr,
+        .fifo_relaxed => .fifo_relaxed_khr,
+        .immediate => .immediate_khr,
+        .mailbox => .mailbox_khr,
+    };
+}
+
+fn queryPresentModes(vki: vk.InstanceWrapper, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !gpu.Context.PresentModes {
+    var modes = gpu.Context.PresentModes.empty;
+    var count: u32 = 0;
+    _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, null);
+    var modes_buf: [16]vk.PresentModeKHR = undefined;
+    if (count > modes_buf.len) count = @intCast(modes_buf.len);
+    _ = try vki.getPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &count, &modes_buf);
+    for (modes_buf[0..@as(usize, @intCast(count))]) |mode| switch (mode) {
+        .fifo_khr => modes.insert(.fifo),
+        .fifo_relaxed_khr => modes.insert(.fifo_relaxed),
+        .immediate_khr => modes.insert(.immediate),
+        .mailbox_khr => modes.insert(.mailbox),
+        else => {},
+    };
+    return modes;
 }
 
 fn getSwapchainImages(allocator: std.mem.Allocator, vkd: vk.DeviceWrapper, device: vk.Device, swapchain: vk.SwapchainKHR) ![]vk.Image {
@@ -611,56 +675,4 @@ fn createImageViews(allocator: std.mem.Allocator, vkd: vk.DeviceWrapper, device:
         created += 1;
     }
     return views;
-}
-
-fn createRenderPass(vkd: vk.DeviceWrapper, device: vk.Device, format: vk.Format) !vk.RenderPass {
-    return vkd.createRenderPass(device, &.{
-        .attachment_count = 1,
-        .p_attachments = &[_]vk.AttachmentDescription{.{
-            .format = format,
-            .samples = .{ .@"1_bit" = true },
-            .load_op = .clear,
-            .store_op = .store,
-            .stencil_load_op = .dont_care,
-            .stencil_store_op = .dont_care,
-            .initial_layout = .undefined,
-            .final_layout = .present_src_khr,
-        }},
-        .subpass_count = 1,
-        .p_subpasses = &[_]vk.SubpassDescription{.{
-            .pipeline_bind_point = .graphics,
-            .color_attachment_count = 1,
-            .p_color_attachments = &[_]vk.AttachmentReference{.{ .attachment = 0, .layout = .color_attachment_optimal }},
-        }},
-        .dependency_count = 1,
-        .p_dependencies = &[_]vk.SubpassDependency{.{
-            .src_subpass = vk.SUBPASS_EXTERNAL,
-            .dst_subpass = 0,
-            .src_stage_mask = .{ .color_attachment_output_bit = true },
-            .dst_stage_mask = .{ .color_attachment_output_bit = true },
-            .src_access_mask = .{},
-            .dst_access_mask = .{ .color_attachment_write_bit = true },
-        }},
-    }, null);
-}
-
-fn createFramebuffers(allocator: std.mem.Allocator, vkd: vk.DeviceWrapper, device: vk.Device, views: []vk.ImageView, render_pass: vk.RenderPass, extent: vk.Extent2D) ![]vk.Framebuffer {
-    const framebuffers = try allocator.alloc(vk.Framebuffer, views.len);
-    var created: usize = 0;
-    errdefer {
-        for (framebuffers[0..created]) |fb| vkd.destroyFramebuffer(device, fb, null);
-        allocator.free(framebuffers);
-    }
-    for (views, 0..) |view, i| {
-        framebuffers[i] = try vkd.createFramebuffer(device, &.{
-            .render_pass = render_pass,
-            .attachment_count = 1,
-            .p_attachments = &[_]vk.ImageView{view},
-            .width = extent.width,
-            .height = extent.height,
-            .layers = 1,
-        }, null);
-        created += 1;
-    }
-    return framebuffers;
 }

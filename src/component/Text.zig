@@ -51,11 +51,11 @@ pub fn close(self: *const Text, app: *App) !void {
     const id = self.key.hash();
     const s = try ui.state.getOrCreate(.text_select, ui.allocator, id);
 
-    if (ui.input.mouse_left_released) s.dragging = false;
+    if (ui.input.mouseButton(.left).released) s.dragging = false;
 
     const len: u32 = @intCast(self.content.len);
-    const press_here = ui.input.mouse_left_pressed and ui.hovering(id);
-    const is_drag = ui.pressing(id) and ui.input.mouse_left_down;
+    const press_here = ui.input.mouseButton(.left).pressed and ui.hovering(id);
+    const is_drag = ui.pressing(id) and ui.input.mouseButton(.left).down;
     const need_hit_test = (press_here or is_drag) and s.box.w() > 0 and s.box.h() > 0;
     const has_prior_selection = @min(s.anchor_byte, len) != @min(s.cursor_byte, len);
 

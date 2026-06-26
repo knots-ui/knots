@@ -58,7 +58,7 @@ pub fn open(self: *const ColorPicker, app: *App) !Element.Id {
 
     if (s.open) {
         try handlePickerInput(self, app, s);
-        if (ui.input.mouse_left_pressed and !self.isPointerInside(app, s)) {
+        if (ui.input.mouseButton(.left).pressed and !self.isPointerInside(app, s)) {
             s.open = false;
             s.editing_hex = false;
             s.has_original = false;
@@ -131,7 +131,7 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
     const alpha_id = self.key.indexed(ALPHA_INDEX).hash();
     const hex_id = self.key.indexed(HEX_INDEX).hash();
 
-    if (ui.pressing(sv_id) and ui.input.mouse_left_down) {
+    if (ui.pressing(sv_id) and ui.input.mouseButton(.left).down) {
         if (ui.state.get(.measured, sv_id)) |m| {
             const p = pointInBox(m, ui.input.mouse_pos);
             s.saturation = p[0];
@@ -140,14 +140,14 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
         }
     }
 
-    if (ui.pressing(hue_id) and ui.input.mouse_left_down) {
+    if (ui.pressing(hue_id) and ui.input.mouseButton(.left).down) {
         if (ui.state.get(.measured, hue_id)) |m| {
             s.hue = pointInBox(m, ui.input.mouse_pos)[0];
             try setColorFromState(self, app, s);
         }
     }
 
-    if (ui.pressing(alpha_id) and ui.input.mouse_left_down) {
+    if (ui.pressing(alpha_id) and ui.input.mouseButton(.left).down) {
         if (ui.state.get(.measured, alpha_id)) |m| {
             s.alpha = pointInBox(m, ui.input.mouse_pos)[0];
             try setColorFromState(self, app, s);
@@ -191,25 +191,28 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
             }
         }
 
-        for (ui.input.keys) |key| switch (key) {
-            .backspace => if (s.hex_len > 0) {
-                s.hex_len -= 1;
-                changed = true;
-            },
-            .delete => {
-                s.hex_len = 0;
-                changed = true;
-            },
-            .enter => commit = true,
-            .escape => {
-                s.editing_hex = false;
-                var buf: [10]u8 = undefined;
-                const hex = formatHex(&buf, self.value.*, true);
-                @memcpy(s.hex_buf[0..hex.len], hex);
-                s.hex_len = hex.len;
-            },
-            else => {},
-        };
+        for (ui.input.key_events) |event| {
+            if (event.action == .release) continue;
+            switch (event.key) {
+                .backspace => if (s.hex_len > 0) {
+                    s.hex_len -= 1;
+                    changed = true;
+                },
+                .delete => {
+                    s.hex_len = 0;
+                    changed = true;
+                },
+                .enter => commit = true,
+                .escape => {
+                    s.editing_hex = false;
+                    var buf: [10]u8 = undefined;
+                    const hex = formatHex(&buf, self.value.*, true);
+                    @memcpy(s.hex_buf[0..hex.len], hex);
+                    s.hex_len = hex.len;
+                },
+                else => {},
+            }
+        }
 
         if (changed) try commitHexInput(self, app, s, false);
         if (commit) try commitHexInput(self, app, s, true);

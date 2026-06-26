@@ -1,16 +1,19 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
+const CommonSampler = @import("gpu").Sampler;
 const Context = @import("Context.zig");
 
 const Sampler = @This();
 
-allocator: std.mem.Allocator,
+const FilterMode = CommonSampler.FilterMode;
+const AddressMode = CommonSampler.AddressMode;
+const Desc = CommonSampler.Desc;
+
 sampler: vk.Sampler,
 vkd: vk.DeviceWrapper,
 device: vk.Device,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Sampler.Desc) !gpu.Sampler {
+pub fn create(_: std.mem.Allocator, ctx: *Context, desc: Desc) !Sampler {
     const sampler = try ctx.vkd.createSampler(ctx.device, &.{
         .mag_filter = toVkFilter(desc.mag_filter),
         .min_filter = toVkFilter(desc.min_filter),
@@ -29,34 +32,25 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Sampler.Des
         .unnormalized_coordinates = .false,
     }, null);
 
-    const self = try allocator.create(Sampler);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .sampler = sampler,
         .vkd = ctx.vkd,
         .device = ctx.device,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Sampler.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Sampler = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Sampler) void {
     self.vkd.destroySampler(self.device, self.sampler, null);
-    self.allocator.destroy(self);
 }
 
-fn toVkFilter(mode: gpu.Sampler.FilterMode) vk.Filter {
+fn toVkFilter(mode: FilterMode) vk.Filter {
     return switch (mode) {
         .nearest => .nearest,
         .linear => .linear,
     };
 }
 
-fn toVkAddressMode(mode: gpu.Sampler.AddressMode) vk.SamplerAddressMode {
+fn toVkAddressMode(mode: AddressMode) vk.SamplerAddressMode {
     return switch (mode) {
         .clamp_to_edge => .clamp_to_edge,
         .repeat => .repeat,

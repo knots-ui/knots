@@ -1,6 +1,8 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
+const CommonPipeline = @import("gpu").Pipeline;
+const TextureFormat = @import("gpu").Texture.Format;
+
 const Context = @import("Context.zig");
 
 const Pipeline = @This();
@@ -10,7 +12,7 @@ render_pipeline: wgpu.RenderPipeline,
 bind_group_layouts: []wgpu.BindGroupLayout,
 device: wgpu.Device,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.Desc) !gpu.Pipeline {
+pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: CommonPipeline.Desc) !Pipeline {
     const wgsl = switch (desc.shader) {
         .wgsl => |s| s,
         .spirv => return error.UnsupportedShaderSource,
@@ -81,29 +83,21 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.Pipeline.De
         },
     });
 
-    const self = try allocator.create(Pipeline);
-    self.* = .{
+    return .{
         .allocator = allocator,
         .render_pipeline = pipeline,
         .bind_group_layouts = bgls,
         .device = ctx.device,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.Pipeline.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *Pipeline = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *Pipeline) void {
     self.render_pipeline.deinit();
     for (self.bind_group_layouts) |bgl| bgl.deinit();
     self.allocator.free(self.bind_group_layouts);
-    self.allocator.destroy(self);
 }
 
-fn toWgpuBglEntry(e: gpu.Pipeline.BindGroupLayoutEntry) wgpu.BindGroupLayout.Entry {
+fn toWgpuBglEntry(e: CommonPipeline.BindGroupLayoutEntry) wgpu.BindGroupLayout.Entry {
     var out: wgpu.BindGroupLayout.Entry = .{
         .binding = e.binding,
         .visibility = .{ .vertex = e.visibility.vertex, .fragment = e.visibility.fragment },
@@ -129,7 +123,7 @@ fn toWgpuBglEntry(e: gpu.Pipeline.BindGroupLayoutEntry) wgpu.BindGroupLayout.Ent
     return out;
 }
 
-fn toWgpuVertexFormat(f: gpu.Pipeline.VertexFormat) wgpu.RenderPipeline.VertexFormat {
+fn toWgpuVertexFormat(f: CommonPipeline.VertexFormat) wgpu.RenderPipeline.VertexFormat {
     return switch (f) {
         .f32 => .float32,
         .f32x2 => .float32x2,
@@ -138,7 +132,7 @@ fn toWgpuVertexFormat(f: gpu.Pipeline.VertexFormat) wgpu.RenderPipeline.VertexFo
     };
 }
 
-fn toWgpuFormat(f: gpu.Texture.Format) wgpu.Texture.Format {
+fn toWgpuFormat(f: TextureFormat) wgpu.Texture.Format {
     return switch (f) {
         .rgba8 => .rgba8_unorm,
         .rgba8_srgb => .rgba8_unorm_srgb,
@@ -150,7 +144,7 @@ fn toWgpuFormat(f: gpu.Texture.Format) wgpu.Texture.Format {
     };
 }
 
-fn toWgpuBlendFactor(f: gpu.Pipeline.BlendFactor) wgpu.RenderPipeline.BlendFactor {
+fn toWgpuBlendFactor(f: CommonPipeline.BlendFactor) wgpu.RenderPipeline.BlendFactor {
     return switch (f) {
         .zero => .zero,
         .one => .one,
@@ -159,13 +153,13 @@ fn toWgpuBlendFactor(f: gpu.Pipeline.BlendFactor) wgpu.RenderPipeline.BlendFacto
     };
 }
 
-fn toWgpuBlendOp(o: gpu.Pipeline.BlendOp) wgpu.RenderPipeline.BlendOperation {
+fn toWgpuBlendOp(o: CommonPipeline.BlendOp) wgpu.RenderPipeline.BlendOperation {
     return switch (o) {
         .add => .add,
     };
 }
 
-fn toWgpuBlend(b: gpu.Pipeline.BlendState) wgpu.RenderPipeline.BlendState {
+fn toWgpuBlend(b: CommonPipeline.BlendState) wgpu.RenderPipeline.BlendState {
     return .{
         .color = .{
             .operation = toWgpuBlendOp(b.color.op),

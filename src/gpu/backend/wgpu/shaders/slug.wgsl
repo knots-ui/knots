@@ -110,29 +110,29 @@ fn vs_main(in: VsIn) -> VsOut {
 fn normalizedRadii(radii: vec4f, size: vec2f) -> vec4f {
     let r = max(radii, vec4f(0.0));
     var scale: f32 = 1.0;
-    if (r.x + r.y > size.x && r.x + r.y > 0.0) {
+    if r.x + r.y > size.x && r.x + r.y > 0.0 {
         scale = min(scale, size.x / (r.x + r.y));
     }
-    if (r.y + r.z > size.y && r.y + r.z > 0.0) {
+    if r.y + r.z > size.y && r.y + r.z > 0.0 {
         scale = min(scale, size.y / (r.y + r.z));
     }
-    if (r.z + r.w > size.x && r.z + r.w > 0.0) {
+    if r.z + r.w > size.x && r.z + r.w > 0.0 {
         scale = min(scale, size.x / (r.z + r.w));
     }
-    if (r.w + r.x > size.y && r.w + r.x > 0.0) {
+    if r.w + r.x > size.y && r.w + r.x > 0.0 {
         scale = min(scale, size.y / (r.w + r.x));
     }
     return r * scale;
 }
 
 fn cornerRadius(p: vec2f, radii: vec4f) -> f32 {
-    if (p.y < 0.0) {
-        if (p.x < 0.0) {
+    if p.y < 0.0 {
+        if p.x < 0.0 {
             return radii.x;
         }
         return radii.y;
     }
-    if (p.x >= 0.0) {
+    if p.x >= 0.0 {
         return radii.z;
     }
     return radii.w;

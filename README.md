@@ -20,7 +20,7 @@ zig fetch --save git+https://codeberg.org/shahwali/knots.git
 // build.zig
 const GPUBackend = @import("knots").GPUBackend;
 
-const knots = b.dependency("knots", .{ .target = target, .optimize = optimize, .gpu_backends = &[_]GPUBackend{ .vulkan, .wgpu } });
+const knots = b.dependency("knots", .{ .target = target, .optimize = optimize, .gpu_backend = GPUBackend.vulkan });
 
 
 exe.root_module.addImport(knots.module("knots"));
@@ -68,6 +68,18 @@ fn frameCb(app: *knots.App) !void {
 | Windows          | WebGPU and Vulkan            |
 | Web (emscripten) | WebGPU                       |
 
+### Distributing Vulkan applications on macOS
+
+Knots checks for a bundled Vulkan loader before falling back to the system loader. A standalone application bundle using the Vulkan backend must include the loader, MoltenVK, and its ICD manifest:
+
+```text
+MyApp.app/Contents/Frameworks/libvulkan.1.dylib
+MyApp.app/Contents/Frameworks/libMoltenVK.dylib
+MyApp.app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json
+```
+
+The manifest's `library_path` must resolve to the bundled `libMoltenVK.dylib`.
+
 ## Examples
 
 See [examples](examples), you can also try the web version of the playground [here](https://shahwali.codeberg.page/knots/).
@@ -84,3 +96,4 @@ Below goals are listed in order of importance.
 ## Known limitations
 
 - Linux windowing is Wayland-only.
+- Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.

@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     });
     var ctx = Context{
         .app = app,
-        .devtools = try .init(init.gpa, app.renderer.cfg.gpu_backend, app.renderer.cfg.present_mode),
+        .devtools = try .init(init.gpa, app.renderer.cfg.present_mode),
     };
     defer {
         ctx.app.deinit();

@@ -1,16 +1,30 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const gpu = @import("gpu");
 const Buffer = @import("Buffer.zig");
 const Pipeline = @import("Pipeline.zig");
 const BindGroup = @import("BindGroup.zig");
+const Texture = @import("Texture.zig");
 
 const RenderPass = @This();
 
-allocator: std.mem.Allocator,
 pass: wgpu.RenderPassEncoder,
 
-pub fn create(allocator: std.mem.Allocator, encoder: wgpu.CommandEncoder, view: wgpu.TextureView, desc: gpu.RenderPass.Desc) !gpu.RenderPass {
+pub const LoadOp = enum { clear, load };
+pub const StoreOp = enum { store, discard };
+
+pub const ColorAttachment = struct {
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_color: [4]f32 = .{ 0.0, 0.0, 0.0, 1.0 },
+    target: ?*Texture = null,
+};
+
+pub const Desc = struct {
+    label: []const u8 = "",
+    color_attachment: ColorAttachment = .{},
+};
+
+pub fn create(_: std.mem.Allocator, encoder: wgpu.CommandEncoder, view: wgpu.TextureView, desc: Desc) !RenderPass {
     const ca = desc.color_attachment;
 
     const pass = try encoder.beginRenderPass(.{
@@ -36,61 +50,36 @@ pub fn create(allocator: std.mem.Allocator, encoder: wgpu.CommandEncoder, view: 
         },
     });
 
-    const self = try allocator.create(RenderPass);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .pass = pass,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.RenderPass.VTable{
-    .end = &end,
-    .bindPipeline = &bindPipeline,
-    .setBindGroup = &setBindGroup,
-    .setVertexBuffer = &setVertexBuffer,
-    .setIndexBuffer = &setIndexBuffer,
-    .setScissorRect = &setScissorRect,
-    .drawIndexed = &drawIndexed,
-};
-
-fn end(ptr: *anyopaque) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
+pub fn end(self: *RenderPass) void {
     self.pass.end();
     self.pass.deinit();
-    self.allocator.destroy(self);
 }
 
-fn bindPipeline(ptr: *anyopaque, pipeline: *const gpu.Pipeline) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
-    const wgpu_pipeline: *Pipeline = @ptrCast(@alignCast(pipeline.ptr));
-    self.pass.setPipeline(wgpu_pipeline.render_pipeline);
+pub fn bindPipeline(self: *RenderPass, pipeline: *const Pipeline) void {
+    self.pass.setPipeline(pipeline.render_pipeline);
 }
 
-fn setBindGroup(ptr: *anyopaque, group_index: u32, group: *const gpu.BindGroup) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
-    const wbg: *BindGroup = @ptrCast(@alignCast(group.ptr));
-    self.pass.setBindGroup(group_index, wbg.bind_group, &.{});
+pub fn setBindGroup(self: *RenderPass, group_index: u32, group: *const BindGroup) void {
+    self.pass.setBindGroup(group_index, group.bind_group, &.{});
 }
 
-fn setVertexBuffer(ptr: *anyopaque, slot: u32, buf: *const gpu.Buffer, offset: usize, size: usize) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
-    const wgpu_buf: *Buffer = @ptrCast(@alignCast(buf.ptr));
-    self.pass.setVertexBuffer(slot, wgpu_buf.buffer, offset, size);
+pub fn setVertexBuffer(self: *RenderPass, slot: u32, buf: *const Buffer, offset: usize, size: usize) void {
+    self.pass.setVertexBuffer(slot, buf.buffer, offset, size);
 }
 
-fn setIndexBuffer(ptr: *anyopaque, buf: *const gpu.Buffer, offset: usize, size: usize) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
-    const wgpu_buf: *Buffer = @ptrCast(@alignCast(buf.ptr));
-    self.pass.setIndexBuffer(wgpu_buf.buffer, .uint32, offset, size);
+pub fn setIndexBuffer(self: *RenderPass, buf: *const Buffer, offset: usize, size: usize) void {
+    self.pass.setIndexBuffer(buf.buffer, .uint32, offset, size);
 }
 
-fn setScissorRect(ptr: *anyopaque, x: u32, y: u32, w: u32, h: u32) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
+pub fn setScissorRect(self: *RenderPass, x: u32, y: u32, w: u32, h: u32) void {
     self.pass.setScissorRect(x, y, w, h);
 }
 
-fn drawIndexed(ptr: *anyopaque, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
-    const self: *RenderPass = @ptrCast(@alignCast(ptr));
+pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
     self.pass.drawIndexed(index_count, instance_count, first_index, base_vertex, first_instance);
 }

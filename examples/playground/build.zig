@@ -5,15 +5,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{ .cpu_model = .baseline } });
     const optimize = b.standardOptimizeOption(.{});
 
-    const backends: []const GPUBackend = if (target.result.os.tag == .emscripten)
-        &[_]GPUBackend{.wgpu}
-    else
-        &[_]GPUBackend{ .wgpu, .vulkan };
-
     const knots = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
-        .gpu_backends = backends,
     });
 
     const mod = b.addModule("playground", .{

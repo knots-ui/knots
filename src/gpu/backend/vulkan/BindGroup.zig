@@ -1,6 +1,5 @@
 const std = @import("std");
 const vk = @import("vk");
-const gpu = @import("gpu");
 const Context = @import("Context.zig");
 const Pipeline = @import("Pipeline.zig");
 const Buffer = @import("Buffer.zig");
@@ -9,14 +8,37 @@ const Sampler = @import("Sampler.zig");
 
 const BindGroup = @This();
 
-allocator: std.mem.Allocator,
 ctx: *Context,
 descriptor_set: vk.DescriptorSet,
 descriptor_pool: vk.DescriptorPool,
 
-pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.Desc) !gpu.BindGroup {
-    const vk_pipeline: *Pipeline = @ptrCast(@alignCast(desc.pipeline.ptr));
-    const layout = vk_pipeline.descriptorSetLayout(desc.layout_index);
+pub const BufferBinding = struct {
+    buffer: *const Buffer,
+    offset: u64 = 0,
+    size: u64 = 0,
+};
+
+pub const Entry = union(enum) {
+    buffer: BufferBinding,
+    read_only_storage_buffer: BufferBinding,
+    texture_view: *const Texture,
+    sampler: *const Sampler,
+};
+
+pub const BindingEntry = struct {
+    binding: u32,
+    resource: Entry,
+};
+
+pub const Desc = struct {
+    label: []const u8 = "",
+    pipeline: *const Pipeline,
+    layout_index: u32,
+    entries: []const BindingEntry,
+};
+
+pub fn create(_: std.mem.Allocator, ctx: *Context, desc: Desc) !BindGroup {
+    const layout = desc.pipeline.descriptorSetLayout(desc.layout_index);
 
     const alloc_result = try ctx.allocateDescriptorSetWithPool(layout);
 
@@ -28,9 +50,8 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
     for (desc.entries, 0..) |e, i| {
         switch (e.resource) {
             .buffer => |b| {
-                const vbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
                 buf_info_buf[i] = .{
-                    .buffer = vbuf.buffer,
+                    .buffer = b.buffer.buffer,
                     .offset = b.offset,
                     .range = if (b.size == 0) vk.WHOLE_SIZE else b.size,
                 };
@@ -46,9 +67,8 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
                 };
             },
             .read_only_storage_buffer => |b| {
-                const vbuf: *Buffer = @ptrCast(@alignCast(b.buffer.ptr));
                 buf_info_buf[i] = .{
-                    .buffer = vbuf.buffer,
+                    .buffer = b.buffer.buffer,
                     .offset = b.offset,
                     .range = if (b.size == 0) vk.WHOLE_SIZE else b.size,
                 };
@@ -64,10 +84,9 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
                 };
             },
             .texture_view => |t| {
-                const vtex: *Texture = @ptrCast(@alignCast(t.ptr));
                 img_info_buf[i] = .{
                     .sampler = .null_handle,
-                    .image_view = vtex.image_view,
+                    .image_view = t.image_view,
                     .image_layout = .shader_read_only_optimal,
                 };
                 writes_buf[i] = .{
@@ -82,9 +101,8 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
                 };
             },
             .sampler => |s| {
-                const vsamp: *Sampler = @ptrCast(@alignCast(s.ptr));
                 img_info_buf[i] = .{
-                    .sampler = vsamp.sampler,
+                    .sampler = s.sampler,
                     .image_view = .null_handle,
                     .image_layout = .undefined,
                 };
@@ -104,22 +122,13 @@ pub fn create(allocator: std.mem.Allocator, ctx: *Context, desc: gpu.BindGroup.D
 
     ctx.vkd.updateDescriptorSets(ctx.device, writes_buf[0..desc.entries.len], null);
 
-    const self = try allocator.create(BindGroup);
-    self.* = .{
-        .allocator = allocator,
+    return .{
         .ctx = ctx,
         .descriptor_set = alloc_result.set,
         .descriptor_pool = alloc_result.pool,
     };
-    return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable = gpu.BindGroup.VTable{
-    .deinit = &deinit,
-};
-
-fn deinit(ptr: *anyopaque) void {
-    const self: *BindGroup = @ptrCast(@alignCast(ptr));
+pub fn deinit(self: *BindGroup) void {
     self.ctx.vkd.freeDescriptorSets(self.ctx.device, self.descriptor_pool, &.{self.descriptor_set}) catch {};
-    self.allocator.destroy(self);
 }

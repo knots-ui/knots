@@ -137,7 +137,7 @@ fn renderPopup(self: *const Tooltip, app: *App, s: *State.Tooltip) !void {
 
     const p = placePopup(s.viewport_box, s.anchor_box, measured_size, self.placement, self.gap);
 
-    _ = try ui.openRoot(popup_key, p.x, p.y, .{
+    const tooltip_id = try ui.openRoot(popup_key, p.x, p.y, .{
         .direction = .row,
         .width = .fixed(p.width),
         .height = .{ .kind = .fit, .max = @max(p.height, s.viewport_box.h()) },
@@ -145,6 +145,10 @@ fn renderPopup(self: *const Tooltip, app: *App, s: *State.Tooltip) !void {
         .padding = self.popup_padding,
         .overflow = .hidden,
     }, .{ .rect = self.popup_style.toRect(&ui.theme) });
+    try ui.setAccessibility(tooltip_id, .{
+        .role = .tooltip,
+        .name = self.content,
+    });
 
     {
         var deco = try ui.textDecoration(self.content, self.popup_text_size.resolve(), self.popup_font, true);

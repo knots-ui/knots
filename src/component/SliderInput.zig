@@ -30,7 +30,7 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
 
     const slider_state = try ui.state.getOrCreate(.slider, ui.allocator, id);
 
-    if (ui.pressing(id) and ui.input.mouse_left_down) {
+    if (ui.pressing(id) and ui.input.mouseButton(.left).down) {
         const bounds = slider_state.bounds;
         if (bounds.w() > 0) {
             const mx: f32 = @floatCast(ui.input.mouse_pos[0]);
@@ -42,13 +42,36 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
             }
         }
     }
+    if (ui.focused(id)) {
+        const range = self.max - self.min;
+        const abs_range = @abs(range);
+        const step = if (self.steps > 0) self.steps else abs_range / 100.0;
+        var next_value: ?f32 = null;
+        if (ui.input.containsKey(.home)) {
+            next_value = self.min;
+        } else if (ui.input.containsKey(.end)) {
+            next_value = self.max;
+        } else if (step > 0 and (ui.input.containsKey(.left) or ui.input.containsKey(.down))) {
+            next_value = self.value.* - step;
+        } else if (step > 0 and (ui.input.containsKey(.right) or ui.input.containsKey(.up))) {
+            next_value = self.value.* + step;
+        }
+        if (next_value) |v| {
+            const new_value = self.steppedValue(v);
+            if (new_value != self.value.*) {
+                self.value.* = new_value;
+                if (self.onChange) |cb| try cb(app);
+            }
+            ui.input.consumeKeyboard();
+        }
+    }
 
     const range = self.max - self.min;
     const display_value = self.steppedValue(self.value.*);
     const progress: f32 = if (range > 0) std.math.clamp((display_value - self.min) / range, 0, 1) else 0;
 
     const is_hovered = ui.hovering(id);
-    const is_dragging = ui.pressing(id) and ui.input.mouse_left_down;
+    const is_dragging = ui.pressing(id) and ui.input.mouseButton(.left).down;
     const opts: animation.Options = .{ .duration_ms = 100 };
     const hover_t = ui.anim(id, "hover", if (is_hovered) 1.0 else 0.0, opts);
     const drag_t = ui.anim(id, "drag", if (is_dragging) 1.0 else 0.0, opts);
@@ -63,10 +86,11 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
 
     const element_height = @max(self.track_height, self.knob_radius * 2);
 
-    return try ui.open(self.key, .{
+    const element_id = try ui.open(self.key, .{
         .width = self.width,
         .height = .fixed(element_height),
         .interactive = true,
+        .focusable = true,
     }, .{ .range = .{
         .progress = progress,
         .track_color = self.track_color.resolve(&ui.theme),
@@ -78,6 +102,15 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
         .halo_radius = if (halo_alpha > 0.001) halo_r else 0,
         .halo_color = halo_color,
     } });
+    try ui.setAccessibility(element_id, .{
+        .role = .slider,
+        .state = .{
+            .value_number = display_value,
+            .min = self.min,
+            .max = self.max,
+        },
+    });
+    return element_id;
 }
 
 pub fn close(_: *const SliderInput, app: *App) !void {

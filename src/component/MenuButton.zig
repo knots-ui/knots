@@ -55,7 +55,7 @@ pub fn MenuButton(comptime Menu: type) type {
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.menu_button, ui.allocator, id);
 
-            if (s.open and ui.input.mouse_left_pressed and !isPointerInside(s, ui.input.mouse_pos)) {
+            if (s.open and ui.input.mouseButton(.left).pressed and !isPointerInside(s, ui.input.mouse_pos)) {
                 s.open = false;
                 try app.signal(.redraw);
             }
@@ -106,8 +106,14 @@ pub fn MenuButton(comptime Menu: type) type {
                 .height = self.height,
                 .padding = self.padding,
                 .interactive = true,
+                .focusable = true,
                 .grid_placement = self.grid_placement,
             }, .{ .rect = deco_rect });
+            try ui.setAccessibility(rect, .{
+                .role = .button,
+                .name = if (self.text) |t_| t_.content else &.{},
+                .state = .{ .expanded = s.open },
+            });
 
             if (self.text) |text| {
                 const text_color: Color.Input =

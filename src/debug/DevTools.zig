@@ -2,12 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const knots = @import("knots");
+const gpu = @import("gpu");
 const Perf = @import("Perf.zig");
 
 const Element = @import("layout").Element;
 
-pub const GPUBackend = @import("gpu_backend").Backend;
-pub const PresentMode = @import("gpu").Context.PresentMode;
+pub const PresentMode = gpu.Context.PresentMode;
 
 const config = @import("debug_config");
 
@@ -16,8 +16,6 @@ const Graph = knots.component.Graph;
 const Rect = knots.component.Rect;
 const SelectInput = knots.component.SelectInput;
 const Text = knots.component.Text;
-
-const present_modes = std.enums.values(PresentMode);
 
 const panel_w: f32 = 680.0;
 const panel_landscape_h: f32 = 260.0;
@@ -47,8 +45,7 @@ const RuntimeHistory = struct {
 };
 
 const State = struct {
-    backend_idx: u32,
-    present_mode_idx: u32,
+    present_mode: PresentMode,
     panel_open: bool = false,
     active_tab: Tab = .metrics,
     perf: Perf = .{},
@@ -67,18 +64,10 @@ fn mustFindIdx(slice: anytype, needle: anytype) u32 {
     unreachable;
 }
 
-fn enumTagNames(comptime T: type, comptime values: []const T) [][]const u8 {
-    comptime var names: [values.len][]const u8 = undefined;
-    inline for (values, 0..) |v, i| names[i] = @tagName(v);
-    const fixed: [values.len][]const u8 = names;
-    return @constCast(&fixed);
-}
-
-pub fn init(allocator: std.mem.Allocator, gpu_backend: GPUBackend, present_mode: PresentMode) !DevTools {
+pub fn init(allocator: std.mem.Allocator, present_mode: PresentMode) !DevTools {
     const state = try allocator.create(State);
     state.* = .{
-        .backend_idx = mustFindIdx(GPUBackend.availableSlice(), gpu_backend),
-        .present_mode_idx = mustFindIdx(present_modes, present_mode),
+        .present_mode = present_mode,
     };
     return .{ .state = state };
 }
@@ -95,7 +84,6 @@ const runtime_tab_key: knots.ui.Key = .str("debug_devtools_runtime_tab");
 const renderer_tab_key: knots.ui.Key = .str("debug_devtools_renderer_tab");
 const close_key: knots.ui.Key = .str("debug_devtools_close");
 const apply_key: knots.ui.Key = .str("debug_devtools_apply");
-const backend_key: knots.ui.Key = .str("debug_devtools_backend");
 const present_mode_key: knots.ui.Key = .str("debug_devtools_present_mode");
 const spark_key: knots.ui.Key = .str("debug_devtools_spark");
 
@@ -206,17 +194,6 @@ fn renderPanel(self: *const DevTools, app: *knots.App, window_w: f32, trigger_y:
 
     app.ui.close();
 
-    if (app.ui.leftClickedWithin(apply_key.hash())) {
-        const backend_idx = selectedIdx(app, backend_key, self.state.backend_idx);
-        const present_mode_idx = selectedIdx(app, present_mode_key, self.state.present_mode_idx);
-        self.state.backend_idx = backend_idx;
-        self.state.present_mode_idx = present_mode_idx;
-        try app.reconfigureRenderer(.{
-            .gpu_backend = GPUBackend.availableSlice()[backend_idx],
-            .present_mode = present_modes[present_mode_idx],
-        });
-        if (self.onClick) |cb| try cb(app);
-    }
 }
 
 fn centeredOverlayX(window_w: f32, width: f32) f32 {
@@ -387,6 +364,19 @@ fn renderSparkline(self: *const DevTools, app: *knots.App, width: f32) !void {
 }
 
 fn renderRenderer(self: *const DevTools, app: *knots.App) !void {
+    if (app.rendererReconfigureError() != null) self.state.present_mode = app.renderer.cfg.present_mode;
+
+    var supported_modes = app.renderer.supportedPresentModes();
+    var mode_values: [std.enums.values(PresentMode).len]PresentMode = undefined;
+    var mode_labels: [mode_values.len][]const u8 = undefined;
+    var mode_count: usize = 0;
+    var mode_it = supported_modes.iterator();
+    while (mode_it.next()) |mode| {
+        mode_values[mode_count] = mode;
+        mode_labels[mode_count] = @tagName(mode);
+        mode_count += 1;
+    }
+
     _ = try app.ui.open(panel_key.indexed(20), .{
         .width = .grow(),
         .direction = .column,
@@ -416,14 +406,12 @@ fn renderRenderer(self: *const DevTools, app: *knots.App) !void {
         .color = .dimmed,
         .selectable = false,
     });
-    try app.e(SelectInput(GPUBackend){
-        .key = backend_key,
-        .initial_selected = self.state.backend_idx,
-        .width = .grow(),
-        .labels = enumTagNames(GPUBackend, GPUBackend.availableSlice()),
-        .values = GPUBackend.availableSlice(),
-        .dropdown_z_index = popup_z,
+    try app.e(Text{
+        .key = panel_key.indexed(26),
+        .content = @tagName(gpu.Backend),
         .size = .sm,
+        .width = .grow(),
+        .selectable = false,
     });
     app.ui.close();
 
@@ -439,29 +427,62 @@ fn renderRenderer(self: *const DevTools, app: *knots.App) !void {
         .color = .dimmed,
         .selectable = false,
     });
-    try app.e(SelectInput(PresentMode){
-        .key = present_mode_key,
-        .initial_selected = self.state.present_mode_idx,
-        .width = .grow(),
-        .dropdown_z_index = popup_z,
-        .size = .sm,
-    });
+    if (mode_count == 1) {
+        try app.e(Text{
+            .key = present_mode_key,
+            .content = mode_labels[0],
+            .size = .sm,
+            .width = .grow(),
+            .selectable = false,
+        });
+    } else if (mode_count > 1) {
+        try app.e(SelectInput(PresentMode){
+            .key = present_mode_key,
+            .labels = mode_labels[0..mode_count],
+            .values = mode_values[0..mode_count],
+            .initial_selected = mustFindIdx(mode_values[0..mode_count], self.state.present_mode),
+            .width = .grow(),
+            .dropdown_z_index = popup_z,
+            .size = .sm,
+        });
+    }
     app.ui.close();
 
-    try app.e(Button{
-        .key = apply_key,
-        .width = .grow(),
-        .height = .fixed(32),
-        .justify = .center,
-        .@"align" = .center,
-        .style = .{ .color = .primary, .corner_radius = .sm },
-        .hover_anim = .{},
-        .text = .{ .content = "Apply" },
-    });
+    if (mode_count > 1) {
+        try app.e(Button{
+            .key = apply_key,
+            .width = .grow(),
+            .height = .fixed(32),
+            .justify = .center,
+            .@"align" = .center,
+            .style = .{ .color = .primary, .corner_radius = .sm },
+            .hover_anim = .{},
+            .text = .{ .content = "Apply" },
+        });
+    }
+
+    if (app.rendererReconfigureError()) |err| {
+        try app.e(Text{
+            .key = panel_key.indexed(27),
+            .content = try std.fmt.allocPrint(app.arena(), "Reconfigure failed: {s}", .{@errorName(err)}),
+            .size = .xs,
+            .color = .@"error",
+            .selectable = false,
+        });
+    }
 
     app.ui.close();
 
     app.ui.close();
+
+    if (mode_count > 1 and app.ui.leftClickedWithin(apply_key.hash())) {
+        const present_mode_idx = selectedIdx(app, present_mode_key, mustFindIdx(mode_values[0..mode_count], self.state.present_mode));
+        self.state.present_mode = mode_values[present_mode_idx];
+        var cfg = app.renderer.cfg;
+        cfg.present_mode = self.state.present_mode;
+        try app.reconfigureRenderer(cfg);
+        if (self.onClick) |cb| try cb(app);
+    }
 }
 
 fn renderDiagnostics(_: *const DevTools, app: *knots.App) !void {
