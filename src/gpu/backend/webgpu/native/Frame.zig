@@ -1,10 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const wgpu = @import("wgpu");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
 const gpu = @import("gpu");
 
 const Frame = @This();
+const is_browser_wasm = switch (builtin.cpu.arch) {
+    .wasm32, .wasm64 => true,
+    else => false,
+} and builtin.os.tag == .freestanding;
 
 surface_texture: ?wgpu.Texture,
 view: ?wgpu.TextureView,
@@ -103,6 +108,13 @@ fn submit(self: *Frame) !void {
 }
 
 fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadback {
+    if (comptime is_browser_wasm) {
+        return error.SurfaceReadbackUnsupported;
+    }
+    return self.submitReadbackCopy(allocator);
+}
+
+fn submitReadbackCopy(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadback {
     errdefer {
         if (self.encoder) |e| e.deinit();
         self.encoder = null;

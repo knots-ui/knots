@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const App = @import("knots").App;
+const platform = @import("knots").platform;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Element = @import("layout").Element;
@@ -32,11 +33,12 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput
     for (ui.input.key_events) |event| {
         if (event.action == .release) continue;
         const key = event.key;
-        const super_ctrl_held = switch (builtin.os.tag) {
-            .macos => event.mods.super,
-            .emscripten => (event.mods.ctrl and !event.mods.alt) or event.mods.super,
-            else => event.mods.ctrl and !event.mods.alt,
-        };
+        const super_ctrl_held = if (builtin.os.tag == .macos)
+            event.mods.super
+        else if (platform.is_browser_wasm)
+            (event.mods.ctrl and !event.mods.alt) or event.mods.super
+        else
+            event.mods.ctrl and !event.mods.alt;
         switch (key) {
             .c => if (super_ctrl_held) {
                 const sel = selectionRange(s);

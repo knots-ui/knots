@@ -1,5 +1,5 @@
 const std = @import("std");
-const builtin = @import("builtin");
+const browser_exports = @import("browser_exports");
 
 const render = @import("render");
 const window = @import("window");
@@ -10,6 +10,7 @@ const UI = @import("ui").UI;
 const CompletionQueue = @import("CompletionQueue.zig");
 const ReturnType = @import("util.zig").ReturnType;
 const Viewport = @import("Viewport.zig");
+const platform = @import("platform.zig");
 
 pub const Callback = *const fn (*App) anyerror!void;
 
@@ -144,25 +145,22 @@ pub fn start(self: *App, frame_cb: Callback) !void {
     self.main_viewport.window.requestFrame();
     self.main_viewport.window.pollEvents(self.io);
 
-    switch (builtin.os.tag) {
-        .emscripten => {},
-        else => {
-            defer {
-                self.running = false;
-                self.viewport = self.main_viewport;
-                self.destroySecondaryViewports();
-                self.main_viewport.window.clearFrameHandler();
-            }
+    if (!platform.is_browser_wasm) {
+        defer {
+            self.running = false;
+            self.viewport = self.main_viewport;
+            self.destroySecondaryViewports();
+            self.main_viewport.window.clearFrameHandler();
+        }
+        try self.takeFrameEventError();
+        try self.renderer_group.sweepSharedCaches();
+        self.sweepClosedViewports();
+        while (self.main_viewport.window.isOpen()) {
+            self.main_viewport.window.waitEvents(self.io);
             try self.takeFrameEventError();
             try self.renderer_group.sweepSharedCaches();
             self.sweepClosedViewports();
-            while (self.main_viewport.window.isOpen()) {
-                self.main_viewport.window.waitEvents(self.io);
-                try self.takeFrameEventError();
-                try self.renderer_group.sweepSharedCaches();
-                self.sweepClosedViewports();
-            }
-        },
+        }
     }
 }
 
@@ -174,7 +172,7 @@ pub fn start(self: *App, frame_cb: Callback) !void {
 /// Returns an id that is stable until that viewport closes.
 pub fn openWindow(self: *App, open_cfg: OpenWindowConfig, frame_cb: Callback) !Viewport.Id {
     if (!self.running) return error.AppNotStarted;
-    if (builtin.os.tag == .emscripten) return error.UnsupportedPlatform;
+    if (platform.is_browser_wasm) return error.UnsupportedPlatform;
     try self.secondary_viewports.ensureUnusedCapacity(self.allocator, 1);
     const id = try self.allocateViewportId();
 
@@ -341,17 +339,18 @@ fn stepFrameHook(ctx: *anyopaque) void {
         self.reportFrameHookError(err);
         return;
     };
-    if (builtin.os.tag == .emscripten)
+    if (platform.is_browser_wasm)
         self.renderer_group.sweepSharedCaches() catch |err| self.reportFrameHookError(err);
 }
 
 fn reportFrameHookError(self: *App, err: anyerror) void {
     self.frame_event_error = err;
-    self.main_viewport.window.postEmptyEvent();
-    switch (builtin.os.tag) {
-        inline .emscripten => std.os.emscripten.emscripten_log(std.os.emscripten.LOG.ERROR, "error in presenting frame: %s", (@errorName(err)).ptr),
-        inline else => {},
+    if (platform.is_browser_wasm) {
+        self.main_viewport.window.clearFrameHandler();
+        browser_exports.reportFatalError(err);
+        return;
     }
+    self.main_viewport.window.postEmptyEvent();
 }
 
 /// Request another frame for the currently rendering viewport.

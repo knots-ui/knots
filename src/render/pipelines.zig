@@ -106,7 +106,7 @@ fn primitivesDescForTarget(kind: PrimitivesKind, target_format: ?gpu.Texture.For
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
     const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
-        .wgpu => .{ .wgsl = shaders.primitives_wgsl },
+        .webgpu => .{ .wgsl = shaders.primitives_wgsl },
         .vulkan => .{ .spirv = .{
             .vs = switch (kind) {
                 .vertex => shaders.primitives_vert_spv,
@@ -140,7 +140,7 @@ fn slugDescForTarget(target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
     const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
-        .wgpu => .{ .wgsl = shaders.slug_wgsl },
+        .webgpu => .{ .wgsl = shaders.slug_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.slug_vert_spv, .fs = shaders.slug_frag_spv, .srgb_encode_constant = 0 } },
     };
 

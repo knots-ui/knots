@@ -61,7 +61,8 @@ const CompletionQueue = @This();
 
 pub fn init(allocator: Allocator, max_completions: usize) !CompletionQueue {
     const buf = try allocator.alloc(Completion, max_completions);
-    return CompletionQueue{
+    errdefer allocator.free(buf);
+    return .{
         .buf = buf,
         .queue = .init(buf),
         .wg = .init,

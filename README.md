@@ -61,12 +61,14 @@ fn frameCb(app: *knots.App) !void {
 
 ## Supported platforms:
 
-| Platform         | Supported GPU APIs           |
-| ---------------- | ---------------------------- |
-| macOS            | WebGPU and Vulkan (MoltenVK) |
-| Linux            | WebGPU and Vulkan            |
-| Windows          | WebGPU and Vulkan            |
-| Web (emscripten) | WebGPU                       |
+| Platform            | Supported GPU APIs           |
+| ------------------- | ---------------------------- |
+| macOS               | WebGPU and Vulkan (MoltenVK) |
+| Linux               | WebGPU and Vulkan            |
+| Windows             | WebGPU and Vulkan            |
+| WASM (freestanding) | WebGPU                       |
+
+Browser WASM dispatch is cooperative and immediate-only. Work scheduled with `app.dispatch` runs on the main thread, so it must not block or rely on `std.Io.sleep` unless a future worker-backed runtime is added.
 
 ### Distributing Vulkan applications on macOS
 

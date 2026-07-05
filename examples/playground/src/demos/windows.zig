@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const knots = @import("knots");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
@@ -55,11 +54,11 @@ fn body(app: *knots.App) !void {
                 .disabled_style = .{ .color = .muted, .corner_radius = .sm },
                 .hover_anim = .{},
                 .key = .src(@src()),
-                .onClick = if (builtin.os.tag != .emscripten) openNativeWindow else null,
+                .onClick = if (!knots.platform.is_browser_wasm) openNativeWindow else null,
                 .justify = .center,
                 .@"align" = .center,
                 .text = .{ .content = "open native window" },
-                .disabled = builtin.os.tag == .emscripten,
+                .disabled = knots.platform.is_browser_wasm,
             },
         },
     });

@@ -1,43 +1,58 @@
 const std = @import("std");
-const GPUBackend = @import("knots").GPUBackend;
+const Knots = @import("knots");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{ .cpu_model = .baseline } });
     const optimize = b.standardOptimizeOption(.{});
-    const gpu_backend: GPUBackend = switch (target.result.os.tag) {
-        .macos, .emscripten => .wgpu,
-        .windows, .linux => .vulkan,
-        else => .wgpu,
-    };
 
     const knots = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
-        .gpu_backend = gpu_backend,
     });
 
-    const exe = b.addExecutable(.{
-        .name = "playground",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("src/main.zig"),
-            .imports = &.{.{ .name = "knots", .module = knots.module("knots") }},
-        }),
+    const mod = b.addModule("triangle", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/root.zig"),
+        .imports = &.{.{ .name = "knots", .module = knots.module("knots") }},
     });
 
-    if (optimize != .Debug) exe.subsystem = .windows;
+    const exe_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/main.zig"),
+        .imports = &.{
+            .{ .name = "knots", .module = knots.module("knots") },
+            .{ .name = "triangle", .module = mod },
+        },
+    });
 
+    const exe = b.addExecutable(.{ .name = "triangle", .root_module = exe_mod });
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the triangle app");
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
+    if (isBrowserWasmTarget(target.result)) {
+        exe.entry = .disabled;
 
-    run_cmd.step.dependOn(b.getInstallStep());
+        Knots.installWeb(b, knots, exe_mod, exe, .{ .index_html = b.path("src/shell_wasm.html") });
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+        const serve = b.addSystemCommand(&.{ "python3", "-m", "http.server", "8000", "--directory" });
+        serve.addArg(b.getInstallPath(.{ .custom = "web" }, ""));
+        serve.step.dependOn(b.getInstallStep());
+        run_step.dependOn(&serve.step);
+    } else {
+        const run_cmd = b.addRunArtifact(exe);
+        run_step.dependOn(&run_cmd.step);
+
+        run_cmd.step.dependOn(b.getInstallStep());
+
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
     }
+}
+
+fn isBrowserWasmTarget(target: std.Target) bool {
+    return target.cpu.arch.isWasm() and target.os.tag == .freestanding;
 }

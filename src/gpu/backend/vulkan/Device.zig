@@ -380,7 +380,7 @@ fn getInstanceExtensions(window_handle: gpu.Context.WindowHandle) [if (builtin.o
             .wayland => vk.extensions.khr_wayland_surface.name,
             .x11 => vk.extensions.khr_xlib_surface.name,
         },
-        .emscripten => @panic("emscripten not supported with the vulkan backend"),
+        .web => @panic("browser wasm not supported with the vulkan backend"),
     };
 
     if (builtin.os.tag.isDarwin())
@@ -404,7 +404,7 @@ fn createSurface(vki: vk.InstanceWrapper, instance: vk.Instance, window_handle: 
             .wayland => |wl| vki.createWaylandSurfaceKHR(instance, &.{ .display = @ptrCast(wl.display), .surface = @ptrCast(wl.surface) }, null),
             .x11 => |x11| vki.createXlibSurfaceKHR(instance, &.{ .dpy = @ptrCast(x11.display), .window = @intCast(x11.window) }, null),
         },
-        .emscripten => @panic("emscripten not supported with the vulkan backend"),
+        .web => @panic("browser wasm not supported with the vulkan backend"),
     };
 }
 

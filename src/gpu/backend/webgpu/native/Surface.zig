@@ -3,6 +3,10 @@ const wgpu = @import("wgpu");
 const gpu = @import("gpu");
 
 const Device = @import("Device.zig");
+const is_browser_wasm = switch (builtin.cpu.arch) {
+    .wasm32, .wasm64 => true,
+    else => false,
+} and builtin.os.tag == .freestanding;
 
 const Surface = @This();
 
@@ -21,7 +25,7 @@ pub fn init(device: *Device, window_handle: gpu.Context.WindowHandle, cfg: gpu.C
 
     const capabilities = try surface.getCapabilities(device.adapter.adapter);
     const surface_format = try requireSurfaceFormat(capabilities, device.surface_format);
-    const surface_copy_src = builtin.os.tag != .emscripten and capabilities.raw.usages & wgpu.c.WGPUTextureUsage_CopySrc != 0;
+    const surface_copy_src = !is_browser_wasm and capabilities.raw.usages & wgpu.c.WGPUTextureUsage_CopySrc != 0;
     const present_modes = presentModesFromCapabilities(capabilities);
     const chosen_present_mode = choosePresentMode(present_modes, cfg.present_mode) orelse return error.UnsupportedPresentMode;
 

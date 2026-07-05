@@ -4,10 +4,12 @@ const GPUBackend = @import("knots").GPUBackend;
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const gpu_backend: GPUBackend = switch (target.result.os.tag) {
-        .macos, .emscripten => .wgpu,
+    const gpu_backend: GPUBackend = if (isBrowserWasmTarget(target.result))
+        .webgpu
+    else switch (target.result.os.tag) {
+        .macos => .webgpu,
         .windows, .linux => .vulkan,
-        else => .wgpu,
+        else => .webgpu,
     };
 
     const tracy_dep = b.dependency("tracy", .{});
@@ -77,4 +79,12 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+}
+
+fn isBrowserWasmTarget(target: std.Target) bool {
+    const is_wasm = switch (target.cpu.arch) {
+        .wasm32, .wasm64 => true,
+        else => false,
+    };
+    return is_wasm and target.os.tag == .freestanding;
 }

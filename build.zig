@@ -4,27 +4,73 @@ const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
 
+pub const web_bridge_export_symbol_names = [_][]const u8{
+    "js_bridge_alloc",
+    "js_bridge_free",
+    "js_bridge_dispatch",
+    "js_bridge_pointer_size",
+    "knots_last_error_len",
+    "knots_last_error_copy",
+};
+
+pub const WebInstallOptions = struct {
+    dir: []const u8 = "web",
+    start_symbol: []const u8 = "main",
+    host_js_name: []const u8 = "knots.js",
+    bridge_js_name: []const u8 = "js-bridge.js",
+    wasm_name: []const u8 = "app.wasm",
+    index_html: ?std.Build.LazyPath = null,
+    index_name: []const u8 = "index.html",
+    extra_export_symbol_names: []const []const u8 = &.{},
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const browser_wasm = isBrowserWasmTarget(target.result);
 
     const gpu_backend =
         b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
-        defaultGpuBackend(target.result.os.tag);
+        defaultGpuBackend(target.result);
 
     const truetype_dep = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
 
+    const js_bridge_mod = if (browser_wasm)
+        b.dependency("js_bridge", .{ .target = target, .optimize = optimize }).module("js-bridge")
+    else
+        null;
+
+    if (browser_wasm) {
+        b.addNamedLazyPath("web-host-js", b.path("src/web/host.js"));
+        b.addNamedLazyPath("web-bridge-js", b.path("lib/js-bridge/src/runtime.js"));
+    }
+
+    const browser_exports_mod = if (browser_wasm)
+        b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/web/main.zig"),
+            .imports = &.{.{ .name = "js-bridge", .module = js_bridge_mod.? }},
+        })
+    else
+        null;
+
     const gpu_impl_mod = blk: switch (gpu_backend) {
-        .wgpu => {
-            const wgpu = b.dependency("wgpu", .{ .target = target, .optimize = optimize });
-            break :blk b.createModule(.{
+        .webgpu => {
+            const webgpu_mod = b.createModule(.{
                 .target = target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/gpu/backend/wgpu/root.zig"),
-                .imports = &.{
-                    .{ .name = "wgpu", .module = wgpu.module("wgpu") },
-                },
+                .root_source_file = b.path("src/gpu/backend/webgpu/root.zig"),
             });
+
+            if (browser_wasm)
+                webgpu_mod.addImport("js-bridge", js_bridge_mod.?)
+            else {
+                const wgpu = b.dependency("wgpu", .{ .target = target, .optimize = optimize });
+                webgpu_mod.addImport("wgpu", wgpu.module("wgpu"));
+            }
+
+            break :blk webgpu_mod;
         },
         .vulkan => {
             const vulkan = b.dependency("vulkan", .{
@@ -52,86 +98,84 @@ pub fn build(b: *std.Build) void {
     gpu_opts.addOption(GPUBackend, "backend", gpu_backend);
     gpu_mod.addOptions("config", gpu_opts);
 
-    const window_impl_mod = blk: switch (target.result.os.tag) {
-        .macos => {
-            const objc_dep = b.dependency("zig_objc", .{ .target = target, .optimize = optimize });
-            const m = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = b.path("src/window/backend/cocoa/root.zig"),
-                .imports = &.{
-                    .{ .name = "objc", .module = objc_dep.module("objc") },
-                    .{ .name = "gpu", .module = gpu_mod },
-                },
-            });
-            m.linkFramework("Cocoa", .{});
-            m.linkFramework("CoreFoundation", .{});
-            m.linkFramework("QuartzCore", .{});
-            break :blk m;
-        },
-        .windows => {
-            const win32_dep = b.dependency("win32", .{});
-            break :blk b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = b.path("src/window/backend/windows/root.zig"),
-                .imports = &.{
-                    .{ .name = "win32", .module = win32_dep.module("win32") },
-                    .{ .name = "gpu", .module = gpu_mod },
-                },
-            });
-        },
-        .emscripten => {
-            const emcc_path = b.findProgram(&.{"emcc"}, &.{}) catch
-                @panic("emcc not found. Put emcc on PATH when targeting Emscripten.");
-            const bridge = b.addSystemCommand(&.{ emcc_path, "-c" });
-            bridge.addFileArg(b.path("src/window/backend/emscripten/bridge.c"));
-            if (target.result.cpu.arch == .wasm64) bridge.addArg("-sMEMORY64");
-            bridge.addArg("-o");
-            const bridge_object = bridge.addOutputFileArg("knots_emscripten_bridge.o");
+    const window_impl_mod = blk: {
+        switch (target.result.os.tag) {
+            .macos => {
+                const objc_dep = b.dependency("zig_objc", .{ .target = target, .optimize = optimize });
+                const m = b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                    .root_source_file = b.path("src/window/backend/cocoa/root.zig"),
+                    .imports = &.{
+                        .{ .name = "objc", .module = objc_dep.module("objc") },
+                        .{ .name = "gpu", .module = gpu_mod },
+                    },
+                });
+                m.linkFramework("Cocoa", .{});
+                m.linkFramework("CoreFoundation", .{});
+                m.linkFramework("QuartzCore", .{});
+                break :blk m;
+            },
+            .windows => {
+                const win32_dep = b.dependency("win32", .{});
+                break :blk b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                    .root_source_file = b.path("src/window/backend/windows/root.zig"),
+                    .imports = &.{
+                        .{ .name = "win32", .module = win32_dep.module("win32") },
+                        .{ .name = "gpu", .module = gpu_mod },
+                    },
+                });
+            },
+            .linux => {
+                const scanner = WaylandScanner.create(b, .{});
+                scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+                scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
+                scanner.generate("wl_compositor", 6);
+                scanner.generate("wl_shm", 1);
+                scanner.generate("wl_seat", 8);
+                scanner.generate("wl_output", 4);
+                scanner.generate("wl_data_device_manager", 3);
+                scanner.generate("xdg_wm_base", 3);
+                scanner.generate("zxdg_decoration_manager_v1", 1);
 
-            const m = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = b.path("src/window/backend/emscripten/root.zig"),
-                .imports = &.{.{ .name = "gpu", .module = gpu_mod }},
-            });
-            m.addObjectFile(bridge_object);
-            break :blk m;
-        },
-        .linux => {
-            const scanner = WaylandScanner.create(b, .{});
-            scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
-            scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
-            scanner.generate("wl_compositor", 6);
-            scanner.generate("wl_shm", 1);
-            scanner.generate("wl_seat", 8);
-            scanner.generate("wl_output", 4);
-            scanner.generate("wl_data_device_manager", 3);
-            scanner.generate("xdg_wm_base", 3);
-            scanner.generate("zxdg_decoration_manager_v1", 1);
-
-            const wayland_mod = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = scanner.result,
-            });
-            const m = b.createModule(.{
-                .target = target,
-                .optimize = optimize,
-                .root_source_file = b.path("src/window/backend/wayland/root.zig"),
-                .imports = &.{
-                    .{ .name = "wayland", .module = wayland_mod },
-                    .{ .name = "gpu", .module = gpu_mod },
-                },
-            });
-            m.link_libc = true;
-            m.linkSystemLibrary("wayland-client", .{});
-            m.linkSystemLibrary("wayland-cursor", .{});
-            m.linkSystemLibrary("xkbcommon", .{});
-            break :blk m;
-        },
-        else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),
+                const wayland_mod = b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                    .root_source_file = scanner.result,
+                });
+                const m = b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                    .root_source_file = b.path("src/window/backend/wayland/root.zig"),
+                    .imports = &.{
+                        .{ .name = "wayland", .module = wayland_mod },
+                        .{ .name = "gpu", .module = gpu_mod },
+                    },
+                });
+                m.link_libc = true;
+                m.linkSystemLibrary("wayland-client", .{});
+                m.linkSystemLibrary("wayland-cursor", .{});
+                m.linkSystemLibrary("xkbcommon", .{});
+                break :blk m;
+            },
+            .freestanding => {
+                if (browser_wasm) {
+                    break :blk b.createModule(.{
+                        .target = target,
+                        .optimize = optimize,
+                        .root_source_file = b.path("src/window/backend/wasm/root.zig"),
+                        .imports = &.{
+                            .{ .name = "gpu", .module = gpu_mod },
+                            .{ .name = "js-bridge", .module = js_bridge_mod.? },
+                        },
+                    });
+                }
+                @panic("expected wasm arch for freestanding target");
+            },
+            else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),
+        }
     };
 
     const window_mod = b.createModule(.{
@@ -172,13 +216,13 @@ pub fn build(b: *std.Build) void {
     });
 
     var render_shader_opts = b.addOptions();
-    render_shader_opts.addOption(bool, "has_wgpu_shaders", gpu_backend == .wgpu);
-    render_shader_opts.addOption(bool, "has_vulkan_shaders", gpu_backend == .vulkan);
+    render_shader_opts.addOption(bool, "has_wgsl_shaders", gpu_backend == .webgpu);
+    render_shader_opts.addOption(bool, "has_spirv_shaders", gpu_backend == .vulkan);
     render_mod.addOptions("shader_config", render_shader_opts);
 
-    if (gpu_backend == .wgpu) {
-        render_mod.addAnonymousImport("primitives_wgsl", .{ .root_source_file = b.path("src/gpu/backend/wgpu/shaders/ui_primitives.wgsl") });
-        render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/wgpu/shaders/slug.wgsl") });
+    if (gpu_backend == .webgpu) {
+        render_mod.addAnonymousImport("primitives_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/ui_primitives.wgsl") });
+        render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/slug.wgsl") });
     }
     if (gpu_backend == .vulkan) {
         embedZigSpirV(b, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
@@ -275,6 +319,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "debug", .module = debug_mod },
         },
     });
+    if (browser_wasm) mod.addImport("browser_exports", browser_exports_mod.?);
 
     component_mod.addImport("knots", mod);
     control_mod.addImport("knots", mod);
@@ -300,7 +345,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_text_tests.step);
     test_step.dependOn(&run_math_tests.step);
 
-    if (target.result.os.tag != .emscripten) {
+    if (!isBrowserWasmTarget(target.result)) {
         const snapshot_exe = b.addExecutable(.{
             .name = "knots-snapshots",
             .root_module = b.createModule(.{
@@ -327,12 +372,46 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-fn defaultGpuBackend(os: std.Target.Os.Tag) GPUBackend {
-    return switch (os) {
-        .macos, .emscripten => .wgpu,
+pub fn installWeb(
+    b: *std.Build,
+    knots: *std.Build.Dependency,
+    root_module: *std.Build.Module,
+    exe: *std.Build.Step.Compile,
+    options: WebInstallOptions,
+) void {
+    const names = b.allocator.alloc([]const u8, 1 + web_bridge_export_symbol_names.len + options.extra_export_symbol_names.len) catch @panic("OOM");
+    names[0] = options.start_symbol;
+    for (web_bridge_export_symbol_names, 0..) |name, i| names[i + 1] = name;
+    root_module.export_symbol_names = names;
+    if (options.index_html) |index_html| {
+        const install_index = b.addInstallFileWithDir(index_html, .{ .custom = options.dir }, options.index_name);
+        b.getInstallStep().dependOn(&install_index.step);
+    }
+
+    const install_host_js = b.addInstallFileWithDir(knots.namedLazyPath("web-host-js"), .{ .custom = options.dir }, options.host_js_name);
+    const install_bridge_js = b.addInstallFileWithDir(knots.namedLazyPath("web-bridge-js"), .{ .custom = options.dir }, options.bridge_js_name);
+    const install_wasm = b.addInstallFileWithDir(exe.getEmittedBin(), .{ .custom = options.dir }, options.wasm_name);
+
+    b.getInstallStep().dependOn(&install_host_js.step);
+    b.getInstallStep().dependOn(&install_bridge_js.step);
+    b.getInstallStep().dependOn(&install_wasm.step);
+}
+
+fn defaultGpuBackend(target: std.Target) GPUBackend {
+    if (isBrowserWasmTarget(target)) return .webgpu;
+    return switch (target.os.tag) {
+        .macos => .webgpu,
         .windows, .linux => .vulkan,
-        else => .wgpu,
+        else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),
     };
+}
+
+fn isBrowserWasmTarget(target: std.Target) bool {
+    const is_wasm = switch (target.cpu.arch) {
+        .wasm32, .wasm64 => true,
+        else => false,
+    };
+    return is_wasm and target.os.tag == .freestanding;
 }
 
 fn embedSpirV(b: *std.Build, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {

@@ -30,7 +30,7 @@ pub const WindowHandle = union(enum) {
             surface: *anyopaque,
         },
     },
-    emscripten: struct {
+    web: struct {
         selector: []const u8,
     },
 };

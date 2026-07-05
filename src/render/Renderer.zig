@@ -185,9 +185,9 @@ pub fn reconfigure(self: *Renderer, new_cfg: Config) ReconfigureError!void {
     if (new_cfg.present_mode != self.cfg.present_mode) {
         var surface_cfg = self.target.config();
         surface_cfg.present_mode = new_cfg.present_mode;
-        self.target.reconfigure(surface_cfg) catch |err| switch (err) {
-            error.UnsupportedPresentMode => return error.UnsupportedPresentMode,
-            else => return mapFrameError(err),
+        self.target.reconfigure(surface_cfg) catch |err| {
+            if (err == error.UnsupportedPresentMode) return error.UnsupportedPresentMode;
+            return mapFrameError(err);
         };
     }
     self.cfg = new_cfg;

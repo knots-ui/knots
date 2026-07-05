@@ -108,7 +108,7 @@ pub fn init(allocator: std.mem.Allocator, device: *gpu_impl.Device) !Shared {
     var text_pipeline = try device.createPipeline(pipelines.slugDesc(srgb_surface));
     errdefer text_pipeline.deinit();
 
-    const use_linear_target = gpu.Backend == .wgpu and !srgb_surface;
+    const use_linear_target = gpu.Backend == .webgpu and !srgb_surface;
     var linear_pipeline: ?gpu_impl.Pipeline = if (use_linear_target)
         try device.createPipeline(pipelines.linearTargetPrimitivesDesc(.vertex))
     else

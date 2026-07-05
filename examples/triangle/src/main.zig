@@ -1,69 +1,36 @@
 const std = @import("std");
 const knots = @import("knots");
+const triangle = @import("triangle");
 
-const Rect = knots.component.Rect;
-const Canvas = knots.component.Canvas;
+pub const std_options: std.Options = if (knots.platform.is_browser_wasm) .{ .logFn = knots.web.logFn } else .{};
 
-const triangle_width = 480;
-const triangle_height = 320;
+pub const main = if (knots.platform.is_browser_wasm) struct {
+    fn main() void {}
+}.main else nativeMain;
 
-const Context = struct {
-    app: knots.App,
-    devtools: knots.debug.DevTools,
-};
+fn nativeMain(init: std.process.Init) !void {
+    var app = try triangle.init(init.io, init.gpa);
+    defer app.deinit(init.gpa);
 
-pub fn main(init: std.process.Init) !void {
-    const app = try knots.App.init(init.io, init.gpa, .{
-        .window = .{
-            .width = 1280,
-            .height = 720,
-            .title = "Triangle",
-        },
-    });
-    var ctx = Context{
-        .app = app,
-        .devtools = try .init(init.gpa, app.viewport.renderer.cfg.present_mode),
-    };
-    defer {
-        ctx.app.deinit();
-        ctx.devtools.deinit(init.gpa);
-    }
-
-    try ctx.app.start(frameCb);
+    try app.start();
 }
 
-fn frameCb(app: *knots.App) !void {
-    const ctx: *Context = @fieldParentPtr("app", app);
-    const size = app.viewport.window.getSize();
-    const w: f32 = @floatFromInt(size.width);
-    const h: f32 = @floatFromInt(size.height);
+comptime {
+    if (knots.platform.is_browser_wasm) @export(&struct {
+        fn webMain() callconv(.{ .wasm_mvp = .{} }) i32 {
+            const allocator = std.heap.wasm_allocator;
+            const ptr = allocator.create(triangle) catch |err| return knots.web.fail(err);
+            ptr.* = triangle.init(knots.web.io, allocator) catch |err| {
+                allocator.destroy(ptr);
+                return knots.web.fail(err);
+            };
+            ptr.start() catch |err| {
+                ptr.deinit(allocator);
+                allocator.destroy(ptr);
+                return knots.web.fail(err);
+            };
 
-    try app.e(.{
-        Rect{
-            .key = .src(@src()),
-            .width = .fixed(w),
-            .height = .fixed(h),
-            .@"align" = .center,
-            .justify = .center,
-        },
-        .{Canvas{
-            .onDraw = drawTriangle,
-            .key = .src(@src()),
-            .width = .fixed(triangle_width),
-            .height = .fixed(triangle_height),
-        }},
-    });
-
-    try app.e(.{ctx.devtools});
-}
-
-fn drawTriangle(_: *knots.App, painter: *Canvas.Painter) !void {
-    try painter.fillTriangle(.{
-        .points = .{
-            .{ triangle_width / 2.0, 0.0 },
-            .{ triangle_width, triangle_height },
-            .{ 0.0, triangle_height },
-        },
-        .color = .{ 1.0, 0, 0, 1.0 },
-    });
+            return 0;
+        }
+    }.webMain, .{ .name = "main" });
 }
