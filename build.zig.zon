@@ -7,12 +7,12 @@
             .hash = "wgpu-0.0.2-Z1CB1tZzAQCeLiHR9GrD3Zal_qs6AxvaXCl2fKuChh6-",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
-            .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
+            .url = "git+https://github.com/Snektron/vulkan-zig#cea0568d1a5bab102ad0b538d11f2fc734949a1e",
+            .hash = "vulkan-0.0.0-r7Ytx-eDAwBGr8v_cNfrpVWcH1em2lMFbhpzQDAVbVK9",
         },
         .vulkan_headers = .{
-            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.346.tar.gz",
-            .hash = "N-V-__8AALm8ZgLElx_aOhj1o0gXqnPjftwC69uF2mw6rXNA",
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#8d6039a455a7ecc7d2a592ff97f62db4e59b70bf",
+            .hash = "N-V-__8AAPdJewI-Ti5p45KnTAAngGBG3aURyXJXXTKmPvKW",
         },
         .zig_objc = .{
             .url = "git+https://github.com/ali-shahwali/zig-objc.git#ca3bf1015c8afc57267dcdb4dc4b7bdd65b6849b",
@@ -23,8 +23,8 @@
             .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
         },
         .TrueType = .{
-            .url = "git+https://codeberg.org/andrewrk/TrueType.git#2d7f80bf0d18c0e74fd5291aa0749718db3405d0",
-            .hash = "TrueType-0.0.0-Ne-mWPBxAQCuGsQqPVw_0AyZVJcgKCpZDmd-XHEwNOEP",
+            .url = "git+https://codeberg.org/andrewrk/TrueType.git#c90d976877f1dbd4014f6fa4da30139f41df366b",
+            .hash = "TrueType-1.0.0-Ne-mWFx1AQAk8u43nEzx-W3oPUGaXnuLNFa2jTStHFjj",
         },
         .wayland = .{
             .url = "git+https://codeberg.org/ifreund/zig-wayland.git#a8e10e87e5ebb49ce518ac3d2198909c87ee615a",
