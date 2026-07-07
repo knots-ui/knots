@@ -225,9 +225,9 @@ pub fn build(b: *std.Build) void {
         render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/slug.wgsl") });
     }
     if (gpu_backend == .vulkan) {
-        embedZigSpirV(b, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
-        embedZigSpirV(b, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
-        embedZigSpirV(b, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
+        embedZigSpirV(b, optimize, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
+        embedZigSpirV(b, optimize, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
+        embedZigSpirV(b, optimize, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
         // TODO: Migrate to Zig and drop glslc as a dependency.
         // Will require a fix for https://codeberg.org/ziglang/zig/issues/35238
         // Among other things.
@@ -421,20 +421,21 @@ fn embedSpirV(b: *std.Build, mod: *std.Build.Module, name: []const u8, path: std
     mod.addAnonymousImport(name, .{ .root_source_file = spv });
 }
 
-// We should be using b.addObject with a resolved spir-v target
-// but it doesn't work on windows due to a bug in the Zig build system.
-fn embedZigSpirV(b: *std.Build, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
-    const out_name = b.fmt("{s}.spv", .{name});
-
-    const cmd = b.addSystemCommand(&.{
-        b.graph.zig_exe, "build-obj",
-        "-fno-llvm",     "-ofmt=spirv",
-        "-target",       "spirv32-vulkan",
-        "-mcpu",         "vulkan_v1_2",
-        "--name",        name,
+fn embedZigSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
+    const vk_target = b.resolveTargetQuery(.{
+        .cpu_arch = .spirv32,
+        .os_tag = .vulkan,
+        .cpu_model = .{ .explicit = &std.Target.spirv.cpu.vulkan_v1_2 },
     });
-    cmd.addPrefixedFileArg("-Mroot=", path);
-    const spv = cmd.addPrefixedOutputFileArg("-femit-bin=", out_name);
 
-    mod.addAnonymousImport(name, .{ .root_source_file = spv });
+    const spv = b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .target = vk_target,
+            .optimize = optimize,
+            .root_source_file = path,
+        }),
+    });
+
+    mod.addAnonymousImport(name, .{ .root_source_file = spv.getEmittedBin() });
 }
