@@ -1,6 +1,7 @@
 .{
     .name = .knots,
     .version = "0.0.5",
+    .minimum_zig_version = "0.17.0-dev.1267+300116b02",
     .dependencies = .{
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-bindings.git#c56a63b58b73abfe21dfe3c441a24eb89b670996",
@@ -32,7 +33,6 @@
         },
         .js_bridge = .{ .path = "lib/js-bridge" },
     },
-    .minimum_zig_version = "0.17.0-dev.269+ebff43698",
     .paths = .{
         "build.zig",
         "build.zig.zon",
