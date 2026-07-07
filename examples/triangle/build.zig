@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
         Knots.installWeb(b, knots, exe_mod, exe, .{ .index_html = b.path("src/shell_wasm.html") });
 
         const serve = b.addSystemCommand(&.{ "python3", "-m", "http.server", "8000", "--directory" });
-        serve.addArg(b.getInstallPath(.{ .custom = "web" }, ""));
+        serve.addArg("zig-out/web");
         serve.step.dependOn(b.getInstallStep());
         run_step.dependOn(&serve.step);
     } else {
@@ -47,9 +47,7 @@ pub fn build(b: *std.Build) void {
 
         run_cmd.step.dependOn(b.getInstallStep());
 
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
+        run_cmd.addPassthruArgs();
     }
 }
 

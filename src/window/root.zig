@@ -142,7 +142,7 @@ pub const MouseButton = enum(u3) {
     forward,
 };
 
-pub const mouse_button_count = @typeInfo(MouseButton).@"enum".fields.len;
+pub const mouse_button_count = @typeInfo(MouseButton).@"enum".field_names.len;
 
 pub const MouseButtonState = struct {
     down: bool = false,

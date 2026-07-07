@@ -39,32 +39,32 @@ pub const light: Theme = parse(@import("themes/light.zon"));
 
 pub fn parse(comptime def: anytype) Theme {
     const Def = @TypeOf(def);
-    inline for (std.meta.fields(Theme)) |field| {
-        if (!@hasField(Def, field.name))
-            @compileError("theme is missing required field: " ++ field.name);
+    const def_info = @typeInfo(@TypeOf(def));
+    inline for (def_info.@"struct".field_names) |field_name| {
+        if (!@hasField(Def, field_name))
+            @compileError("theme is missing required field: " ++ field_name);
     }
     return parseWithBase(std.mem.zeroes(Theme), def);
 }
 
 pub fn parseWithBase(comptime base: Theme, comptime def: anytype) Theme {
     var res = base;
-    inline for (std.meta.fields(@TypeOf(def))) |field| {
-        if (!@hasField(Theme, field.name))
-            @compileError("unknown theme field: " ++ field.name);
-        const v = @field(def, field.name);
-        const Field = @TypeOf(@field(res, field.name));
+    const def_info = @typeInfo(@TypeOf(def));
+    inline for (def_info.@"struct".field_names) |field_name| {
+        const v = @field(def, field_name);
+        const Field = @TypeOf(@field(res, field_name));
         if (Field == Radius) {
-            @field(res, field.name) = parseRadius(v);
+            @field(res, field_name) = parseRadius(v);
             continue;
         }
         if (@TypeOf(v) == comptime_float or @TypeOf(v) == comptime_int or @TypeOf(v) == f32) {
-            @field(res, field.name) = v;
+            @field(res, field_name) = v;
             continue;
         }
 
         const T = @TypeOf(v);
 
-        @field(res, field.name) = if (@hasField(T, "hex"))
+        @field(res, field_name) = if (@hasField(T, "hex"))
             Color.hex(@field(v, "hex")) catch |err| @compileError("failed to parse hex with error " ++ @errorName(err) ++ ": " ++ @field(v, "hex"))
         else if (@hasField(T, "rgba")) blk: {
             const rgba = @field(v, "rgba");

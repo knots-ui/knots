@@ -113,7 +113,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     errdefer vkd.destroyDevice(device, null);
     const transient_command_pool = try vkd.createCommandPool(device, &.{
         .queue_family_index = phys.queue_family,
-        .flags = .{ .transient_bit = true },
+        .flags = .{ .transient = true },
     }, null);
     errdefer vkd.destroyCommandPool(device, transient_command_pool, null);
 
@@ -204,7 +204,7 @@ pub fn beginSingleTimeCommands(self: *const Device) !vk.CommandBuffer {
         .command_buffer_count = 1,
     }, &cmd);
     try self.vkd.beginCommandBuffer(cmd[0], &.{
-        .flags = .{ .one_time_submit_bit = true },
+        .flags = .{ .one_time_submit = true },
     });
     return cmd[0];
 }
@@ -301,7 +301,7 @@ fn loadVulkan() !VulkanLoader {
 
 fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device) !vk.DescriptorPool {
     return vkd.createDescriptorPool(device, &.{
-        .flags = .{ .free_descriptor_set_bit = true },
+        .flags = .{ .free_descriptor_set = true },
         .max_sets = 64,
         .pool_size_count = 4,
         .p_pool_sizes = &[_]vk.DescriptorPoolSize{
@@ -446,7 +446,7 @@ fn findGraphicsQueueFamily(vki: vk.InstanceWrapper, device: vk.PhysicalDevice, s
     vki.getPhysicalDeviceQueueFamilyProperties(device, &count, &props_buf);
     for (props_buf[0..count], 0..) |prop, i| {
         const idx: u32 = @intCast(i);
-        if (prop.queue_flags.graphics_bit and (try vki.getPhysicalDeviceSurfaceSupportKHR(device, idx, surface)) == .true)
+        if (prop.queue_flags.graphics and (try vki.getPhysicalDeviceSurfaceSupportKHR(device, idx, surface)) == .true)
             return idx;
     }
     return null;

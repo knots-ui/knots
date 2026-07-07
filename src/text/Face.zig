@@ -144,10 +144,7 @@ pub fn getGlyph(self: *Face, codepoint: u21) !glyph.GlyphRecord {
     const advance_em: f32 = @as(f32, @floatFromInt(hm.advance_width)) / self.units_per_em;
 
     var rec: glyph.GlyphRecord = blk: {
-        const verts = self.tt.glyphShape(self.allocator, gid) catch |e| switch (e) {
-            error.GlyphNotFound => break :blk .empty,
-            else => return e,
-        };
+        const verts = try self.tt.glyphShape(self.allocator, gid);
         defer self.allocator.free(verts);
 
         const curves = try curve.decomposeVertices(self.allocator, verts, self.units_per_em);

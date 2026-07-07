@@ -153,7 +153,7 @@ fn createImageViews(allocator: std.mem.Allocator, device: *Device, images: []vk.
             .format = format,
             .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
             .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .base_mip_level = 0,
                 .level_count = 1,
                 .base_array_layer = 0,
@@ -175,7 +175,7 @@ fn createSwapchain(
     cfg: gpu.Context.Config,
 ) !SwapchainInfo {
     const caps = try device.vki.getPhysicalDeviceSurfaceCapabilitiesKHR(device.physical_device, surface);
-    const copy_src = caps.supported_usage_flags.transfer_src_bit;
+    const copy_src = caps.supported_usage_flags.transfer_src;
     var format_count: u32 = 0;
     _ = try device.vki.getPhysicalDeviceSurfaceFormatsKHR(device.physical_device, surface, &format_count, null);
     var formats_buf: [32]vk.SurfaceFormatKHR = undefined;
@@ -206,10 +206,10 @@ fn createSwapchain(
         .image_color_space = cf.color_space,
         .image_extent = extent,
         .image_array_layers = 1,
-        .image_usage = .{ .color_attachment_bit = true, .transfer_src_bit = copy_src },
+        .image_usage = .{ .color_attachment = true, .transfer_src = copy_src },
         .image_sharing_mode = .exclusive,
         .pre_transform = caps.current_transform,
-        .composite_alpha = .{ .opaque_bit_khr = true },
+        .composite_alpha = .{ .opaque_khr = true },
         .present_mode = present_mode,
         .clipped = .true,
         .old_swapchain = old_swapchain,

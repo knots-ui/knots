@@ -416,12 +416,12 @@ pub fn e(self: *App, tree: anytype) !void {
             try tree.render(self)
         else {
             comptime var i: usize = 0;
-            inline while (i < s.fields.len) : (i += 1) {
-                const val = @field(tree, s.fields[i].name);
-                if (comptime isComponent(@TypeOf(val)) and i + 1 < s.fields.len and isChildren(s.fields[i + 1].type)) {
+            inline while (i < s.field_names.len) : (i += 1) {
+                const val = @field(tree, s.field_names[i]);
+                if (comptime isComponent(@TypeOf(val)) and i + 1 < s.field_names.len and isChildren(s.field_types[i + 1])) {
                     const id = try val.open(self);
                     if (id != UI.INVALID_ID)
-                        try self.e(@field(tree, s.fields[i + 1].name));
+                        try self.e(@field(tree, s.field_names[i + 1]));
                     try val.close(self);
                     i += 1;
                 } else try self.e(val);

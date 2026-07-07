@@ -36,8 +36,8 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
                 .descriptor_type = toVkDescriptorType(e.type),
                 .descriptor_count = 1,
                 .stage_flags = .{
-                    .vertex_bit = e.visibility.vertex,
-                    .fragment_bit = e.visibility.fragment,
+                    .vertex = e.visibility.vertex,
+                    .fragment = e.visibility.fragment,
                 },
                 .p_immutable_samplers = null,
             };
@@ -117,7 +117,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .src_alpha_blend_factor = toVkBlendFactor(b.alpha.src_factor),
         .dst_alpha_blend_factor = toVkBlendFactor(b.alpha.dst_factor),
         .alpha_blend_op = toVkBlendOp(b.alpha.op),
-        .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+        .color_write_mask = .{ .r = true, .g = true, .b = true, .a = true },
     } else .{
         .blend_enable = .false,
         .src_color_blend_factor = .one,
@@ -126,7 +126,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .src_alpha_blend_factor = .one,
         .dst_alpha_blend_factor = .zero,
         .alpha_blend_op = .add,
-        .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+        .color_write_mask = .{ .r = true, .g = true, .b = true, .a = true },
     };
 
     var vs_entry_buf: [64]u8 = undefined;
@@ -153,8 +153,8 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .p_next = &rendering_info,
         .stage_count = 2,
         .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
-            .{ .stage = .{ .vertex_bit = true }, .module = vert_module, .p_name = @ptrCast(&vs_entry_buf) },
-            .{ .stage = .{ .fragment_bit = true }, .module = frag_module, .p_name = @ptrCast(&fs_entry_buf), .p_specialization_info = frag_spec_ptr },
+            .{ .stage = .{ .vertex = true }, .module = vert_module, .p_name = @ptrCast(&vs_entry_buf) },
+            .{ .stage = .{ .fragment = true }, .module = frag_module, .p_name = @ptrCast(&fs_entry_buf), .p_specialization_info = frag_spec_ptr },
         },
         .p_vertex_input_state = &.{
             .vertex_binding_description_count = @intCast(desc.vertex_buffers.len),
@@ -177,7 +177,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
             .line_width = 1.0,
         },
         .p_multisample_state = &.{
-            .rasterization_samples = .{ .@"1_bit" = true },
+            .rasterization_samples = .{ .@"1" = true },
             .sample_shading_enable = .false,
             .min_sample_shading = 1.0,
             .alpha_to_coverage_enable = .false,

@@ -41,13 +41,13 @@ pub fn create(device: *Device, desc: Desc) !Texture {
         .extent = .{ .width = desc.width, .height = desc.height, .depth = 1 },
         .mip_levels = 1,
         .array_layers = 1,
-        .samples = .{ .@"1_bit" = true },
+        .samples = .{ .@"1" = true },
         .tiling = .optimal,
         .usage = .{
-            .transfer_dst_bit = desc.usage.copy_dst,
-            .transfer_src_bit = desc.usage.copy_src,
-            .sampled_bit = desc.usage.texture_binding,
-            .color_attachment_bit = desc.usage.render_attachment,
+            .transfer_dst = desc.usage.copy_dst,
+            .transfer_src = desc.usage.copy_src,
+            .sampled = desc.usage.texture_binding,
+            .color_attachment = desc.usage.render_attachment,
         },
         .sharing_mode = .exclusive,
         .initial_layout = .undefined,
@@ -57,7 +57,7 @@ pub fn create(device: *Device, desc: Desc) !Texture {
     const mem_reqs = device.vkd.getImageMemoryRequirements(device.device, image);
     const memory = try device.vkd.allocateMemory(device.device, &.{
         .allocation_size = mem_reqs.size,
-        .memory_type_index = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .device_local_bit = true }),
+        .memory_type_index = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .device_local = true }),
     }, null);
     errdefer device.vkd.freeMemory(device.device, memory, null);
 
@@ -68,7 +68,7 @@ pub fn create(device: *Device, desc: Desc) !Texture {
         .view_type = .@"2d",
         .format = vk_format,
         .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-        .subresource_range = .{ .aspect_mask = .{ .color_bit = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
+        .subresource_range = .{ .aspect_mask = .{ .color = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
     }, null);
     errdefer device.vkd.destroyImageView(device.device, image_view, null);
 
@@ -109,7 +109,7 @@ fn ensureStaging(self: *Texture, len: usize) !void {
 
     const new_buffer = try device.vkd.createBuffer(device.device, &.{
         .size = @intCast(len),
-        .usage = .{ .transfer_src_bit = true },
+        .usage = .{ .transfer_src = true },
         .sharing_mode = .exclusive,
     }, null);
     errdefer device.vkd.destroyBuffer(device.device, new_buffer, null);
@@ -117,7 +117,7 @@ fn ensureStaging(self: *Texture, len: usize) !void {
     const mem_reqs = device.vkd.getBufferMemoryRequirements(device.device, new_buffer);
     const new_memory = try device.vkd.allocateMemory(device.device, &.{
         .allocation_size = mem_reqs.size,
-        .memory_type_index = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible_bit = true, .host_coherent_bit = true }),
+        .memory_type_index = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible = true, .host_coherent = true }),
     }, null);
     errdefer device.vkd.freeMemory(device.device, new_memory, null);
 
@@ -152,16 +152,16 @@ pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, widt
     device.vkd.cmdPipelineBarrier2(cmd, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
-            .src_stage_mask = if (self.layout == .undefined) .{} else .{ .fragment_shader_bit = true },
-            .src_access_mask = if (self.layout == .undefined) .{} else .{ .shader_sampled_read_bit = true },
-            .dst_stage_mask = .{ .all_transfer_bit = true },
-            .dst_access_mask = .{ .transfer_write_bit = true },
+            .src_stage_mask = if (self.layout == .undefined) .{} else .{ .fragment_shader = true },
+            .src_access_mask = if (self.layout == .undefined) .{} else .{ .shader_sampled_read = true },
+            .dst_stage_mask = .{ .all_transfer = true },
+            .dst_access_mask = .{ .transfer_write = true },
             .old_layout = self.layout,
             .new_layout = .transfer_dst_optimal,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = self.image,
-            .subresource_range = .{ .aspect_mask = .{ .color_bit = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
+            .subresource_range = .{ .aspect_mask = .{ .color = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
         }},
     });
 
@@ -170,7 +170,7 @@ pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, widt
         .buffer_offset = 0,
         .buffer_row_length = row_length,
         .buffer_image_height = 0,
-        .image_subresource = .{ .aspect_mask = .{ .color_bit = true }, .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
+        .image_subresource = .{ .aspect_mask = .{ .color = true }, .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
         .image_offset = .{ .x = @intCast(x), .y = @intCast(y), .z = 0 },
         .image_extent = .{ .width = width, .height = height, .depth = 1 },
     }});
@@ -178,16 +178,16 @@ pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, widt
     device.vkd.cmdPipelineBarrier2(cmd, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
-            .src_stage_mask = .{ .all_transfer_bit = true },
-            .src_access_mask = .{ .transfer_write_bit = true },
-            .dst_stage_mask = .{ .fragment_shader_bit = true },
-            .dst_access_mask = .{ .shader_sampled_read_bit = true },
+            .src_stage_mask = .{ .all_transfer = true },
+            .src_access_mask = .{ .transfer_write = true },
+            .dst_stage_mask = .{ .fragment_shader = true },
+            .dst_access_mask = .{ .shader_sampled_read = true },
             .old_layout = .transfer_dst_optimal,
             .new_layout = .shader_read_only_optimal,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = self.image,
-            .subresource_range = .{ .aspect_mask = .{ .color_bit = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
+            .subresource_range = .{ .aspect_mask = .{ .color = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
         }},
     });
 

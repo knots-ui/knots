@@ -26,7 +26,7 @@ fn allocate(device: *Device, size: usize, usage: vk.BufferUsageFlags) !Allocatio
     errdefer device.vkd.destroyBuffer(device.device, buffer, null);
 
     const mem_reqs = device.vkd.getBufferMemoryRequirements(device.device, buffer);
-    const mem_type = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible_bit = true, .host_coherent_bit = true });
+    const mem_type = try device.findMemoryType(mem_reqs.memory_type_bits, .{ .host_visible = true, .host_coherent = true });
 
     const memory = try device.vkd.allocateMemory(device.device, &.{
         .allocation_size = mem_reqs.size,
@@ -61,12 +61,12 @@ pub fn create(device: *Device, size: usize, usage: Usage) !Buffer {
 
 fn toVkUsage(usage: Usage) vk.BufferUsageFlags {
     return vk.BufferUsageFlags{
-        .vertex_buffer_bit = usage.vertex,
-        .index_buffer_bit = usage.index,
-        .uniform_buffer_bit = usage.uniform,
-        .transfer_dst_bit = usage.copy_dst,
-        .transfer_src_bit = usage.copy_src,
-        .storage_buffer_bit = usage.storage,
+        .vertex_buffer = usage.vertex,
+        .index_buffer = usage.index,
+        .uniform_buffer = usage.uniform,
+        .transfer_dst = usage.copy_dst,
+        .transfer_src = usage.copy_src,
+        .storage_buffer = usage.storage,
     };
 }
 

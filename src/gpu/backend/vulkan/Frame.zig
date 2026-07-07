@@ -84,7 +84,7 @@ pub fn create(surface: *Surface) !Frame {
         command_buffer_allocated = true;
         image_available = try device.vkd.createSemaphore(device.device, &.{}, null);
         render_finished = try device.vkd.createSemaphore(device.device, &.{}, null);
-        in_flight = try device.vkd.createFence(device.device, &.{ .flags = .{ .signaled_bit = true } }, null);
+        in_flight = try device.vkd.createFence(device.device, &.{ .flags = .{ .signaled = true } }, null);
 
         f.* = .{
             .command_buffer = cmd[0],
@@ -156,7 +156,7 @@ fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
     self.image_index = image_index;
 
     try device.vkd.resetCommandPool(device.device, self.command_pools[self.current], .{});
-    try device.vkd.beginCommandBuffer(f.command_buffer, &.{ .flags = .{ .one_time_submit_bit = true } });
+    try device.vkd.beginCommandBuffer(f.command_buffer, &.{ .flags = .{ .one_time_submit = true } });
 
     return RenderPass.create(f.command_buffer, device, surface, image_index, desc);
 }
@@ -177,7 +177,7 @@ fn submitCommands(self: *Frame) !void {
         .p_wait_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{.{
             .semaphore = f.image_available,
             .value = 0,
-            .stage_mask = .{ .color_attachment_output_bit = true },
+            .stage_mask = .{ .color_attachment_output = true },
             .device_index = 0,
         }},
         .command_buffer_info_count = 1,
@@ -189,7 +189,7 @@ fn submitCommands(self: *Frame) !void {
         .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{.{
             .semaphore = f.render_finished,
             .value = 0,
-            .stage_mask = .{ .all_commands_bit = true },
+            .stage_mask = .{ .all_commands = true },
             .device_index = 0,
         }},
     }}, f.in_flight);
@@ -246,17 +246,17 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
     device.vkd.cmdPipelineBarrier2(command_buffer, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
-            .src_stage_mask = .{ .color_attachment_output_bit = true },
-            .src_access_mask = .{ .color_attachment_write_bit = true },
-            .dst_stage_mask = .{ .all_transfer_bit = true },
-            .dst_access_mask = .{ .transfer_read_bit = true },
+            .src_stage_mask = .{ .color_attachment_output = true },
+            .src_access_mask = .{ .color_attachment_write = true },
+            .dst_stage_mask = .{ .all_transfer = true },
+            .dst_access_mask = .{ .transfer_read = true },
             .old_layout = .present_src_khr,
             .new_layout = .transfer_src_optimal,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = surface.swapchain_images[self.image_index],
             .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .base_mip_level = 0,
                 .level_count = 1,
                 .base_array_layer = 0,
@@ -274,7 +274,7 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
             .buffer_row_length = 0,
             .buffer_image_height = 0,
             .image_subresource = .{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .mip_level = 0,
                 .base_array_layer = 0,
                 .layer_count = 1,
@@ -286,8 +286,8 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
     device.vkd.cmdPipelineBarrier2(command_buffer, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
-            .src_stage_mask = .{ .all_transfer_bit = true },
-            .src_access_mask = .{ .transfer_read_bit = true },
+            .src_stage_mask = .{ .all_transfer = true },
+            .src_access_mask = .{ .transfer_read = true },
             .dst_stage_mask = .{},
             .dst_access_mask = .{},
             .old_layout = .transfer_src_optimal,
@@ -296,7 +296,7 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = surface.swapchain_images[self.image_index],
             .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .base_mip_level = 0,
                 .level_count = 1,
                 .base_array_layer = 0,
@@ -350,7 +350,7 @@ fn createCommandPools(allocator: std.mem.Allocator, device: *Device, count: usiz
     for (command_pools) |*pool| {
         pool.* = try device.vkd.createCommandPool(device.device, &.{
             .queue_family_index = device.queue_family,
-            .flags = .{ .reset_command_buffer_bit = true },
+            .flags = .{ .reset_command_buffer = true },
         }, null);
         pools_created += 1;
     }
