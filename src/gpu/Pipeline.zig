@@ -7,7 +7,6 @@ pub const ShaderSource = union(enum) {
         fs: []align(@alignOf(u32)) const u8,
         vs_entry: []const u8 = "main",
         fs_entry: []const u8 = "main",
-        srgb_encode_constant: ?u32 = null,
     },
 };
 

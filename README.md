@@ -5,7 +5,6 @@ Knots is a high performance cross-platform immediate-mode GUI library written in
 ## Requirements
 
 - Zig compiler, minimum version can be found in [build.zig.zon](build.zig.zon). I try to keep up with the master branch.
-- If using the Vulkan backend, glslc must be installed and accessible on the system. This is due to some shaders used in the Vulkan backend being compiled as part of building knots.
 - On Linux, Wayland development packages are required: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, pkg-config, and xkbcommon.
 
 ## Install

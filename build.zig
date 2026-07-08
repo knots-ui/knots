@@ -225,14 +225,11 @@ pub fn build(b: *std.Build) void {
         render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/slug.wgsl") });
     }
     if (gpu_backend == .vulkan) {
-        embedZigSpirV(b, optimize, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
-        embedZigSpirV(b, optimize, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
-        embedZigSpirV(b, optimize, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
-        // TODO: Migrate to Zig and drop glslc as a dependency.
-        // Will require a fix for https://codeberg.org/ziglang/zig/issues/35238
-        // Among other things.
-        embedSpirV(b, render_mod, "primitives_frag_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives.frag"));
-        embedSpirV(b, render_mod, "slug_frag_spv", b.path("src/gpu/backend/vulkan/shaders/slug.frag"));
+        embedSpirV(b, optimize, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
+        embedSpirV(b, optimize, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
+        embedSpirV(b, optimize, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
+        embedSpirV(b, optimize, render_mod, "primitives_frag_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_fragment.zig"));
+        embedSpirV(b, optimize, render_mod, "slug_frag_spv", b.path("src/gpu/backend/vulkan/shaders/slug_fragment.zig"));
     }
 
     const layout_mod = b.createModule(.{
@@ -414,14 +411,7 @@ fn isBrowserWasmTarget(target: std.Target) bool {
     return is_wasm and target.os.tag == .freestanding;
 }
 
-fn embedSpirV(b: *std.Build, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
-    const cmd = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.3", "-o" });
-    const spv = cmd.addOutputFileArg(b.fmt("{s}.spv", .{name}));
-    cmd.addFileArg(path);
-    mod.addAnonymousImport(name, .{ .root_source_file = spv });
-}
-
-fn embedZigSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
+fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
     const vk_target = b.resolveTargetQuery(.{
         .cpu_arch = .spirv32,
         .os_tag = .vulkan,

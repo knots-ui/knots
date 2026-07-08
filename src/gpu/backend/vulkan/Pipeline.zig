@@ -69,21 +69,6 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
     }, null);
     defer vkd.destroyShaderModule(vk_device, frag_module, null);
 
-    var apply_srgb_encode: u32 = 0;
-    var spec_map: [1]vk.SpecializationMapEntry = undefined;
-    var frag_spec_info: vk.SpecializationInfo = undefined;
-    const frag_spec_ptr: ?*const vk.SpecializationInfo = if (spirv.srgb_encode_constant) |cid| blk: {
-        apply_srgb_encode = if (device.surface_is_srgb) 0 else 1;
-        spec_map[0] = .{ .constant_id = cid, .offset = 0, .size = @sizeOf(u32) };
-        frag_spec_info = .{
-            .map_entry_count = 1,
-            .p_map_entries = &spec_map,
-            .data_size = @sizeOf(u32),
-            .p_data = &apply_srgb_encode,
-        };
-        break :blk &frag_spec_info;
-    } else null;
-
     var vk_attr_buf: [16]vk.VertexInputAttributeDescription = undefined;
     var vk_binding_buf: [4]vk.VertexInputBindingDescription = undefined;
     if (desc.vertex_buffers.len > vk_binding_buf.len) return error.TooManyVertexBuffers;
@@ -154,7 +139,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .stage_count = 2,
         .p_stages = &[_]vk.PipelineShaderStageCreateInfo{
             .{ .stage = .{ .vertex = true }, .module = vert_module, .p_name = @ptrCast(&vs_entry_buf) },
-            .{ .stage = .{ .fragment = true }, .module = frag_module, .p_name = @ptrCast(&fs_entry_buf), .p_specialization_info = frag_spec_ptr },
+            .{ .stage = .{ .fragment = true }, .module = frag_module, .p_name = @ptrCast(&fs_entry_buf) },
         },
         .p_vertex_input_state = &.{
             .vertex_binding_description_count = @intCast(desc.vertex_buffers.len),
