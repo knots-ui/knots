@@ -4,8 +4,9 @@ const Knots = @import("knots");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{ .cpu_model = .baseline } });
     const optimize = b.standardOptimizeOption(.{});
+    const web_threads = b.option(bool, "web_threads", "Enable worker threads in the web playground.") orelse false;
 
-    const knots = b.dependency("knots", .{ .target = target, .optimize = optimize });
+    const knots = b.dependency("knots", .{ .target = target, .optimize = optimize, .web_threads = web_threads });
 
     const mod = b.addModule("playground", .{
         .root_source_file = b.path("src/root.zig"),
@@ -34,9 +35,12 @@ pub fn build(b: *std.Build) void {
 
         Knots.installWeb(b, knots, exe_mod, exe, .{ .index_html = b.path("src/shell_wasm.html") });
 
-        const serve = b.addSystemCommand(&.{"python3"});
-        serve.addFileArg(b.path("serve.py"));
-        serve.addArgs(&.{ "--port", "8000", "--directory", "zig-out/web" });
+        const serve = if (web_threads) blk: {
+            const command = b.addSystemCommand(&.{"python3"});
+            command.addFileArg(b.path("serve.py"));
+            command.addArgs(&.{ "--port", "8000", "--directory", "zig-out/web" });
+            break :blk command;
+        } else b.addSystemCommand(&.{ "python3", "-m", "http.server", "8000", "--directory", "zig-out/web" });
         serve.step.dependOn(b.getInstallStep());
         run_step.dependOn(&serve.step);
     } else {

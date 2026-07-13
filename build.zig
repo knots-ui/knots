@@ -39,7 +39,8 @@ pub const WebInstallOptions = struct {
 
 pub fn build(b: *std.Build) void {
     var target = b.standardTargetOptions(.{});
-    configureWebTarget(&target);
+    const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
+    configureWebTarget(&target, web_threads);
     const optimize = b.standardOptimizeOption(.{});
     const browser_wasm = isBrowserWasmTarget(target.result);
 
@@ -57,19 +58,24 @@ pub fn build(b: *std.Build) void {
     if (browser_wasm) {
         b.addNamedLazyPath("web-host-js", b.path("src/web/host.js"));
         b.addNamedLazyPath("web-bridge-js", b.path("lib/js-bridge/src/runtime.js"));
-        b.addNamedLazyPath("web-worker-pool-js", b.path("src/web/worker-pool.js"));
-        b.addNamedLazyPath("web-worker-js", b.path("src/web/worker.js"));
+        if (web_threads) {
+            b.addNamedLazyPath("web-worker-pool-js", b.path("src/web/worker-pool.js"));
+            b.addNamedLazyPath("web-worker-js", b.path("src/web/worker.js"));
+        }
     }
 
-    const browser_exports_mod = if (browser_wasm)
-        b.createModule(.{
+    const browser_exports_mod = if (browser_wasm) blk: {
+        const mod = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .root_source_file = b.path("src/web/main.zig"),
             .imports = &.{.{ .name = "js-bridge", .module = js_bridge_mod.? }},
-        })
-    else
-        null;
+        });
+        var config = b.addOptions();
+        config.addOption(bool, "worker_concurrency_enabled", web_threads);
+        mod.addOptions("web_config", config);
+        break :blk mod;
+    } else null;
 
     const gpu_impl_mod = blk: switch (gpu_backend) {
         .webgpu => {
@@ -392,20 +398,24 @@ pub fn installWeb(
     exe: *std.Build.Step.Compile,
     options: WebInstallOptions,
 ) void {
-    configureWebTarget(&root_module.resolved_target.?);
-    configureWebTarget(&exe.root_module.resolved_target.?);
-    exe.import_memory = true;
+    const web_threads = knots.builder.named_lazy_paths.contains("web-worker-js");
+    configureWebTarget(&root_module.resolved_target.?, web_threads);
+    configureWebTarget(&exe.root_module.resolved_target.?, web_threads);
+    exe.import_memory = web_threads;
     exe.export_memory = true;
-    exe.export_table = true;
-    exe.shared_memory = true;
+    exe.export_table = web_threads;
+    exe.shared_memory = web_threads;
     exe.initial_memory = web_memory_initial;
     exe.max_memory = web_memory_max;
 
-    const names = b.allocator.alloc([]const u8, 1 + web_bridge_export_symbol_names.len + web_thread_export_symbol_names.len + options.extra_export_symbol_names.len) catch @panic("OOM");
+    const thread_export_count = if (web_threads) web_thread_export_symbol_names.len else 0;
+    const names = b.allocator.alloc([]const u8, 1 + web_bridge_export_symbol_names.len + thread_export_count + options.extra_export_symbol_names.len) catch @panic("OOM");
     names[0] = options.start_symbol;
     for (web_bridge_export_symbol_names, 0..) |name, i| names[i + 1] = name;
-    for (web_thread_export_symbol_names, 0..) |name, i| names[i + 1 + web_bridge_export_symbol_names.len] = name;
-    const extra_start = 1 + web_bridge_export_symbol_names.len + web_thread_export_symbol_names.len;
+    if (web_threads) {
+        for (web_thread_export_symbol_names, 0..) |name, i| names[i + 1 + web_bridge_export_symbol_names.len] = name;
+    }
+    const extra_start = 1 + web_bridge_export_symbol_names.len + thread_export_count;
     for (options.extra_export_symbol_names, 0..) |name, i| names[extra_start + i] = name;
     root_module.export_symbol_names = names;
     if (options.index_html) |index_html| {
@@ -420,14 +430,23 @@ pub fn installWeb(
     b.getInstallStep().dependOn(&install_host_js.step);
     b.getInstallStep().dependOn(&install_bridge_js.step);
     b.getInstallStep().dependOn(&install_wasm.step);
-    const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
-    const install_worker_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-js"), .{ .custom = options.dir }, "knots-worker.js");
-    b.getInstallStep().dependOn(&install_worker_pool_js.step);
-    b.getInstallStep().dependOn(&install_worker_js.step);
+    if (web_threads) {
+        const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
+        const install_worker_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-js"), .{ .custom = options.dir }, "knots-worker.js");
+        b.getInstallStep().dependOn(&install_worker_pool_js.step);
+        b.getInstallStep().dependOn(&install_worker_js.step);
+    }
 }
 
-fn configureWebTarget(target: *std.Build.ResolvedTarget) void {
+fn configureWebTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
     if (!isBrowserWasmTarget(target.result)) return;
+    if (!threads) {
+        const feature = std.Target.wasm.Feature.atomics;
+        target.query.cpu_features_add.removeFeature(@intFromEnum(feature));
+        target.query.cpu_features_sub.addFeature(@intFromEnum(feature));
+        target.result.cpu.features.removeFeature(@intFromEnum(feature));
+        return;
+    }
     inline for (.{
         std.Target.wasm.Feature.atomics,
         std.Target.wasm.Feature.bulk_memory,

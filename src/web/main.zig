@@ -1,6 +1,7 @@
 const std = @import("std");
 const js = @import("js-bridge");
-const Runtime = @import("WorkerRuntime.zig");
+const config = @import("web_config");
+const Runtime = if (config.worker_concurrency_enabled) @import("WorkerRuntime.zig") else struct {};
 
 const error_buffer_len = 2048;
 
@@ -11,19 +12,21 @@ const vtable: std.Io.VTable = blk: {
     var table = std.Io.failing.vtable.*;
     table.now = now;
     table.clockResolution = clockResolution;
-    table.groupAsync = groupAsync;
-    table.groupConcurrent = groupConcurrent;
-    table.recancel = recancel;
-    table.swapCancelProtection = swapCancelProtection;
-    table.checkCancel = checkCancel;
-    table.sleep = sleep;
-    table.groupAwait = groupAwait;
-    table.groupCancel = groupCancel;
-    table.futexWait = futexWait;
-    table.futexWaitUncancelable = futexWaitUncancelable;
-    table.futexWake = futexWake;
     table.random = random;
     table.randomSecure = randomSecure;
+    if (config.worker_concurrency_enabled) {
+        table.groupAsync = groupAsync;
+        table.groupConcurrent = groupConcurrent;
+        table.recancel = recancel;
+        table.swapCancelProtection = swapCancelProtection;
+        table.checkCancel = checkCancel;
+        table.sleep = sleep;
+        table.groupAwait = groupAwait;
+        table.groupCancel = groupCancel;
+        table.futexWait = futexWait;
+        table.futexWaitUncancelable = futexWaitUncancelable;
+        table.futexWake = futexWake;
+    }
     break :blk table;
 };
 
@@ -32,7 +35,7 @@ pub const io: std.Io = .{
     .vtable = &vtable,
 };
 
-pub const allocator = Runtime.allocator;
+pub const allocator = if (config.worker_concurrency_enabled) Runtime.allocator else std.heap.wasm_allocator;
 
 fn now(_: ?*anyopaque, clock: std.Io.Clock) std.Io.Timestamp {
     switch (clock) {
@@ -262,35 +265,37 @@ export fn knots_last_error_copy(ptr: usize, len: usize) callconv(.{ .wasm_mvp = 
 }
 
 comptime {
-    const exports = struct {
-        fn run(start: usize, context: usize, task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
-            Runtime.run(start, context, task);
-        }
+    if (config.worker_concurrency_enabled) {
+        const exports = struct {
+            fn run(start: usize, context: usize, task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
+                Runtime.run(start, context, task);
+            }
 
-        fn complete(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
-            Runtime.complete(task);
-        }
+            fn complete(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
+                Runtime.complete(task);
+            }
 
-        fn release(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
-            Runtime.release(task);
-        }
+            fn release(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
+                Runtime.release(task);
+            }
 
-        fn abort(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
-            Runtime.abort(task);
-        }
+            fn abort(task: *Runtime.Task) callconv(.{ .wasm_mvp = .{} }) void {
+                Runtime.abort(task);
+            }
 
-        fn stackAlloc() callconv(.{ .wasm_mvp = .{} }) usize {
-            return Runtime.allocateStack();
-        }
+            fn stackAlloc() callconv(.{ .wasm_mvp = .{} }) usize {
+                return Runtime.allocateStack();
+            }
 
-        fn stackFree(stack_top: usize) callconv(.{ .wasm_mvp = .{} }) void {
-            Runtime.freeStack(stack_top);
-        }
-    };
-    @export(&exports.run, .{ .name = "knots_worker_run" });
-    @export(&exports.complete, .{ .name = "knots_worker_complete" });
-    @export(&exports.release, .{ .name = "knots_worker_release" });
-    @export(&exports.abort, .{ .name = "knots_worker_abort" });
-    @export(&exports.stackAlloc, .{ .name = "knots_worker_stack_alloc" });
-    @export(&exports.stackFree, .{ .name = "knots_worker_stack_free" });
+            fn stackFree(stack_top: usize) callconv(.{ .wasm_mvp = .{} }) void {
+                Runtime.freeStack(stack_top);
+            }
+        };
+        @export(&exports.run, .{ .name = "knots_worker_run" });
+        @export(&exports.complete, .{ .name = "knots_worker_complete" });
+        @export(&exports.release, .{ .name = "knots_worker_release" });
+        @export(&exports.abort, .{ .name = "knots_worker_abort" });
+        @export(&exports.stackAlloc, .{ .name = "knots_worker_stack_alloc" });
+        @export(&exports.stackFree, .{ .name = "knots_worker_stack_free" });
+    }
 }

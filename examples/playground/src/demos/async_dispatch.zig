@@ -60,13 +60,20 @@ fn body(app: *knots.App) !void {
 fn sleep10(app: *knots.App) !void {
     const self: *Self = @fieldParentPtr("app", app);
 
-    self.demo_state.pending_async += 10;
     for (1..11) |i| {
-        try app.dispatch(
+        app.dispatch(
             doSleep,
             .{ self.io, @as(i64, @intCast(i)) },
             onWakeup,
-        );
+        ) catch |err| switch (err) {
+            error.ConcurrencyUnavailable => {
+                std.log.warn("async dispatch is unavailable because this build has no thread support", .{});
+                if (self.demo_state.pending_async > 0) app.requestFrame();
+                return;
+            },
+            else => return err,
+        };
+        self.demo_state.pending_async += 1;
     }
     app.requestFrame();
 }

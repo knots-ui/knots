@@ -91,7 +91,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const knots = b.dependency("knots", .{ .target = target, .optimize = optimize });
+    const knots = b.dependency("knots", .{
+        .target = target,
+        .optimize = optimize,
+        .web_threads = true,
+    });
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -164,7 +168,9 @@ export fn main() callconv(.{ .wasm_mvp = .{} }) i32 {
     <canvas id="canvas"></canvas>
     <script type="module">
       import { startKnots } from "./knots.js";
-      startKnots({ wasmUrl: "./app.wasm", canvas: "#canvas" }).catch(console.error);
+      startKnots({ wasmUrl: "./app.wasm", canvas: "#canvas" }).catch(
+        console.error,
+      );
     </script>
   </body>
 </html>
@@ -174,9 +180,7 @@ export fn main() callconv(.{ .wasm_mvp = .{} }) i32 {
 zig build -Dtarget=wasm32-freestanding
 ```
 
-`wasm64-freestanding` also works in browsers with memory64 support. `installWeb` configures shared memory and installs the WASM and worker files.
-
-Serve the output over HTTP with:
+Web threads remain enabled by default when `web_threads` is omitted. Threaded builds configure shared memory and install the WASM and worker files. They must be served over HTTP with:
 
 ```text
 Cross-Origin-Opener-Policy: same-origin
@@ -184,6 +188,12 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 These headers isolate the page so browsers can safely expose `SharedArrayBuffer`, which shared WebAssembly memory requires. Cross-origin resources must allow CORS or embedding via `Cross-Origin-Resource-Policy`.
+
+`wasm64-freestanding` also works in browsers with memory64 support. With `.web_threads = false`, `installWeb` emits an ordinary, non-shared WebAssembly module and does not install worker files. It can be served by a normal static server:
+
+```sh
+python3 -m http.server 8000 --directory zig-out/web
+```
 
 ### Distributing Vulkan applications on macOS
 
