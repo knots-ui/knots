@@ -65,10 +65,7 @@ fn demo(
 pub const all = [_]Demo{
     demo("demos/buttons.zig", "\u{e913}", "Buttons", "Button variants, click handlers, disabled state and a menu button.", @import("demos/buttons.zig").render),
     demo("demos/context_menu.zig", "\u{e5d2}", "Context menu", "Right-click wrapper component with custom user-defined actions.", @import("demos/context_menu.zig").render),
-    demo("demos/sizing.zig", "\u{e85b}", "Sizing", "grow, fixed, percent and fit on the same axis.", @import("demos/sizing.zig").render),
-    demo("demos/nesting.zig", "\u{e97a}", "Nesting", "Three levels of nested containers with shared layout.", @import("demos/nesting.zig").render),
-    demo("demos/alignment.zig", "\u{e234}", "Alignment", "Cross-axis alignment: start, center, end.", @import("demos/alignment.zig").render),
-    demo("demos/justify.zig", "\u{e235}", "Justify", "Main-axis distribution: start, center, end, space_between, space_around.", @import("demos/justify.zig").render),
+    demo("demos/layout.zig", "\u{e8f1}", "Layout", "Sizing, nesting, cross-axis alignment and main-axis distribution.", @import("demos/layout.zig").render),
     demo("demos/control_flow.zig", "\u{e8d5}", "Control flow", "If, For and animation.Collapsible composed together.", @import("demos/control_flow.zig").render),
     demo("demos/form.zig", "\u{e890}", "Form", "Text inputs, radio buttons, tooltip, dropdown and slider wired into a single form.", @import("demos/form.zig").render),
     demo("demos/layer.zig", "\u{e53b}", "Layer", "dir=.layer stacks children on the z-axis.", @import("demos/layer.zig").render),
