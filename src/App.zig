@@ -261,10 +261,14 @@ fn renderFrame(self: *App, viewport: *Viewport) !void {
     viewport.draw_list.reset();
     try viewport.ui.tessellate(self.frame_arena.allocator(), &viewport.draw_list);
     const hover_changed = viewport.ui.resolveHit();
-    viewport.renderer.render(&viewport.draw_list, viewport.ui.font.glyph_builder, viewport.ui.content_scale) catch |err| switch (err) {
-        error.SurfaceUnavailable => return,
-        else => return err,
-    };
+    switch (viewport.renderer.render(&viewport.draw_list, viewport.ui.font.glyph_builder, viewport.ui.content_scale)) {
+        .success => {},
+        .callback_error => |err| return err,
+        .renderer_error => |err| switch (err) {
+            error.SurfaceUnavailable => return,
+            else => return err,
+        },
+    }
 
     if (hover_changed or viewport.ui.anim_active) viewport.window.requestFrame();
 }
@@ -355,6 +359,11 @@ pub fn requestFrame(self: *App) void {
 /// The arena is freed at the end of the frame.
 pub fn arena(self: *App) std.mem.Allocator {
     return self.frame_arena.allocator();
+}
+
+/// Returns the backend-neutral GPU context shared by all viewports.
+pub fn gpuContext(self: *App) render.gpu.Context {
+    return .{ .inner = self.render_context };
 }
 
 /// Dispatch a function to be executed using the `Io` implementation provided in init.

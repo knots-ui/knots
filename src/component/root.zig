@@ -14,6 +14,7 @@ pub const Tooltip = @import("Tooltip.zig");
 pub const RadioButton = @import("radio.zig").RadioButton;
 pub const RadioGroup = @import("radio.zig").RadioGroup;
 pub const Canvas = @import("Canvas.zig");
+pub const GPUCanvas = @import("GPUCanvas.zig");
 pub const Image = @import("Image.zig");
 pub const Graph = @import("Graph.zig");
 pub const Dialog = @import("Dialog.zig");

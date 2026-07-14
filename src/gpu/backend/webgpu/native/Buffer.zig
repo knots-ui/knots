@@ -1,6 +1,7 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
-const Desc = @import("gpu").Buffer.Desc;
+const CommonBuffer = @import("gpu").Buffer;
+const Desc = CommonBuffer.Desc;
 
 const Buffer = @This();
 
@@ -13,11 +14,11 @@ usage: wgpu.Buffer.Usage,
 label: []u8,
 
 pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Queue, desc: Desc) !Buffer {
-    std.debug.assert(desc.size != 0);
+    try CommonBuffer.validateDesc(desc);
     const label = try allocator.dupe(u8, desc.label);
     errdefer allocator.free(label);
-    const wgpu_usage = toWgpuUsage(desc.usage);
-    return .{
+    const wgpu_usage = toWgpuUsage(CommonBuffer.effectiveUsage(desc));
+    var out = Buffer{
         .allocator = allocator,
         .buffer = try device.createBuffer(.{
             .usage = wgpu_usage,
@@ -30,9 +31,11 @@ pub fn create(allocator: std.mem.Allocator, device: wgpu.Device, queue: wgpu.Que
         .usage = wgpu_usage,
         .label = label,
     };
+    if (desc.initial_data) |data| if (data.len != 0) out.loadOffset(u8, data, 0);
+    return out;
 }
 
-fn toWgpuUsage(usage: @import("gpu").Buffer.Usage) wgpu.Buffer.Usage {
+fn toWgpuUsage(usage: CommonBuffer.Usage) wgpu.Buffer.Usage {
     return .{
         .vertex = usage.vertex,
         .index = usage.index,
@@ -49,10 +52,15 @@ pub fn deinit(self: *Buffer) void {
 }
 
 pub fn load(self: *Buffer, comptime T: type, data: []const T) void {
+    self.loadOffset(T, data, 0);
+}
+
+pub fn loadOffset(self: *Buffer, comptime T: type, data: []const T, offset: usize) void {
     std.debug.assert(@sizeOf(T) != 0);
-    std.debug.assert(data.len <= self.size / @sizeOf(T));
+    const byte_len = data.len * @sizeOf(T);
+    std.debug.assert(offset <= self.size and byte_len <= self.size - offset);
     const bytes: [*]const u8 = @ptrCast(data.ptr);
-    self.queue.writeBuffer(u8, self.buffer, 0, bytes[0 .. data.len * @sizeOf(T)]);
+    self.queue.writeBuffer(u8, self.buffer, offset, bytes[0..byte_len]);
 }
 
 pub fn getSize(self: *const Buffer) usize {

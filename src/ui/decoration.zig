@@ -1,12 +1,14 @@
 const Radius = @import("Radius.zig");
 const BorderWidth = @import("BorderWidth.zig");
 const Texture = @import("render").Texture;
+const gpu = @import("render").gpu;
 
 pub const Decoration = union(enum) {
     none: void,
     rect: Rect,
     text: Text,
     canvas: Canvas,
+    gpu_canvas: GPUCanvas,
     image: Image,
     range: Range,
 
@@ -29,6 +31,11 @@ pub const Decoration = union(enum) {
 
     pub const Canvas = struct {
         cmds: []const DrawCmd,
+    };
+
+    pub const GPUCanvas = struct {
+        on_draw: gpu.DrawCallback,
+        user_data: ?*anyopaque,
     };
 
     pub const Image = struct {

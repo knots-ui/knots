@@ -40,6 +40,7 @@ pub fn create(device: *Device, desc: Desc) !BindGroup {
     const layout = desc.pipeline.descriptorSetLayout(desc.layout_index);
 
     const alloc_result = try device.allocateDescriptorSetWithPool(layout);
+    errdefer device.vkd.freeDescriptorSets(device.device, alloc_result.pool, &.{alloc_result.set}) catch {};
 
     var writes_buf: [16]vk.WriteDescriptorSet = undefined;
     var buf_info_buf: [16]vk.DescriptorBufferInfo = undefined;

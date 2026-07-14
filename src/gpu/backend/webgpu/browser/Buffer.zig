@@ -14,19 +14,22 @@ usage: gpu.Buffer.Usage,
 label: []u8,
 
 pub fn create(allocator: std.mem.Allocator, device: js.Value, queue: js.Value, desc: gpu.Buffer.Desc) !Buffer {
-    std.debug.assert(desc.size != 0);
+    try gpu.Buffer.validateDesc(desc);
     const label = try allocator.dupe(u8, desc.label);
     errdefer allocator.free(label);
-    const buffer = try createRawBuffer(device, desc.size, desc.usage, label);
-    return .{
+    const usage = gpu.Buffer.effectiveUsage(desc);
+    const buffer = try createRawBuffer(device, desc.size, usage, label);
+    var out = Buffer{
         .allocator = allocator,
         .buffer = buffer,
         .queue = queue.retain(),
         .device = device.retain(),
         .size = desc.size,
-        .usage = desc.usage,
+        .usage = usage,
         .label = label,
     };
+    if (desc.initial_data) |data| out.loadOffset(u8, data, 0);
+    return out;
 }
 
 pub fn deinit(self: *Buffer) void {
@@ -38,13 +41,18 @@ pub fn deinit(self: *Buffer) void {
 }
 
 pub fn load(self: *Buffer, comptime T: type, data: []const T) void {
+    self.loadOffset(T, data, 0);
+}
+
+pub fn loadOffset(self: *Buffer, comptime T: type, data: []const T, offset: usize) void {
     std.debug.assert(@sizeOf(T) != 0);
-    std.debug.assert(data.len <= self.size / @sizeOf(T));
+    const byte_len = data.len * @sizeOf(T);
+    std.debug.assert(offset <= self.size and byte_len <= self.size - offset);
     const bytes: [*]const u8 = @ptrCast(data.ptr);
     self.queue.callVoid("writeBuffer", &.{
         js.Arg.value(self.buffer),
-        js.Arg.u32(0),
-        js.Arg.bytes(bytes[0 .. data.len * @sizeOf(T)]),
+        js.Arg.usize(offset),
+        js.Arg.bytes(bytes[0..byte_len]),
     }) catch |err| webgpu.recordError(err);
 }
 

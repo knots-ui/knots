@@ -19,6 +19,7 @@ demo_state: demos.Demo.State,
 source_cache: [demos.all.len]?code_viewer.Highlighted = @splat(null),
 
 const Self = @This();
+pub const DemoState = demos.Demo.State;
 
 pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
     var app = try knots.App.init(io, allocator, .{
@@ -50,6 +51,7 @@ pub fn deinit(self: *Self) void {
     for (&self.source_cache) |*entry| {
         if (entry.*) |highlighted| highlighted.deinit(self.allocator);
     }
+    self.app.gpuContext().waitIdle() catch {};
     self.demo_state.deinit(self.allocator);
     self.debug_devtools.deinit(self.allocator);
     self.app.deinit();

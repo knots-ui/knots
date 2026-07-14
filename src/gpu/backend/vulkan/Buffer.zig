@@ -50,9 +50,10 @@ fn allocate(device: *Device, size: usize, usage: vk.BufferUsageFlags) !Allocatio
 }
 
 pub fn create(device: *Device, desc: CommonBuffer.Desc) !Buffer {
+    try CommonBuffer.validateDesc(desc);
     const label = try device.allocator.dupe(u8, desc.label);
     errdefer device.allocator.free(label);
-    const vk_usage = toVkUsage(desc.usage);
+    const vk_usage = toVkUsage(CommonBuffer.effectiveUsage(desc));
     const a = try allocate(device, desc.size, vk_usage);
     errdefer {
         device.vkd.destroyBuffer(device.device, a.buffer, null);
@@ -60,7 +61,7 @@ pub fn create(device: *Device, desc: CommonBuffer.Desc) !Buffer {
     }
     device.setDebugName(.buffer, @intFromEnum(a.buffer), label);
 
-    return .{
+    var out = Buffer{
         .device = device,
         .buffer = a.buffer,
         .allocation = a.allocation,
@@ -69,6 +70,8 @@ pub fn create(device: *Device, desc: CommonBuffer.Desc) !Buffer {
         .usage = vk_usage,
         .label = label,
     };
+    if (desc.initial_data) |data| if (data.len != 0) out.loadOffset(u8, data, 0);
+    return out;
 }
 
 fn toVkUsage(usage: CommonBuffer.Usage) vk.BufferUsageFlags {
@@ -89,10 +92,15 @@ pub fn deinit(self: *Buffer) void {
 }
 
 pub fn load(self: *Buffer, comptime T: type, data: []const T) void {
+    self.loadOffset(T, data, 0);
+}
+
+pub fn loadOffset(self: *Buffer, comptime T: type, data: []const T, offset: usize) void {
     std.debug.assert(@sizeOf(T) != 0);
-    std.debug.assert(data.len <= self.size / @sizeOf(T));
+    const byte_len = data.len * @sizeOf(T);
+    std.debug.assert(offset <= self.size and byte_len <= self.size - offset);
     const bytes: [*]const u8 = @ptrCast(data.ptr);
-    @memcpy(self.mapped[0 .. data.len * @sizeOf(T)], bytes[0 .. data.len * @sizeOf(T)]);
+    @memcpy(self.mapped[offset .. offset + byte_len], bytes[0..byte_len]);
 }
 
 pub fn getSize(self: *const Buffer) usize {

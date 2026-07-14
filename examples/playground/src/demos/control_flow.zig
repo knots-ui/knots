@@ -8,6 +8,10 @@ const Text = knots.component.Text;
 const Button = knots.component.Button;
 const Spacer = knots.component.Spacer;
 const For = knots.control.For;
+const VirtualList = knots.control.VirtualList;
+
+const virtual_items_count: usize = 100_000;
+const virtual_row_height: f32 = 22;
 
 pub fn render(app: *knots.App) !void {
     try ui_helpers.panel(app, "Control flow", body);
@@ -67,11 +71,43 @@ fn body(app: *knots.App) !void {
     try app.e(knots.animation.Collapsible{
         .key = .str("control_flow.details"),
         .open = self.demo_state.show_details,
-        .child = list,
+        .child = dynamicList,
+    });
+
+    try app.e(Spacer{ .height = .fixed(20), .key = .src(@src()) });
+    try app.e(Text{
+        .content = "VirtualList: 100,000 items",
+        .size = .sm,
+        .color = .dimmed,
+        .key = .src(@src()),
+    });
+    try app.e(Spacer{ .height = .fixed(8), .key = .src(@src()) });
+    try app.e(.{
+        Rect{
+            .width = .grow(),
+            .height = .fixed(320),
+            .dir = .column,
+            .overflow = .scroll_y,
+            .key = .src(@src()),
+            .style = .{
+                .color = .muted,
+                .corner_radius = .sm,
+                .border_width = .all(1),
+                .border_color = .toned,
+            },
+        },
+        .{
+            VirtualList(usize){
+                .key = .src(@src()),
+                .items = virtualItems(),
+                .row_height = virtual_row_height,
+                .each = renderVirtualItem,
+            },
+        },
     });
 }
 
-fn list(app: *knots.App) !void {
+fn dynamicList(app: *knots.App) !void {
     const self: *Self = @fieldParentPtr("app", app);
     try app.e(.{
         Rect{
@@ -88,6 +124,36 @@ fn list(app: *knots.App) !void {
                 .each = renderItem,
             },
         },
+    });
+}
+
+fn virtualItems() []const usize {
+    const State = struct {
+        var items: [virtual_items_count]usize = @splat(0);
+        var initialized = false;
+    };
+    if (!State.initialized) {
+        for (&State.items, 0..) |*item, i| item.* = i;
+        State.initialized = true;
+    }
+    return &State.items;
+}
+
+fn renderVirtualItem(app: *knots.App, item: usize, i: usize) !void {
+    const arena = app.arena();
+    try app.e(.{
+        Rect{
+            .width = .grow(),
+            .height = .fixed(virtual_row_height),
+            .padding = .init(2, 12, 2, 12),
+            .@"align" = .center,
+            .key = knots.ui.Key.src(@src()).indexed(i),
+        },
+        .{Text{
+            .content = try std.fmt.allocPrint(arena, "row #{d}", .{item}),
+            .size = .sm,
+            .key = knots.ui.Key.src(@src()).indexed(i),
+        }},
     });
 }
 

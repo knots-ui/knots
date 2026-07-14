@@ -83,6 +83,26 @@ pub fn setScissorRect(self: *RenderPass, x: u32, y: u32, w: u32, h: u32) void {
     }) catch |err| webgpu.recordError(err);
 }
 
+pub fn setViewport(self: *RenderPass, x: f32, y: f32, width: f32, height: f32) void {
+    self.pass.callVoid("setViewport", &.{
+        js.Arg.f64(x),
+        js.Arg.f64(y),
+        js.Arg.f64(width),
+        js.Arg.f64(height),
+        js.Arg.f64(0),
+        js.Arg.f64(1),
+    }) catch |err| webgpu.recordError(err);
+}
+
+pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
+    self.pass.callVoid("draw", &.{
+        js.Arg.u32(vertex_count),
+        js.Arg.u32(instance_count),
+        js.Arg.u32(first_vertex),
+        js.Arg.u32(first_instance),
+    }) catch |err| webgpu.recordError(err);
+}
+
 pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
     self.pass.callVoid("drawIndexed", &.{
         js.Arg.u32(index_count),

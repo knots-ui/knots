@@ -524,6 +524,10 @@ pub fn hovering(self: *UI, id: Element.Id) bool {
     return self.state.hovered == id;
 }
 
+pub fn mousePosition(self: *const UI) [2]f64 {
+    return self.input.mouse_pos;
+}
+
 pub fn pressing(self: *UI, id: Element.Id) bool {
     if (!self.inputScopeAllowsId(id)) return false;
     return self.state.active == id;
@@ -989,6 +993,9 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                 }
             },
             .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
+            .gpu_canvas => |canvas| {
+                try draw_list.pushCustomDraw(canvas.on_draw, canvas.user_data, el.box, clip);
+            },
             .image => |img| {
                 const zero4 = [4]f32{ 0, 0, 0, 0 };
                 const inst = gpu.Instance{

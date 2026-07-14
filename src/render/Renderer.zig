@@ -12,6 +12,11 @@ const FrameUploads = @import("FrameUploads.zig");
 const Context = @import("Context.zig");
 const Texture = @import("Texture.zig");
 
+const PhysicalViewport = @import("gpu.zig").PhysicalViewport;
+const PhysicalScissor = @import("gpu.zig").PhysicalScissor;
+const ClipSpaceTransform = @import("gpu.zig").ClipSpaceTransform;
+const DrawContext = @import("gpu.zig").DrawContext;
+
 const PixelTextureKey = u64;
 const PIXEL_TEXTURE_TTL_FRAMES: u64 = 2;
 
@@ -291,8 +296,23 @@ pub fn takeReadback(self: *Renderer) ?gpu.SurfaceReadback {
     };
 }
 
-pub fn render(self: *Renderer, draw_list: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) RenderError!void {
-    self.draw(draw_list, glyph_builder, content_scale) catch |err| return mapRenderError(err);
+pub const RenderResult = union(enum) {
+    success,
+    callback_error: anyerror,
+    renderer_error: RenderError,
+};
+
+const RenderFailure = union(enum) {
+    callback: anyerror,
+    renderer: anyerror,
+};
+
+pub fn render(self: *Renderer, draw_list: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) RenderResult {
+    const failure = self.draw(draw_list, glyph_builder, content_scale) orelse return .success;
+    return switch (failure) {
+        .callback => |err| .{ .callback_error = err },
+        .renderer => |err| .{ .renderer_error = mapRenderError(err) },
+    };
 }
 
 fn mapRenderError(err: anyerror) RenderError {
@@ -354,71 +374,129 @@ const FrameSizes = struct {
     tindices_bytes: usize,
 };
 
-fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) !void {
+const DrawState = struct {
+    clip: ?Clip.State = null,
+    texture: ?*const Texture = null,
+    kind: ?DrawList.Command.Kind = null,
+};
+
+fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) ?RenderFailure {
     const context = self.context;
     const device = &context.device;
-    var frame_ctx = try self.frame.begin();
+    var frame_ctx = self.frame.begin() catch |err| return .{ .renderer = err };
     const upload_slot: usize = @intCast(frame_ctx.upload_slot);
     std.debug.assert(upload_slot < self.frame_uploads.len);
     const upload = &self.frame_uploads[upload_slot];
+    upload.resetCustom();
 
-    try self.syncGlyphBuilder(device, context, glyph_builder);
+    self.syncGlyphBuilder(device, context, glyph_builder) catch |err| return .{ .renderer = err };
 
-    const has_work = !dl.isEmpty() and context.atlas.isReady();
-    if (!has_work) {
-        var pass = try frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } });
+    if (dl.isEmpty()) {
+        var pass = frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } }) catch |err| return .{ .renderer = err };
         pass.end();
-        try self.submitFrame(&frame_ctx);
-        try self.sweepPixelTextures();
-        return;
+        self.submitFrame(&frame_ctx) catch |err| return .{ .renderer = err };
+        self.sweepPixelTextures() catch |err| return .{ .renderer = err };
+        return null;
     }
 
     self.updateViewport(upload, content_scale);
-    const sizes = try uploadFrameData(context, upload, dl);
+    const sizes = uploadFrameData(context, upload, dl) catch |err| return .{ .renderer = err };
     const use_linear_target = context.linear_pipeline != null;
-    if (use_linear_target) try self.ensureLinearTarget(device, context);
+    if (use_linear_target) self.ensureLinearTarget(device, context) catch |err| return .{ .renderer = err };
 
     var pass = if (use_linear_target)
-        try frame_ctx.beginRenderPass(.{ .label = "ui_linear", .color_attachment = .{ .clear_color = self.cfg.clear_color, .target = &self.linear_target.? } })
+        frame_ctx.beginRenderPass(.{ .label = "ui_linear", .color_attachment = .{ .clear_color = self.cfg.clear_color, .target = &self.linear_target.? } }) catch |err| return .{ .renderer = err }
     else
-        try frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } });
+        frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } }) catch |err| return .{ .renderer = err };
 
     const phys_w = self.surface.cfg.window_width;
     const phys_h = self.surface.cfg.window_height;
-    var current_clip: Clip.State = .{};
-    var current_texture: ?*const Texture = null;
-    var current_kind: ?DrawList.CommandKind = null;
-    var clip_initialized = false;
+    var state: DrawState = .{};
     var layer_it = dl.layers_dirty.iterator(.{});
     while (layer_it.next()) |z| {
         const r = dl.layer_ranges[z];
         for (dl.layer_cmds.items[r.start .. r.start + r.len]) |cmd| {
-            if (current_kind != cmd.kind) {
-                bindKind(context, &self.text_curveband_bg, &pass, upload, cmd.kind, sizes, use_linear_target);
-                current_texture = null;
-                current_kind = cmd.kind;
+            const kind = std.meta.activeTag(cmd.payload);
+            if (kind == .custom_draw) {
+                const custom = cmd.payload.custom_draw;
+                const region = customDrawRegion(custom.bounds, cmd.clip.scissor, content_scale, phys_w, phys_h) orelse continue;
+                pass.setViewport(
+                    region.viewport.x,
+                    region.viewport.y,
+                    region.viewport.width,
+                    region.viewport.height,
+                );
+                pass.setScissorRect(
+                    region.scissor.x,
+                    region.scissor.y,
+                    region.scissor.width,
+                    region.scissor.height,
+                );
+                var public_context: DrawContext = .{
+                    .context = .{ .inner = context },
+                    .frame = .{ .inner = upload },
+                    .pass = .{ .inner = &pass },
+                    .logical_bounds = .{
+                        .x = custom.bounds.x(),
+                        .y = custom.bounds.y(),
+                        .width = custom.bounds.w(),
+                        .height = custom.bounds.h(),
+                    },
+                    .viewport = region.viewport,
+                    .scissor = region.scissor,
+                    .clip_space_transform = region.clip_space_transform,
+                    .content_scale = content_scale,
+                };
+                custom.callback(custom.user_data, &public_context) catch |callback_error| {
+                    pass.end();
+                    self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |err| return .{ .renderer = err };
+                    return .{ .callback = callback_error };
+                };
+
+                pass.setViewport(0, 0, @floatFromInt(phys_w), @floatFromInt(phys_h));
+                state = .{};
+                continue;
             }
-            if (cmd.kind != .text and cmd.texture != current_texture) {
-                pass.setBindGroup(1, if (cmd.texture) |texture| &texture.bind_group else &context.atlas.bind_group);
-                current_texture = cmd.texture;
+
+            if (!context.atlas.isReady()) continue;
+
+            if (state.kind != kind) {
+                bindKind(context, &self.text_curveband_bg, &pass, upload, kind, sizes, use_linear_target);
+                state.texture = null;
+                state.kind = kind;
             }
-            if (!clip_initialized or !current_clip.scissorEql(cmd.clip)) {
+            const texture = switch (cmd.payload) {
+                .vertex => |value| value.texture,
+                .instance => |value| value.texture,
+                .text => null,
+                .custom_draw => unreachable,
+            };
+            if (kind != .text and texture != state.texture) {
+                pass.setBindGroup(1, if (texture) |value| &value.bind_group else &context.atlas.bind_group);
+                state.texture = texture;
+            }
+            if (state.clip == null or !state.clip.?.scissorEql(cmd.clip)) {
                 applyClip(&pass, cmd.clip.scissor, content_scale, phys_w, phys_h);
-                current_clip = cmd.clip;
-                clip_initialized = true;
+                state.clip = cmd.clip;
             }
-            switch (cmd.kind) {
-                .vertex => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
-                .instance => pass.drawIndexed(6, cmd.count, 0, 0, cmd.offset),
-                .text => pass.drawIndexed(cmd.count, 1, cmd.offset, 0, 0),
+            switch (cmd.payload) {
+                .vertex => |value| pass.drawIndexed(value.count, 1, value.offset, 0, 0),
+                .instance => |value| pass.drawIndexed(6, value.count, 0, 0, value.offset),
+                .text => |value| pass.drawIndexed(value.count, 1, value.offset, 0, 0),
+                .custom_draw => unreachable,
             }
         }
     }
     pass.end();
 
-    if (use_linear_target) try self.compositeLinearTarget(context, &frame_ctx, upload, content_scale);
-    try self.submitFrame(&frame_ctx);
-    try self.sweepPixelTextures();
+    self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |err| return .{ .renderer = err };
+    self.sweepPixelTextures() catch |err| return .{ .renderer = err };
+    return null;
+}
+
+fn finishFrame(self: *Renderer, frame_ctx: *gpu_impl.Frame.Context, upload: *FrameUploads, content_scale: f32, use_linear_target: bool) !void {
+    if (use_linear_target) try self.compositeLinearTarget(self.context, frame_ctx, upload, content_scale);
+    try self.submitFrame(frame_ctx);
 }
 
 fn sweepPixelTextures(self: *Renderer) !void {
@@ -434,6 +512,7 @@ fn sweepPixelTextures(self: *Renderer) !void {
             if (self.pixel_textures.fetchRemove(key)) |removed| removed.value.texture.destroyAfterWait();
         }
     }
+
     self.frame_index +%= 1;
 }
 
@@ -491,7 +570,7 @@ fn bindKind(
     text_curveband_bg: *gpu_impl.BindGroup,
     pass: *gpu_impl.RenderPass,
     uploads: *FrameUploads,
-    kind: DrawList.CommandKind,
+    kind: DrawList.Command.Kind,
     sizes: FrameSizes,
     linear_target: bool,
 ) void {
@@ -523,6 +602,7 @@ fn bindKind(
             pass.setVertexBuffer(0, &uploads.text_vertex_buf, 0, sizes.tverts_bytes);
             pass.setIndexBuffer(&uploads.text_index_buf, 0, sizes.tindices_bytes);
         },
+        .custom_draw => unreachable,
     }
 }
 
@@ -588,18 +668,98 @@ fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_imp
     pass.end();
 }
 
+const CustomDrawRegion = struct {
+    viewport: PhysicalViewport,
+    scissor: PhysicalScissor,
+    clip_space_transform: ClipSpaceTransform,
+};
+
+fn customDrawRegion(bounds: math.Rect, clip_rect: ?math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) ?CustomDrawRegion {
+    if (!std.math.isFinite(content_scale) or content_scale <= 0 or !rectIsFinite(bounds) or bounds.isEmpty()) return null;
+
+    const original_viewport: PhysicalViewport = .{
+        .x = bounds.x() * content_scale,
+        .y = bounds.y() * content_scale,
+        .width = bounds.w() * content_scale,
+        .height = bounds.h() * content_scale,
+    };
+    if (!std.math.isFinite(original_viewport.x) or !std.math.isFinite(original_viewport.y) or
+        !std.math.isFinite(original_viewport.width) or !std.math.isFinite(original_viewport.height)) return null;
+
+    const surface_width: f32 = @floatFromInt(phys_w);
+    const surface_height: f32 = @floatFromInt(phys_h);
+    const viewport_left = std.math.clamp(original_viewport.x, 0, surface_width);
+    const viewport_top = std.math.clamp(original_viewport.y, 0, surface_height);
+    const viewport_right = std.math.clamp(original_viewport.x + original_viewport.width, 0, surface_width);
+    const viewport_bottom = std.math.clamp(original_viewport.y + original_viewport.height, 0, surface_height);
+    const viewport: PhysicalViewport = .{
+        .x = viewport_left,
+        .y = viewport_top,
+        .width = viewport_right - viewport_left,
+        .height = viewport_bottom - viewport_top,
+    };
+    if (viewport.width <= 0 or viewport.height <= 0) return null;
+
+    var clipped = bounds;
+    if (clip_rect) |clip| {
+        if (rectIsFinite(clip)) {
+            if (clip.isEmpty()) return null;
+            clipped = clipped.intersect(clip);
+        }
+    }
+    const scissor = physicalScissor(clipped, content_scale, phys_w, phys_h) orelse return null;
+    if (scissor.width == 0 or scissor.height == 0) return null;
+
+    return .{
+        .viewport = viewport,
+        .scissor = scissor,
+        .clip_space_transform = .{
+            .scale = .{
+                original_viewport.width / viewport.width,
+                original_viewport.height / viewport.height,
+            },
+            .offset = .{
+                (2 * (original_viewport.x + original_viewport.width * 0.5 - viewport.x) / viewport.width) - 1,
+                (2 * (original_viewport.y + original_viewport.height * 0.5 - viewport.y) / viewport.height) - 1,
+            },
+        },
+    };
+}
+
 fn applyClip(pass: *gpu_impl.RenderPass, clip_rect: ?math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) void {
-    const vw: f32 = @floatFromInt(phys_w);
-    const vh: f32 = @floatFromInt(phys_h);
-    if (sanitizeClip(clip_rect)) |clip| {
-        const cx = @min(vw, @max(0, clip[0] * content_scale));
-        const cy = @min(vh, @max(0, clip[1] * content_scale));
-        const cw = @max(0, @min(clip[2] * content_scale, vw - cx));
-        const ch = @max(0, @min(clip[3] * content_scale, vh - cy));
-        pass.setScissorRect(@intFromFloat(cx), @intFromFloat(cy), @intFromFloat(cw), @intFromFloat(ch));
+    if (clip_rect) |clip| {
+        if (!rectIsFinite(clip)) {
+            pass.setScissorRect(0, 0, phys_w, phys_h);
+            return;
+        }
+        if (clip.isEmpty()) {
+            pass.setScissorRect(0, 0, 0, 0);
+            return;
+        }
+        const scissor = physicalScissor(clip, content_scale, phys_w, phys_h) orelse {
+            pass.setScissorRect(0, 0, 0, 0);
+            return;
+        };
+        pass.setScissorRect(scissor.x, scissor.y, scissor.width, scissor.height);
     } else {
         pass.setScissorRect(0, 0, phys_w, phys_h);
     }
+}
+
+fn physicalScissor(rect: math.Rect, content_scale: f32, phys_w: u32, phys_h: u32) ?PhysicalScissor {
+    const surface_w: f32 = @floatFromInt(phys_w);
+    const surface_h: f32 = @floatFromInt(phys_h);
+    const left = @min(surface_w, @max(0, @floor(rect.x() * content_scale)));
+    const top = @min(surface_h, @max(0, @floor(rect.y() * content_scale)));
+    const right = @min(surface_w, @max(0, @ceil((rect.x() + rect.w()) * content_scale)));
+    const bottom = @min(surface_h, @max(0, @ceil((rect.y() + rect.h()) * content_scale)));
+    if (right < left or bottom < top) return null;
+    return .{
+        .x = @intFromFloat(left),
+        .y = @intFromFloat(top),
+        .width = @intFromFloat(right - left),
+        .height = @intFromFloat(bottom - top),
+    };
 }
 
 fn syncGlyphBuilder(self: *Renderer, device: *gpu_impl.Device, context: *Context, gb: *text.GlyphBuilder) !void {
@@ -730,11 +890,9 @@ fn uploadDirtyRows(
     try texture.write(ptr, len, 0, y0, width, rows, null);
 }
 
-fn sanitizeClip(c: ?math.Rect) ?[4]f32 {
-    const rect = c orelse return null;
-    const v = [4]f32{ rect.x(), rect.y(), rect.w(), rect.h() };
-    for (v) |f| if (!std.math.isFinite(f)) return null;
-    return v;
+fn rectIsFinite(rect: math.Rect) bool {
+    inline for (0..4) |i| if (!std.math.isFinite(rect.v[i])) return false;
+    return true;
 }
 
 fn ensureBufferCapacity(buf: *gpu_impl.Buffer, required: usize) !void {

@@ -79,6 +79,14 @@ pub fn setScissorRect(self: *RenderPass, x: u32, y: u32, w: u32, h: u32) void {
     self.pass.setScissorRect(x, y, w, h);
 }
 
+pub fn setViewport(self: *RenderPass, x: f32, y: f32, width: f32, height: f32) void {
+    self.pass.setViewport(x, y, width, height, 0, 1);
+}
+
+pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
+    self.pass.draw(vertex_count, instance_count, first_vertex, first_instance);
+}
+
 pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
     self.pass.drawIndexed(index_count, instance_count, first_index, base_vertex, first_instance);
 }

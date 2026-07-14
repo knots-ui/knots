@@ -146,6 +146,21 @@ pub fn setScissorRect(self: *RenderPass, x: u32, y: u32, w: u32, h: u32) void {
     }});
 }
 
+pub fn setViewport(self: *RenderPass, x: f32, y: f32, width: f32, height: f32) void {
+    self.vkd.cmdSetViewport(self.command_buffer, 0, &.{.{
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .min_depth = 0,
+        .max_depth = 1,
+    }});
+}
+
+pub fn draw(self: *RenderPass, vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32) void {
+    self.vkd.cmdDraw(self.command_buffer, vertex_count, instance_count, first_vertex, first_instance);
+}
+
 pub fn drawIndexed(self: *RenderPass, index_count: u32, instance_count: u32, first_index: u32, base_vertex: i32, first_instance: u32) void {
     self.vkd.cmdDrawIndexed(self.command_buffer, index_count, instance_count, first_index, base_vertex, first_instance);
 }

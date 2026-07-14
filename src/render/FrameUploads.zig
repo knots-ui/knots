@@ -1,3 +1,4 @@
+const std = @import("std");
 const gpu = @import("gpu");
 const gpu_impl = @import("gpu_impl");
 const pipelines = @import("pipelines.zig");
@@ -10,6 +11,32 @@ const INIT_INDEX_COUNT = 64 * 1024;
 const INIT_TEXT_VERTEX_BYTES = 128 * 1024;
 const INIT_TEXT_INDEX_COUNT = 16 * 1024;
 const INIT_CLIP_NODE_COUNT = 64;
+const CUSTOM_UPLOAD_CHUNK_BYTES = 4096;
+const CUSTOM_UPLOAD_ALIGNMENT = 256;
+
+const UploadChunk = struct {
+    buffer: gpu_impl.Buffer,
+    usage: gpu.Buffer.Usage,
+    used: usize = 0,
+};
+
+pub const UploadView = struct {
+    chunk_index: u32,
+    epoch: u64,
+    offset: usize,
+    size: usize,
+};
+
+pub const BindGroupRef = struct {
+    slot_index: u32,
+    epoch: u64,
+};
+
+context: *Context,
+upload_chunks: std.ArrayList(UploadChunk),
+bind_group_slots: std.ArrayList(?gpu_impl.BindGroup),
+bind_group_count: usize,
+custom_epoch: u64,
 
 vertex_uniform_buf: gpu_impl.Buffer,
 instance_uniform_buf: gpu_impl.Buffer,
@@ -87,6 +114,11 @@ pub fn init(ctx: *Context) !FrameUploads {
     errdefer text_index_buf.deinit();
 
     return .{
+        .context = ctx,
+        .upload_chunks = .empty,
+        .bind_group_slots = .empty,
+        .bind_group_count = 0,
+        .custom_epoch = 0,
         .vertex_uniform_buf = vertex_uniform_buf,
         .instance_uniform_buf = instance_uniform_buf,
         .text_uniform_buf = text_uniform_buf,
@@ -107,6 +139,10 @@ pub fn init(ctx: *Context) !FrameUploads {
 }
 
 pub fn deinit(self: *FrameUploads) void {
+    self.resetCustom();
+    self.bind_group_slots.deinit(self.context.allocator);
+    for (self.upload_chunks.items) |*chunk| chunk.buffer.deinit();
+    self.upload_chunks.deinit(self.context.allocator);
     self.vertex_clip_bg.deinit();
     self.instance_clip_bg.deinit();
     self.text_clip_bg.deinit();
@@ -123,6 +159,73 @@ pub fn deinit(self: *FrameUploads) void {
     self.text_vertex_buf.deinit();
     self.text_index_buf.deinit();
     self.clip_node_buf.deinit();
+}
+
+pub fn resetCustom(self: *FrameUploads) void {
+    for (self.bind_group_slots.items[0..self.bind_group_count]) |*slot| {
+        if (slot.*) |*value| value.deinit();
+        slot.* = null;
+    }
+    self.bind_group_count = 0;
+    for (self.upload_chunks.items) |*chunk| chunk.used = 0;
+    self.custom_epoch +%= 1;
+}
+
+pub fn upload(self: *FrameUploads, comptime T: type, values: []const T, requested_usage: gpu.Buffer.Usage) !UploadView {
+    if (@sizeOf(T) == 0 or values.len == 0) return error.EmptyBufferUpload;
+    const size = std.math.mul(usize, @sizeOf(T), values.len) catch return error.BufferUploadTooLarge;
+    if (size % 4 != 0) return error.UnalignedBufferUpload;
+
+    var usage = requested_usage;
+    usage.copy_dst = true;
+    for (self.upload_chunks.items, 0..) |*chunk, chunk_index| {
+        if (!std.meta.eql(chunk.usage, usage)) continue;
+        const offset = (std.math.add(usize, chunk.used, CUSTOM_UPLOAD_ALIGNMENT - 1) catch continue) &
+            ~@as(usize, CUSTOM_UPLOAD_ALIGNMENT - 1);
+        if (offset <= chunk.buffer.getSize() and size <= chunk.buffer.getSize() - offset) {
+            chunk.buffer.loadOffset(T, values, offset);
+            chunk.used = offset + size;
+            return .{ .chunk_index = @intCast(chunk_index), .epoch = self.custom_epoch, .offset = offset, .size = size };
+        }
+    }
+
+    const required = (std.math.add(usize, size, CUSTOM_UPLOAD_ALIGNMENT - 1) catch return error.BufferUploadTooLarge) &
+        ~@as(usize, CUSTOM_UPLOAD_ALIGNMENT - 1);
+    const capacity = std.math.ceilPowerOfTwo(usize, @max(CUSTOM_UPLOAD_CHUNK_BYTES, required)) catch return error.BufferUploadTooLarge;
+    var buffer = try self.context.device.createBuffer(.{
+        .size = capacity,
+        .usage = usage,
+        .label = "custom_frame_upload",
+    });
+    errdefer buffer.deinit();
+    try self.upload_chunks.append(self.context.allocator, .{ .buffer = buffer, .usage = usage });
+
+    const chunk_index: u32 = @intCast(self.upload_chunks.items.len - 1);
+    const chunk = &self.upload_chunks.items[chunk_index];
+    chunk.buffer.loadOffset(T, values, 0);
+    chunk.used = size;
+    return .{ .chunk_index = chunk_index, .epoch = self.custom_epoch, .offset = 0, .size = size };
+}
+
+pub fn createBindGroup(self: *FrameUploads, desc: gpu_impl.BindGroup.Desc) !BindGroupRef {
+    if (self.bind_group_count == self.bind_group_slots.items.len)
+        try self.bind_group_slots.append(self.context.allocator, null);
+    const slot = &self.bind_group_slots.items[self.bind_group_count];
+    std.debug.assert(slot.* == null);
+    slot.* = try self.context.device.createBindGroup(desc);
+    const slot_index: u32 = @intCast(self.bind_group_count);
+    self.bind_group_count += 1;
+    return .{ .slot_index = slot_index, .epoch = self.custom_epoch };
+}
+
+pub fn uploadBuffer(self: *const FrameUploads, chunk_index: u32, epoch: u64) ?*const gpu_impl.Buffer {
+    if (epoch != self.custom_epoch or chunk_index >= self.upload_chunks.items.len) return null;
+    return &self.upload_chunks.items[chunk_index].buffer;
+}
+
+pub fn uploadBindGroup(self: *const FrameUploads, slot_index: u32, epoch: u64) ?*const gpu_impl.BindGroup {
+    if (epoch != self.custom_epoch or slot_index >= self.bind_group_count) return null;
+    return if (self.bind_group_slots.items[slot_index]) |*value| value else unreachable;
 }
 
 pub fn ensureClipNodeCapacity(self: *FrameUploads, context: *Context, required: usize) !void {
