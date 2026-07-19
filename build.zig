@@ -109,7 +109,7 @@ pub fn build(b: *std.Build) void {
         },
     };
 
-    const gpu_mod = b.createModule(.{
+    const gpu_mod = b.addModule("gpu", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/gpu/root.zig"),
