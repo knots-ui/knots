@@ -20,8 +20,8 @@ const DrawContext = @import("gpu.zig").DrawContext;
 const PixelTextureKey = u64;
 const PIXEL_TEXTURE_TTL_FRAMES: u64 = 2;
 
-const CURVE_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
-const BAND_TEX_WIDTH: u32 = text.GlyphBuilder.TEXTURE_WIDTH;
+const CURVE_TEX_WIDTH: u32 = text.GlyphBuilder.texture_width;
+const BAND_TEX_WIDTH: u32 = text.GlyphBuilder.texture_width;
 const INITIAL_TEX_HEIGHT: u32 = 256;
 
 pub const RenderError =
@@ -912,8 +912,8 @@ fn syncGlyphBuilder(self: *Renderer, device: *gpu_impl.Device, context: *Context
             &self.curve_texture,
             gb.curve_data.items,
             CURVE_TEX_WIDTH,
-            r.y0,
-            r.y1,
+            r.y_start,
+            r.y_end,
         );
     }
     if (gb.bandDirtyRange()) |r| {
@@ -923,8 +923,8 @@ fn syncGlyphBuilder(self: *Renderer, device: *gpu_impl.Device, context: *Context
             &self.band_texture,
             gb.band_data.items,
             BAND_TEX_WIDTH,
-            r.y0,
-            r.y1,
+            r.y_start,
+            r.y_end,
         );
     }
     gb.markClean();

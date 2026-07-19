@@ -57,7 +57,10 @@ pub const HitTarget = enum {
 
 pub const Config = struct {
     /// Default is Roboto regular + Material icons regular.
-    fonts: []const text.Font.FontKey = &.{.{ "default", @embedFile("fonts/default.ttf") }},
+    fonts: []const text.Font.FontSource = &.{.{
+        .name = "default",
+        .data = @embedFile("fonts/default.ttf"),
+    }},
     /// Per-pool eviction TTLs in frames. Long-lived widget state (cursor,
     /// scroll, dropdown-open, selection) survives conditional hiding (Tabs,
     /// Accordion, Tree); short-lived state (anim) is evicted promptly.
@@ -942,8 +945,18 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                             const rec = gl.record;
                             if (rec.is_empty) continue;
 
-                            const em_x: math.Vec4 = .{ rec.em_min[0], rec.em_max[0], rec.em_max[0], rec.em_min[0] };
-                            const em_y: math.Vec4 = .{ rec.em_max[1], rec.em_max[1], rec.em_min[1], rec.em_min[1] };
+                            const em_x: math.Vec4 = .{
+                                rec.bounds_em_min[0],
+                                rec.bounds_em_max[0],
+                                rec.bounds_em_max[0],
+                                rec.bounds_em_min[0],
+                            };
+                            const em_y: math.Vec4 = .{
+                                rec.bounds_em_max[1],
+                                rec.bounds_em_max[1],
+                                rec.bounds_em_min[1],
+                                rec.bounds_em_min[1],
+                            };
                             const size_v: math.Vec4 = @splat(size_logical);
                             const origin_x_v: math.Vec4 = @splat(el.box.x() + gl.x / content_scale);
                             const baseline_v: math.Vec4 = @splat(baseline);
@@ -961,9 +974,11 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                             }
 
                             const tex_z_bits: u32 =
-                                @as(u32, rec.glyph_loc_x) | (@as(u32, rec.glyph_loc_y) << 16);
+                                @as(u32, rec.glyph_location_x) |
+                                (@as(u32, rec.glyph_location_y) << 16);
                             const tex_w_bits: u32 =
-                                @as(u32, rec.band_max_x) | (@as(u32, rec.band_max_y) << 16);
+                                @as(u32, rec.band_x_max) |
+                                (@as(u32, rec.band_y_max) << 16);
                             const tex_z: f32 = @bitCast(tex_z_bits);
                             const tex_w: f32 = @bitCast(tex_w_bits);
 

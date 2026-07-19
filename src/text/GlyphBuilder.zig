@@ -3,12 +3,25 @@ const Curve = @import("curve.zig").Curve;
 const band = @import("band.zig");
 const glyph = @import("glyph.zig");
 
-pub const TEXTURE_WIDTH: u32 = 4096;
-const LOG_TEXTURE_WIDTH: u5 = 12;
+curve_data: std.ArrayList(CurveTexel),
+band_data: std.ArrayList(BandTexel),
+curve_dirty_min_y: u32,
+curve_dirty_max_y_excl: u32,
+band_dirty_min_y: u32,
+band_dirty_max_y_excl: u32,
+allocator: std.mem.Allocator,
+
+// A square 4096 atlas fits every supported backend and keeps coordinates compact.
+pub const texture_width: u32 = 4096;
+
+const texture_width_log2: u5 = 12;
+const texture_texel_count_max: u64 = @as(u64, texture_width) * texture_width;
+const GlyphBuilder = @This();
 
 comptime {
-    std.debug.assert(TEXTURE_WIDTH & (TEXTURE_WIDTH - 1) == 0);
-    std.debug.assert(@as(u32, 1) << LOG_TEXTURE_WIDTH == TEXTURE_WIDTH);
+    std.debug.assert(texture_width > 0);
+    std.debug.assert(texture_width & (texture_width - 1) == 0);
+    std.debug.assert(@as(u32, 1) << texture_width_log2 == texture_width);
 }
 
 pub const CurveTexel = extern struct {
@@ -25,18 +38,18 @@ pub const BandTexel = extern struct {
     w: u32 = 0,
 };
 
-curve_data: std.ArrayList(CurveTexel),
-band_data: std.ArrayList(BandTexel),
-curve_dirty_min_y: u32,
-curve_dirty_max_y_excl: u32,
-band_dirty_min_y: u32,
-band_dirty_max_y_excl: u32,
-allocator: std.mem.Allocator,
+pub const DirtyRange = struct {
+    y_start: u32,
+    y_end: u32,
+};
 
-const GlyphBuilder = @This();
+const BandAppendResult = struct {
+    glyph_location: u32,
+    dirty_range: DirtyRange,
+};
 
 pub fn init(allocator: std.mem.Allocator) !GlyphBuilder {
-    var self = GlyphBuilder{
+    var glyph_builder = GlyphBuilder{
         .curve_data = .empty,
         .band_data = .empty,
         .curve_dirty_min_y = std.math.maxInt(u32),
@@ -45,11 +58,11 @@ pub fn init(allocator: std.mem.Allocator) !GlyphBuilder {
         .band_dirty_max_y_excl = 0,
         .allocator = allocator,
     };
-    // Sentinel band-header texel (0 curves) at band index 0 so empty glyphs
-    // can point there and produce zero coverage in the shader.
-    try self.band_data.append(allocator, .{ .x = 0, .y = 0 });
-    self.markBandDirty(0, 1);
-    return self;
+
+    // Empty glyphs point to this zero-curve header so the shader produces no coverage.
+    try glyph_builder.band_data.append(allocator, .{ .x = 0, .y = 0 });
+    glyph_builder.markBandDirty(0, 1);
+    return glyph_builder;
 }
 
 pub fn deinit(self: *GlyphBuilder) void {
@@ -58,8 +71,8 @@ pub fn deinit(self: *GlyphBuilder) void {
 }
 
 pub fn isDirty(self: *const GlyphBuilder) bool {
-    return self.curve_dirty_min_y < self.curve_dirty_max_y_excl or
-        self.band_dirty_min_y < self.band_dirty_max_y_excl;
+    if (self.curve_dirty_min_y < self.curve_dirty_max_y_excl) return true;
+    return self.band_dirty_min_y < self.band_dirty_max_y_excl;
 }
 
 pub fn markClean(self: *GlyphBuilder) void {
@@ -76,140 +89,194 @@ pub fn markAllDirty(self: *GlyphBuilder) void {
     self.band_dirty_max_y_excl = self.bandTextureHeight();
 }
 
-pub fn markCurveDirtyTo(self: *GlyphBuilder, y_excl: u32) void {
+pub fn markCurveDirtyTo(self: *GlyphBuilder, y_exclusive: u32) void {
+    std.debug.assert(y_exclusive <= texture_width);
     self.curve_dirty_min_y = 0;
-    self.curve_dirty_max_y_excl = y_excl;
+    self.curve_dirty_max_y_excl = y_exclusive;
 }
 
-pub fn markBandDirtyTo(self: *GlyphBuilder, y_excl: u32) void {
+pub fn markBandDirtyTo(self: *GlyphBuilder, y_exclusive: u32) void {
+    std.debug.assert(y_exclusive <= texture_width);
     self.band_dirty_min_y = 0;
-    self.band_dirty_max_y_excl = y_excl;
+    self.band_dirty_max_y_excl = y_exclusive;
 }
 
 pub fn curveTextureHeight(self: *const GlyphBuilder) u32 {
-    const len: u32 = @intCast(self.curve_data.items.len);
-    return (len + TEXTURE_WIDTH - 1) / TEXTURE_WIDTH;
+    return textureHeight(self.curve_data.items.len);
 }
 
 pub fn bandTextureHeight(self: *const GlyphBuilder) u32 {
-    const len: u32 = @intCast(self.band_data.items.len);
-    return (len + TEXTURE_WIDTH - 1) / TEXTURE_WIDTH;
+    return textureHeight(self.band_data.items.len);
 }
 
-pub fn curveDirtyRange(self: *const GlyphBuilder) ?struct { y0: u32, y1: u32 } {
-    if (self.curve_dirty_min_y >= self.curve_dirty_max_y_excl) return null;
-    return .{ .y0 = self.curve_dirty_min_y, .y1 = self.curve_dirty_max_y_excl };
+pub fn curveDirtyRange(self: *const GlyphBuilder) ?DirtyRange {
+    if (self.curve_dirty_min_y < self.curve_dirty_max_y_excl) {
+        return .{
+            .y_start = self.curve_dirty_min_y,
+            .y_end = self.curve_dirty_max_y_excl,
+        };
+    }
+    return null;
 }
 
-pub fn bandDirtyRange(self: *const GlyphBuilder) ?struct { y0: u32, y1: u32 } {
-    if (self.band_dirty_min_y >= self.band_dirty_max_y_excl) return null;
-    return .{ .y0 = self.band_dirty_min_y, .y1 = self.band_dirty_max_y_excl };
+pub fn bandDirtyRange(self: *const GlyphBuilder) ?DirtyRange {
+    if (self.band_dirty_min_y < self.band_dirty_max_y_excl) {
+        return .{
+            .y_start = self.band_dirty_min_y,
+            .y_end = self.band_dirty_max_y_excl,
+        };
+    }
+    return null;
 }
 
-fn markCurveDirty(self: *GlyphBuilder, y0: u32, y1_excl: u32) void {
-    self.curve_dirty_min_y = @min(self.curve_dirty_min_y, y0);
-    self.curve_dirty_max_y_excl = @max(self.curve_dirty_max_y_excl, y1_excl);
+fn textureHeight(texel_count: usize) u32 {
+    std.debug.assert(texel_count <= texture_texel_count_max);
+    const count: u32 = @intCast(texel_count);
+    return (count + texture_width - 1) / texture_width;
 }
 
-fn markBandDirty(self: *GlyphBuilder, y0: u32, y1_excl: u32) void {
-    self.band_dirty_min_y = @min(self.band_dirty_min_y, y0);
-    self.band_dirty_max_y_excl = @max(self.band_dirty_max_y_excl, y1_excl);
+fn markCurveDirty(self: *GlyphBuilder, y_start: u32, y_end: u32) void {
+    std.debug.assert(y_start <= y_end);
+    std.debug.assert(y_end <= texture_width);
+    self.curve_dirty_min_y = @min(self.curve_dirty_min_y, y_start);
+    self.curve_dirty_max_y_excl = @max(self.curve_dirty_max_y_excl, y_end);
+}
+
+fn markBandDirty(self: *GlyphBuilder, y_start: u32, y_end: u32) void {
+    std.debug.assert(y_start <= y_end);
+    std.debug.assert(y_end <= texture_width);
+    self.band_dirty_min_y = @min(self.band_dirty_min_y, y_start);
+    self.band_dirty_max_y_excl = @max(self.band_dirty_max_y_excl, y_end);
+}
+
+fn bandTexelCount(partition_result: *const band.PartitionResult) u64 {
+    var count: u64 =
+        partition_result.horizontal_bands.len + partition_result.vertical_bands.len;
+    for (partition_result.horizontal_bands) |entries| count += entries.len;
+    for (partition_result.vertical_bands) |entries| count += entries.len;
+    return count;
+}
+
+fn ensureAtlasCapacity(self: *GlyphBuilder, curve_count: usize, band_texel_count: u64) !void {
+    const curve_texel_count = @as(u64, @intCast(curve_count)) * 2;
+    const curve_end = @as(u64, @intCast(self.curve_data.items.len)) + curve_texel_count;
+    const band_end = @as(u64, @intCast(self.band_data.items.len)) + band_texel_count;
+    if (curve_end > texture_texel_count_max) return error.GlyphBuilderFull;
+    if (band_end > texture_texel_count_max) return error.GlyphBuilderFull;
+}
+
+fn appendCurveTexels(self: *GlyphBuilder, curves: []const Curve, curve_locations: []u32) DirtyRange {
+    std.debug.assert(curves.len == curve_locations.len);
+    std.debug.assert(self.curve_data.capacity - self.curve_data.items.len >= curves.len * 2);
+
+    const y_start: u32 = @intCast(self.curve_data.items.len >> texture_width_log2);
+    for (curves, curve_locations) |curve, *location| {
+        location.* = @intCast(self.curve_data.items.len);
+        self.curve_data.appendAssumeCapacity(.{
+            .x = curve.p1[0],
+            .y = curve.p1[1],
+            .z = curve.p2[0],
+            .w = curve.p2[1],
+        });
+        self.curve_data.appendAssumeCapacity(.{
+            .x = curve.p3[0],
+            .y = curve.p3[1],
+            .z = 0,
+            .w = 0,
+        });
+    }
+    return .{ .y_start = y_start, .y_end = self.curveTextureHeight() };
+}
+
+fn appendBandLists(
+    self: *GlyphBuilder,
+    bands: []const []u32,
+    header_start: usize,
+    header_offset: usize,
+    glyph_location: u32,
+    curve_locations: []const u32,
+) void {
+    for (bands, 0..) |entries, band_index| {
+        const list_location: u32 = @intCast(self.band_data.items.len);
+        self.band_data.items[header_start + header_offset + band_index] = .{
+            .x = @intCast(entries.len),
+            .y = list_location - glyph_location,
+        };
+        for (entries) |curve_index| {
+            const curve_location = curve_locations[curve_index];
+            self.band_data.appendAssumeCapacity(.{
+                .x = curve_location & (texture_width - 1),
+                .y = curve_location >> texture_width_log2,
+            });
+        }
+    }
+}
+
+fn appendBandTexels(self: *GlyphBuilder, partition_result: *const band.PartitionResult, curve_locations: []const u32) BandAppendResult {
+    const glyph_location: u32 = @intCast(self.band_data.items.len);
+    const y_start: u32 = glyph_location >> texture_width_log2;
+    const header_count =
+        partition_result.horizontal_bands.len + partition_result.vertical_bands.len;
+    const header_start = self.band_data.items.len;
+    for (0..header_count) |_| self.band_data.appendAssumeCapacity(.{ .x = 0, .y = 0 });
+
+    self.appendBandLists(
+        partition_result.horizontal_bands,
+        header_start,
+        0,
+        glyph_location,
+        curve_locations,
+    );
+    self.appendBandLists(
+        partition_result.vertical_bands,
+        header_start,
+        partition_result.horizontal_bands.len,
+        glyph_location,
+        curve_locations,
+    );
+
+    return .{
+        .glyph_location = glyph_location,
+        .dirty_range = .{ .y_start = y_start, .y_end = self.bandTextureHeight() },
+    };
 }
 
 pub fn addCurves(self: *GlyphBuilder, curves: []const Curve) !glyph.GlyphRecord {
     if (curves.len == 0) return .empty;
+    try self.ensureAtlasCapacity(curves.len, 0);
 
-    var part = try band.partition(self.allocator, curves);
-    defer part.deinit(self.allocator);
+    var partition_result = try band.partition(self.allocator, curves);
+    defer partition_result.deinit(self.allocator);
 
-    const projected_band_y: u32 = @as(u32, @intCast(self.band_data.items.len)) >> LOG_TEXTURE_WIDTH;
-    if (projected_band_y >= TEXTURE_WIDTH) return error.GlyphBuilderFull;
-    const projected_curve_end: u32 = @as(u32, @intCast(self.curve_data.items.len)) + @as(u32, @intCast(curves.len)) * 2;
-    if ((projected_curve_end - 1) >> LOG_TEXTURE_WIDTH >= TEXTURE_WIDTH) return error.GlyphBuilderFull;
-
-    const band_count_x: u32 = @as(u32, part.band_max[0]) + 1;
-    const band_count_y: u32 = @as(u32, part.band_max[1]) + 1;
-
-    const curve_start_idx: u32 = @intCast(self.curve_data.items.len);
-    const curve_y0: u32 = curve_start_idx >> LOG_TEXTURE_WIDTH;
-
+    const band_texel_count = bandTexelCount(&partition_result);
+    try self.ensureAtlasCapacity(curves.len, band_texel_count);
     try self.curve_data.ensureUnusedCapacity(self.allocator, curves.len * 2);
+    try self.band_data.ensureUnusedCapacity(
+        self.allocator,
+        @intCast(band_texel_count),
+    );
 
-    var curve_locs = try self.allocator.alloc(u32, curves.len);
-    defer self.allocator.free(curve_locs);
+    const curve_locations = try self.allocator.alloc(u32, curves.len);
+    defer self.allocator.free(curve_locations);
 
-    for (curves, 0..) |c, i| {
-        const idx: u32 = @intCast(self.curve_data.items.len);
-        curve_locs[i] = idx;
-        self.curve_data.appendAssumeCapacity(.{ .x = c.p1[0], .y = c.p1[1], .z = c.p2[0], .w = c.p2[1] });
-        self.curve_data.appendAssumeCapacity(.{ .x = c.p3[0], .y = c.p3[1], .z = 0, .w = 0 });
-    }
-
-    const curve_y1 = self.curveTextureHeight();
-    self.markCurveDirty(curve_y0, curve_y1);
-
-    const band_start_idx: u32 = @intCast(self.band_data.items.len);
-    const band_y0: u32 = band_start_idx >> LOG_TEXTURE_WIDTH;
-    const glyph_loc_idx: u32 = band_start_idx;
-
-    const header_count = band_count_x + band_count_y;
-    var total_list_entries: u32 = 0;
-    for (part.h_bands) |b| total_list_entries += @intCast(b.len);
-    for (part.v_bands) |b| total_list_entries += @intCast(b.len);
-
-    try self.band_data.ensureUnusedCapacity(self.allocator, header_count + total_list_entries);
-
-    const headers_start: u32 = @intCast(self.band_data.items.len);
-    for (0..header_count) |_| self.band_data.appendAssumeCapacity(.{ .x = 0, .y = 0 });
-
-    var hi: u32 = 0;
-    for (part.h_bands) |b| {
-        const list_idx: u32 = @intCast(self.band_data.items.len);
-        const offset_rel = list_idx - glyph_loc_idx;
-        self.band_data.items[headers_start + hi] = .{
-            .x = @intCast(b.len),
-            .y = offset_rel,
-        };
-        for (b) |ci| {
-            const cl = curve_locs[ci];
-            self.band_data.appendAssumeCapacity(.{
-                .x = cl & (TEXTURE_WIDTH - 1),
-                .y = cl >> LOG_TEXTURE_WIDTH,
-            });
-        }
-        hi += 1;
-    }
-
-    var vi: u32 = 0;
-    for (part.v_bands) |b| {
-        const list_idx: u32 = @intCast(self.band_data.items.len);
-        const offset_rel = list_idx - glyph_loc_idx;
-        self.band_data.items[headers_start + band_count_y + vi] = .{
-            .x = @intCast(b.len),
-            .y = offset_rel,
-        };
-        for (b) |ci| {
-            const cl = curve_locs[ci];
-            self.band_data.appendAssumeCapacity(.{
-                .x = cl & (TEXTURE_WIDTH - 1),
-                .y = cl >> LOG_TEXTURE_WIDTH,
-            });
-        }
-        vi += 1;
-    }
-
-    const band_y1 = self.bandTextureHeight();
-    self.markBandDirty(band_y0, band_y1);
+    const curve_dirty_range = self.appendCurveTexels(curves, curve_locations);
+    const band_result = self.appendBandTexels(&partition_result, curve_locations);
+    self.markCurveDirty(curve_dirty_range.y_start, curve_dirty_range.y_end);
+    self.markBandDirty(band_result.dirty_range.y_start, band_result.dirty_range.y_end);
 
     return .{
-        .glyph_loc_x = @intCast(glyph_loc_idx & (TEXTURE_WIDTH - 1)),
-        .glyph_loc_y = @intCast(glyph_loc_idx >> LOG_TEXTURE_WIDTH),
-        .band_max_x = part.band_max[0],
-        .band_max_y = part.band_max[1],
-        .em_min = part.bbox_min,
-        .em_max = part.bbox_max,
-        .band_scale = part.band_scale,
-        .band_offset = part.band_offset,
+        .glyph_location_x = @intCast(
+            band_result.glyph_location & (texture_width - 1),
+        ),
+        .glyph_location_y = @intCast(
+            band_result.glyph_location >> texture_width_log2,
+        ),
+        .band_x_max = partition_result.band_index_max[0],
+        .band_y_max = partition_result.band_index_max[1],
+        .bounds_em_min = partition_result.bounding_box_min,
+        .bounds_em_max = partition_result.bounding_box_max,
+        .band_scale = partition_result.band_scale,
+        .band_offset = partition_result.band_offset,
         .advance_em = 0,
         .is_empty = false,
     };
@@ -225,17 +292,14 @@ test "produces curves and bands" {
         .{ .p1 = .{ 0, 1 }, .p2 = .{ 0, 0.5 }, .p3 = .{ 0, 0 } },
     };
 
-    var gb = try GlyphBuilder.init(allocator);
-    defer gb.deinit();
+    var glyph_builder = try GlyphBuilder.init(allocator);
+    defer glyph_builder.deinit();
 
-    const rec = try gb.addCurves(&curves);
+    const record = try glyph_builder.addCurves(&curves);
 
-    try std.testing.expect(!rec.is_empty);
-    // 4 line as quadratics x 2 texels == 8 curve texels.
-    try std.testing.expectEqual(8, gb.curve_data.items.len);
-    // Bands should follow sentinel.
-    try std.testing.expect(gb.band_data.items.len > 1);
-    // Sentinel band texel occupies index 0, first glyph starts at index 1.
-    try std.testing.expectEqual(1, rec.glyph_loc_x);
-    try std.testing.expectEqual(0, rec.glyph_loc_y);
+    try std.testing.expect(!record.is_empty);
+    try std.testing.expectEqual(8, glyph_builder.curve_data.items.len);
+    try std.testing.expect(glyph_builder.band_data.items.len > 1);
+    try std.testing.expectEqual(1, record.glyph_location_x);
+    try std.testing.expectEqual(0, record.glyph_location_y);
 }

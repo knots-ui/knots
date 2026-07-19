@@ -1,22 +1,22 @@
 pub const GlyphRecord = struct {
-    glyph_loc_x: u16,
-    glyph_loc_y: u16,
-    band_max_x: u8,
-    band_max_y: u8,
-    em_min: [2]f32,
-    em_max: [2]f32,
+    glyph_location_x: u16,
+    glyph_location_y: u16,
+    band_x_max: u8,
+    band_y_max: u8,
+    bounds_em_min: [2]f32,
+    bounds_em_max: [2]f32,
     band_scale: [2]f32,
     band_offset: [2]f32,
     advance_em: f32,
     is_empty: bool,
 
     pub const empty = GlyphRecord{
-        .glyph_loc_x = 0,
-        .glyph_loc_y = 0,
-        .band_max_x = 0,
-        .band_max_y = 0,
-        .em_min = .{ 0, 0 },
-        .em_max = .{ 0, 0 },
+        .glyph_location_x = 0,
+        .glyph_location_y = 0,
+        .band_x_max = 0,
+        .band_y_max = 0,
+        .bounds_em_min = .{ 0, 0 },
+        .bounds_em_max = .{ 0, 0 },
         .band_scale = .{ 0, 0 },
         .band_offset = .{ 0, 0 },
         .advance_em = 0,
@@ -26,9 +26,9 @@ pub const GlyphRecord = struct {
 
 pub const Shaped = struct {
     record: GlyphRecord,
-    x: f32, // pen position in screen px
-    advance: f32, // glyph advance in screen px (for cursor / hit-testing)
-    cluster: u32, // byte offset into source UTF-8 text
+    x: f32, // Pen position in screen pixels.
+    advance: f32, // Glyph advance in screen pixels for cursor placement and hit-testing.
+    cluster: u32, // Byte offset into the source UTF-8 text.
 };
 
 pub const ShapedView = struct {
