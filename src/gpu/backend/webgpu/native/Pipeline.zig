@@ -13,6 +13,9 @@ bind_group_layouts: []wgpu.BindGroupLayout,
 device: wgpu.Device,
 
 pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipeline.Desc) !Pipeline {
+    if (desc.depth_stencil) |state| {
+        if (state.format != .depth24_plus) return error.UnsupportedDepthFormat;
+    }
     const wgsl = switch (desc.shader) {
         .wgsl => |s| s,
         .spirv => return error.UnsupportedShaderSource,
@@ -70,6 +73,11 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
 
     const target_format = if (desc.color_target.format) |f| toWgpuFormat(f) else device.surface_format;
     const blend = if (desc.color_target.blend) |b| toWgpuBlend(b) else null;
+    const depth_stencil: ?wgpu.RenderPipeline.DepthStencilState = if (desc.depth_stencil) |state| .{
+        .format = toWgpuFormat(state.format),
+        .depth_write_enabled = state.depth_write_enabled,
+        .depth_compare = toWgpuCompareFunction(state.depth_compare),
+    } else null;
 
     const pipeline = try device.device.createRenderPipeline(.{
         .label = desc.label,
@@ -84,6 +92,18 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
             .entry_point = desc.fs_entry,
             .targets = &.{.{ .format = target_format, .blend = blend }},
         },
+        .primitive = .{
+            .topology = .triangle_list,
+            .front_face = switch (desc.primitive.front_face) {
+                .ccw => .ccw,
+                .cw => .cw,
+            },
+            .cull_mode = switch (desc.primitive.cull_mode) {
+                .none => .none,
+                .back => .back,
+            },
+        },
+        .depth_stencil = depth_stencil,
     });
 
     return .{
@@ -144,6 +164,17 @@ fn toWgpuFormat(f: TextureFormat) wgpu.Texture.Format {
         .r8 => .r8_unorm,
         .rgba32f => .rgba32_float,
         .rgba32u => .rgba32_uint,
+        .depth24_plus => .depth24_plus,
+    };
+}
+
+fn toWgpuCompareFunction(
+    value: CommonPipeline.CompareFunction,
+) wgpu.RenderPipeline.CompareFunction {
+    return switch (value) {
+        .always => .always,
+        .less => .less,
+        .less_equal => .less_equal,
     };
 }
 

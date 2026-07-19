@@ -14,6 +14,7 @@ vkd: vk.DeviceWrapper,
 device: vk.Device,
 
 pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipeline.Desc) !Pipeline {
+    if (desc.depth_stencil != null) return error.UnsupportedDepthStencil;
     const vkd = device.vkd;
     const vk_device = device.device;
 
@@ -155,8 +156,14 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
             .depth_clamp_enable = .false,
             .rasterizer_discard_enable = .false,
             .polygon_mode = .fill,
-            .cull_mode = .{},
-            .front_face = .clockwise,
+            .cull_mode = switch (desc.primitive.cull_mode) {
+                .none => .{},
+                .back => .{ .back = true },
+            },
+            .front_face = switch (desc.primitive.front_face) {
+                .ccw => .counter_clockwise,
+                .cw => .clockwise,
+            },
             .depth_bias_enable = .false,
             .depth_bias_constant_factor = 0,
             .depth_bias_clamp = 0,

@@ -26,5 +26,6 @@ pub fn bytesPerPixel(format: Texture.Format) usize {
         .r8 => 1,
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .rgba32f, .rgba32u => 16,
+        .depth24_plus => 4,
     };
 }

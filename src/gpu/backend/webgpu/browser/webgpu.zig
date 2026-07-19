@@ -52,6 +52,7 @@ pub fn formatName(format: gpu.Texture.Format) []const u8 {
         .r8 => "r8unorm",
         .rgba32f => "rgba32float",
         .rgba32u => "rgba32uint",
+        .depth24_plus => "depth24plus",
     };
 }
 
@@ -140,6 +141,28 @@ pub fn blendFactorName(factor: gpu.Pipeline.BlendFactor) []const u8 {
 pub fn blendOpName(op: gpu.Pipeline.BlendOp) []const u8 {
     return switch (op) {
         .add => "add",
+    };
+}
+
+pub fn compareFunctionName(value: gpu.Pipeline.CompareFunction) []const u8 {
+    return switch (value) {
+        .always => "always",
+        .less => "less",
+        .less_equal => "less-equal",
+    };
+}
+
+pub fn cullModeName(value: gpu.Pipeline.CullMode) []const u8 {
+    return switch (value) {
+        .none => "none",
+        .back => "back",
+    };
+}
+
+pub fn frontFaceName(value: gpu.Pipeline.FrontFace) []const u8 {
+    return switch (value) {
+        .ccw => "ccw",
+        .cw => "cw",
     };
 }
 

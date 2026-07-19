@@ -6,12 +6,14 @@ pub const Format = enum {
     r8,
     rgba32f,
     rgba32u,
+    depth24_plus,
 
     pub fn bytesPerPixel(format: Format) usize {
         return switch (format) {
             .r8 => 1,
             .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
             .rgba32f, .rgba32u => 16,
+            .depth24_plus => 4,
         };
     }
 };

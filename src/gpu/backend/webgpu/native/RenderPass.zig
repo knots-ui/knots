@@ -18,13 +18,37 @@ pub const ColorAttachment = struct {
     target: ?*Texture = null,
 };
 
+pub const DepthAttachment = struct {
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_value: f32 = 1.0,
+    target: *Texture,
+};
+
 pub const Desc = struct {
     label: []const u8 = "",
     color_attachment: ColorAttachment = .{},
+    depth_attachment: ?DepthAttachment = null,
 };
 
 pub fn create(encoder: wgpu.CommandEncoder, view: wgpu.TextureView, desc: Desc) !RenderPass {
     const ca = desc.color_attachment;
+    if (desc.depth_attachment) |depth| {
+        if (depth.target.format != .depth24_plus) return error.InvalidDepthAttachment;
+    }
+    const depth_stencil_attachment: ?wgpu.RenderPassEncoder.DepthStencilAttachment =
+        if (desc.depth_attachment) |depth| .{
+            .view = depth.target.view,
+            .depth_load_op = switch (depth.load_op) {
+                .clear => .clear,
+                .load => .load,
+            },
+            .depth_store_op = switch (depth.store_op) {
+                .store => .store,
+                .discard => .discard,
+            },
+            .depth_clear_value = depth.clear_value,
+        } else null;
 
     const pass = try encoder.beginRenderPass(.{
         .label = if (desc.label.len > 0) desc.label else "render_pass",
@@ -47,6 +71,7 @@ pub fn create(encoder: wgpu.CommandEncoder, view: wgpu.TextureView, desc: Desc) 
                 },
             },
         },
+        .depth_stencil_attachment = depth_stencil_attachment,
     });
 
     return .{

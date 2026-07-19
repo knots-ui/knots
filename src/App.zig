@@ -16,6 +16,7 @@ pub const Callback = *const fn (*App) anyerror!void;
 
 pub const Config = struct {
     window: WindowConfig,
+    depth_buffer: bool = false,
     renderer: render.Renderer.Config = .{},
     ui: UI.Config = .{},
     arena_reset_mode: std.heap.ArenaAllocator.ResetMode = .retain_capacity,
@@ -51,7 +52,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
     var main_window_owned = true;
     errdefer if (main_window_owned) main_window.deinit();
 
-    const render_context = try render.Context.create(allocator, &main_window);
+    const render_context = try render.Context.create(allocator, &main_window, cfg.depth_buffer);
     errdefer render_context.destroy();
 
     var completion_queue: CompletionQueue = try .init(allocator, cfg.max_completions_recv);

@@ -32,6 +32,7 @@ native_handle: NativeHandle,
 
 pub fn create(device: *Device, desc: Desc) !Texture {
     std.debug.assert(desc.width != 0 and desc.height != 0);
+    if (desc.format == .depth24_plus) return error.UnsupportedTextureFormat;
     const vk_format = toVkFormat(desc.format);
 
     const image = try device.vkd.createImage(device.device, &.{
@@ -147,6 +148,7 @@ fn bytesPerPixel(format: Format) u32 {
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .r8 => 1,
         .rgba32f, .rgba32u => 16,
+        .depth24_plus => 4,
     };
 }
 
@@ -159,6 +161,7 @@ pub fn toVkFormat(format: Format) vk.Format {
         .r8 => .r8_unorm,
         .rgba32f => .r32g32b32a32_sfloat,
         .rgba32u => .r32g32b32a32_uint,
+        .depth24_plus => .d32_sfloat,
     };
 }
 

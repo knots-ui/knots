@@ -13,6 +13,9 @@ render_pipeline: js.Value,
 bind_group_layouts: []js.Value,
 
 pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipeline.Desc) !Pipeline {
+    if (desc.depth_stencil) |state| {
+        if (state.format != .depth24_plus) return error.UnsupportedDepthFormat;
+    }
     const wgsl = switch (desc.shader) {
         .wgsl => |s| s,
         .spirv => return error.UnsupportedShaderSource,
@@ -56,6 +59,14 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
     try pipeline_desc.set("layout", js.Arg.value(pipeline_layout));
     try pipeline_desc.set("vertex", js.Arg.value(vertex));
     try pipeline_desc.set("fragment", js.Arg.value(fragment));
+    const primitive = try primitiveState(desc.primitive);
+    defer primitive.release();
+    try pipeline_desc.set("primitive", js.Arg.value(primitive));
+    if (desc.depth_stencil) |depth| {
+        const depth_stencil = try depthStencilState(depth);
+        defer depth_stencil.release();
+        try pipeline_desc.set("depthStencil", js.Arg.value(depth_stencil));
+    }
 
     const render_pipeline = try device.device.call("createRenderPipeline", &.{js.Arg.value(pipeline_desc.value)});
     return .{
@@ -63,6 +74,31 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .render_pipeline = render_pipeline,
         .bind_group_layouts = bgls,
     };
+}
+
+fn primitiveState(state: CommonPipeline.PrimitiveState) !js.Value {
+    var out = try js.ObjectBuilder.init();
+    try out.set("topology", js.Arg.string("triangle-list"));
+    try out.set(
+        "frontFace",
+        js.Arg.string(webgpu.frontFaceName(state.front_face)),
+    );
+    try out.set(
+        "cullMode",
+        js.Arg.string(webgpu.cullModeName(state.cull_mode)),
+    );
+    return out.finish();
+}
+
+fn depthStencilState(state: CommonPipeline.DepthStencilState) !js.Value {
+    var out = try js.ObjectBuilder.init();
+    try out.set("format", js.Arg.string(webgpu.formatName(state.format)));
+    try out.set("depthWriteEnabled", js.Arg.boolean(state.depth_write_enabled));
+    try out.set(
+        "depthCompare",
+        js.Arg.string(webgpu.compareFunctionName(state.depth_compare)),
+    );
+    return out.finish();
 }
 
 pub fn deinit(self: *Pipeline) void {

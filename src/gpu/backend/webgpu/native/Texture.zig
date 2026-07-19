@@ -66,6 +66,7 @@ pub fn deinit(self: *Texture) void {
 }
 
 pub fn write(self: *Texture, data: [*]const u8, len: usize, x: u32, y: u32, width: u32, height: u32, bytes_per_row: ?u32) !void {
+    if (self.format == .depth24_plus) return error.UnsupportedTextureWrite;
     const bpr = bytes_per_row orelse width * bytesPerPixel(self.format);
     self.queue.writeTexture(
         u8,
@@ -86,6 +87,7 @@ fn bytesPerPixel(format: Format) u32 {
         .rgba8, .rgba8_srgb, .bgra8, .bgra8_srgb => 4,
         .r8 => 1,
         .rgba32f, .rgba32u => 16,
+        .depth24_plus => 4,
     };
 }
 
@@ -98,6 +100,7 @@ fn toWgpuFormat(format: Format) wgpu.Texture.Format {
         .r8 => .r8_unorm,
         .rgba32f => .rgba32_float,
         .rgba32u => .rgba32_uint,
+        .depth24_plus => .depth24_plus,
     };
 }
 

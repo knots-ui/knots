@@ -19,12 +19,23 @@ pub const ColorAttachment = struct {
     target: ?*Texture = null,
 };
 
+pub const DepthAttachment = struct {
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_value: f32 = 1.0,
+    target: *Texture,
+};
+
 pub const Desc = struct {
     label: []const u8 = "",
     color_attachment: ColorAttachment = .{},
+    depth_attachment: ?DepthAttachment = null,
 };
 
 pub fn create(encoder: js.Value, view: js.Value, desc: Desc) !RenderPass {
+    if (desc.depth_attachment) |depth| {
+        if (depth.target.format != .depth24_plus) return error.InvalidDepthAttachment;
+    }
     const attachment = try colorAttachment(view, desc.color_attachment);
     defer attachment.release();
 
@@ -36,8 +47,28 @@ pub fn create(encoder: js.Value, view: js.Value, desc: Desc) !RenderPass {
     defer pass_desc.finish().release();
     try pass_desc.set("label", js.Arg.string(if (desc.label.len > 0) desc.label else "render_pass"));
     try pass_desc.set("colorAttachments", js.Arg.value(attachments));
+    if (desc.depth_attachment) |depth| {
+        const depth_attachment = try depthAttachment(depth);
+        defer depth_attachment.release();
+        try pass_desc.set("depthStencilAttachment", js.Arg.value(depth_attachment));
+    }
 
     return .{ .pass = try encoder.call("beginRenderPass", &.{js.Arg.value(pass_desc.value)}) };
+}
+
+fn depthAttachment(desc: DepthAttachment) !js.Value {
+    var out = try js.ObjectBuilder.init();
+    try out.set("view", js.Arg.value(desc.target.view));
+    try out.set("depthLoadOp", js.Arg.string(switch (desc.load_op) {
+        .clear => "clear",
+        .load => "load",
+    }));
+    try out.set("depthStoreOp", js.Arg.string(switch (desc.store_op) {
+        .store => "store",
+        .discard => "discard",
+    }));
+    try out.set("depthClearValue", js.Arg.f64(desc.clear_value));
+    return out.finish();
 }
 
 pub fn end(self: *RenderPass) void {

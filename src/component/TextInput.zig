@@ -22,6 +22,7 @@ height: Element.sizing.Axis = .fit(),
 size: Size.Input = .sm,
 buf: *std.ArrayList(u8),
 placeholder: []const u8 = "",
+bytes_max: u32 = std.math.maxInt(u32),
 color: Color.Input = .text,
 placeholder_color: Color.Input = .dimmed,
 style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
@@ -40,7 +41,7 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
 
     if (is_focused) {
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, app, s, false);
+        try edit.processInputEarly(self.buf, app, s, false, self.bytes_max);
     }
 
     const is_hovered = ui.hovering(id);
@@ -105,7 +106,15 @@ pub fn close(self: *const TextInput, app: *App) !void {
 
         edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
 
-        try edit.processInputLate(self.buf, false, ui, s, shaped, line_h);
+        try edit.processInputLate(
+            self.buf,
+            false,
+            ui,
+            s,
+            shaped,
+            line_h,
+            self.bytes_max,
+        );
         ui.input.consumeKeyboard();
 
         const sel_lo = @min(s.cursor, s.sel_anchor);

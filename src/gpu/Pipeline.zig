@@ -71,6 +71,33 @@ pub const ColorTargetState = struct {
     blend: ?BlendState = null,
 };
 
+pub const CompareFunction = enum {
+    always,
+    less,
+    less_equal,
+};
+
+pub const DepthStencilState = struct {
+    format: Texture.Format,
+    depth_write_enabled: bool,
+    depth_compare: CompareFunction,
+};
+
+pub const CullMode = enum {
+    none,
+    back,
+};
+
+pub const FrontFace = enum {
+    ccw,
+    cw,
+};
+
+pub const PrimitiveState = struct {
+    cull_mode: CullMode = .none,
+    front_face: FrontFace = .ccw,
+};
+
 pub const Desc = struct {
     label: []const u8 = "",
     shader: ShaderSource,
@@ -79,6 +106,8 @@ pub const Desc = struct {
     vertex_buffers: []const VertexBufferLayout,
     bind_group_layouts: []const BindGroupLayoutDesc,
     color_target: ColorTargetState,
+    depth_stencil: ?DepthStencilState = null,
+    primitive: PrimitiveState = .{},
 };
 
 pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".field_names.len]VertexAttribute {

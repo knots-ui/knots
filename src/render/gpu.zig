@@ -17,7 +17,7 @@ pub const Context = struct {
     }
 
     pub fn createPipeline(self: Context, desc: common.Pipeline.Desc) !Pipeline {
-        return .{ .inner = try self.inner.device.createPipeline(desc) };
+        return .{ .inner = try self.inner.createPipeline(desc) };
     }
 
     pub fn createBuffer(self: Context, desc: common.Buffer.Desc) !Buffer {

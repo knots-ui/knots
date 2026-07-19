@@ -28,9 +28,24 @@ pub const ColorAttachment = struct {
 pub const Desc = struct {
     label: []const u8 = "",
     color_attachment: ColorAttachment = .{},
+    depth_attachment: ?DepthAttachment = null,
 };
 
-pub fn create(command_buffer: vk.CommandBuffer, device: *Device, surface: *Surface, image_index: u32, desc: Desc) RenderPass {
+pub const DepthAttachment = struct {
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_value: f32 = 1.0,
+    target: *Texture,
+};
+
+pub fn create(
+    command_buffer: vk.CommandBuffer,
+    device: *Device,
+    surface: *Surface,
+    image_index: u32,
+    desc: Desc,
+) !RenderPass {
+    if (desc.depth_attachment != null) return error.UnsupportedDepthAttachment;
     const ca = desc.color_attachment;
 
     const image = surface.swapchain_images[image_index];

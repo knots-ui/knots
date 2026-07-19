@@ -33,7 +33,11 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     const capabilities = try surface.getCapabilities(adapter.adapter);
     const surface_format = try chooseSurfaceFormat(capabilities);
 
-    const device = try adapter.requestDeviceSync(.{ .label = "knots_device", .queue_label = "knots_queue" });
+    const device = try adapter.requestDeviceSync(.{
+        .label = "knots_device",
+        .queue_label = "knots_queue",
+        .uncaptured_error_callback = uncapturedError,
+    });
     errdefer device.deinit();
 
     const queue = try device.getQueue();
@@ -136,6 +140,10 @@ fn isSrgbFormat(format: wgpu.Texture.Format) bool {
         .bgra8_unorm_srgb, .rgba8_unorm_srgb => true,
         else => false,
     };
+}
+
+fn uncapturedError(reason: c_uint, message: []const u8) void {
+    std.log.err("WebGPU error {d}: {s}", .{ reason, message });
 }
 
 fn wgpuFormatToGpu(f: wgpu.Texture.Format) gpu.Texture.Format {

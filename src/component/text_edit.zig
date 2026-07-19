@@ -11,7 +11,7 @@ const util = @import("util.zig");
 
 const DOUBLE_CLICK_MS: i64 = 400;
 
-pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput, multiline: bool) !void {
+pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
     const ui = &app.viewport.ui;
     var len: u32 = @intCast(buf.items.len);
     s.cursor = @min(s.cursor, len);
@@ -22,6 +22,9 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput
         var encoded: [4]u8 = undefined;
         const n: u32 = @intCast(std.unicode.utf8Encode(ch, &encoded) catch continue);
 
+        const selection = selectionRange(s);
+        const base_len = len - (selection.hi - selection.lo);
+        if (base_len > bytes_max or n > bytes_max - base_len) continue;
         if (s.sel_anchor != s.cursor) deleteSelection(buf, &len, s);
 
         buf.insertSlice(ui.allocator, s.cursor, encoded[0..n]) catch continue;
@@ -81,7 +84,8 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput
                 const sel = selectionRange(s);
                 const selected_len: usize = @intCast(sel.hi - sel.lo);
                 const base_len = buf.items.len - selected_len;
-                if (paste_len > std.math.maxInt(u32) or base_len + paste_len > std.math.maxInt(u32)) continue;
+                const max_len: usize = @intCast(bytes_max);
+                if (base_len > max_len or paste_len > max_len - base_len) continue;
                 try buf.ensureTotalCapacity(ui.allocator, base_len + paste_len);
                 if (selected_len > 0) deleteSelection(buf, &len, s);
                 try buf.insertSlice(ui.allocator, s.cursor, raw[0..paste_len]);
@@ -146,7 +150,15 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput
     }
 }
 
-pub fn processInputLate(buf: *std.ArrayList(u8), wrap: bool, ui: *UI, s: *State.TextInput, shaped: glyph.ShapedWrappedView, line_h: f32) !void {
+pub fn processInputLate(
+    buf: *std.ArrayList(u8),
+    wrap: bool,
+    ui: *UI,
+    s: *State.TextInput,
+    shaped: glyph.ShapedWrappedView,
+    line_h: f32,
+    bytes_max: u32,
+) !void {
     var len: u32 = @intCast(buf.items.len);
     const scale = ui.content_scale;
 
@@ -155,6 +167,9 @@ pub fn processInputLate(buf: *std.ArrayList(u8), wrap: bool, ui: *UI, s: *State.
         const key = event.key;
         switch (key) {
             .enter => if (wrap) {
+                const selection = selectionRange(s);
+                const base_len = len - (selection.hi - selection.lo);
+                if (base_len >= bytes_max) return;
                 if (s.sel_anchor != s.cursor) deleteSelection(buf, &len, s);
                 buf.insertSlice(ui.allocator, s.cursor, "\n") catch return;
                 len += 1;

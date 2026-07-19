@@ -51,6 +51,9 @@ linear_target: ?gpu_impl.Texture = null,
 linear_target_bg: ?gpu_impl.BindGroup = null,
 linear_target_width: u32 = 0,
 linear_target_height: u32 = 0,
+depth_target: ?gpu_impl.Texture = null,
+depth_target_width: u32 = 0,
+depth_target_height: u32 = 0,
 curve_texture: gpu_impl.Texture,
 band_texture: gpu_impl.Texture,
 curve_tex_height: u32,
@@ -178,6 +181,7 @@ pub fn destroy(self: *Renderer) void {
 
     if (self.linear_target_bg) |*bg| bg.deinit();
     if (self.linear_target) |*t| t.deinit();
+    if (self.depth_target) |*t| t.deinit();
     self.curve_texture.deinit();
     self.band_texture.deinit();
     self.frame.deinit();
@@ -390,9 +394,17 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     upload.resetCustom();
 
     self.syncGlyphBuilder(device, context, glyph_builder) catch |err| return .{ .renderer = err };
+    self.syncDepthTarget(device) catch |err| return .{ .renderer = err };
 
     if (dl.isEmpty()) {
-        var pass = frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } }) catch |err| return .{ .renderer = err };
+        var pass = frame_ctx.beginRenderPass(.{
+            .label = "ui",
+            .color_attachment = .{ .clear_color = self.cfg.clear_color },
+            .depth_attachment = if (self.depth_target) |*target|
+                .{ .store_op = .discard, .target = target }
+            else
+                null,
+        }) catch |err| return .{ .renderer = err };
         pass.end();
         self.submitFrame(&frame_ctx) catch |err| return .{ .renderer = err };
         self.sweepPixelTextures() catch |err| return .{ .renderer = err };
@@ -405,9 +417,26 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     if (use_linear_target) self.ensureLinearTarget(device, context) catch |err| return .{ .renderer = err };
 
     var pass = if (use_linear_target)
-        frame_ctx.beginRenderPass(.{ .label = "ui_linear", .color_attachment = .{ .clear_color = self.cfg.clear_color, .target = &self.linear_target.? } }) catch |err| return .{ .renderer = err }
+        frame_ctx.beginRenderPass(.{
+            .label = "ui_linear",
+            .color_attachment = .{
+                .clear_color = self.cfg.clear_color,
+                .target = &self.linear_target.?,
+            },
+            .depth_attachment = if (self.depth_target) |*target|
+                .{ .store_op = .discard, .target = target }
+            else
+                null,
+        }) catch |err| return .{ .renderer = err }
     else
-        frame_ctx.beginRenderPass(.{ .label = "ui", .color_attachment = .{ .clear_color = self.cfg.clear_color } }) catch |err| return .{ .renderer = err };
+        frame_ctx.beginRenderPass(.{
+            .label = "ui",
+            .color_attachment = .{ .clear_color = self.cfg.clear_color },
+            .depth_attachment = if (self.depth_target) |*target|
+                .{ .store_op = .discard, .target = target }
+            else
+                null,
+        }) catch |err| return .{ .renderer = err };
 
     const phys_w = self.surface.cfg.window_width;
     const phys_h = self.surface.cfg.window_height;
@@ -638,6 +667,41 @@ fn ensureLinearTarget(self: *Renderer, device: *gpu_impl.Device, context: *Conte
     });
 }
 
+fn syncDepthTarget(self: *Renderer, device: *gpu_impl.Device) !void {
+    const width = self.surface.cfg.window_width;
+    const height = self.surface.cfg.window_height;
+    if (!self.context.depth_buffer or width == 0 or height == 0) {
+        if (self.depth_target == null) return;
+        try self.frame.waitForCompletion();
+        if (self.depth_target) |*target| target.deinit();
+        self.depth_target = null;
+        self.depth_target_width = 0;
+        self.depth_target_height = 0;
+        return;
+    }
+    if (self.depth_target != null and
+        self.depth_target_width == width and
+        self.depth_target_height == height)
+    {
+        return;
+    }
+
+    try self.frame.waitForCompletion();
+    if (self.depth_target) |*target| target.deinit();
+    self.depth_target = null;
+    self.depth_target_width = 0;
+    self.depth_target_height = 0;
+    self.depth_target = try device.createTexture(.{
+        .width = width,
+        .height = height,
+        .format = .depth24_plus,
+        .usage = .{ .render_attachment = true },
+        .label = "ui_depth_target",
+    });
+    self.depth_target_width = width;
+    self.depth_target_height = height;
+}
+
 fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
     const width = self.surface.cfg.window_width;
     const height = self.surface.cfg.window_height;
@@ -656,7 +720,14 @@ fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_imp
     };
     uploads.composite_instance_buf.load(gpu.Instance, &.{inst});
 
-    var pass = try frame_ctx.beginRenderPass(.{ .label = "ui_composite", .color_attachment = .{ .clear_color = self.cfg.clear_color } });
+    var pass = try frame_ctx.beginRenderPass(.{
+        .label = "ui_composite",
+        .color_attachment = .{ .clear_color = self.cfg.clear_color },
+        .depth_attachment = if (self.depth_target) |*target|
+            .{ .store_op = .discard, .target = target }
+        else
+            null,
+    });
     pass.bindPipeline(&context.instance_pipeline);
     pass.setBindGroup(0, &uploads.instance_uniform_bg);
     pass.setBindGroup(1, &self.linear_target_bg.?);
