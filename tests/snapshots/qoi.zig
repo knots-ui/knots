@@ -95,4 +95,3 @@ fn appendU32(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) 
 fn readU32(bytes: *const [4]u8) u32 {
     return std.mem.readInt(u32, bytes, .big);
 }
-

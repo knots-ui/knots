@@ -25,4 +25,3 @@ pub fn channelId(widget_id: Element.Id, channel: []const u8) Element.Id {
     const final = hasher.final();
     return if (final == Element.INVALID_ID) final -% 1 else final;
 }
-
