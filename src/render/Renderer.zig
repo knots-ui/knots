@@ -164,6 +164,7 @@ pub fn create(allocator: std.mem.Allocator, context: *Context, window: *const Wi
 }
 
 pub fn destroy(self: *Renderer) void {
+    std.debug.assert(self.linearTargetStateValid());
     switch (self.readback) {
         .ready => |*readback| readback.deinit(),
         else => {},
@@ -638,33 +639,56 @@ fn bindKind(
 fn ensureLinearTarget(self: *Renderer, device: *gpu_impl.Device, context: *Context) !void {
     const w = self.surface.cfg.window_width;
     const h = self.surface.cfg.window_height;
-    if (self.linear_target != null and self.linear_target_width == w and self.linear_target_height == h) return;
+    std.debug.assert(self.linearTargetStateValid());
+    if (self.linear_target != null) {
+        if (self.linear_target_width == w) {
+            if (self.linear_target_height == h) return;
+        }
+    }
 
     try self.frame.waitForCompletion();
-    if (self.linear_target_bg) |*bg| bg.deinit();
-    self.linear_target_bg = null;
-    if (self.linear_target) |*t| t.deinit();
-    self.linear_target = null;
-
-    self.linear_target = try device.createTexture(.{
+    var new_target = try device.createTexture(.{
         .width = w,
         .height = h,
         .format = .rgba8,
         .usage = .{ .texture_binding = true, .render_attachment = true },
         .label = "linear_ui_target",
     });
-    self.linear_target_width = w;
-    self.linear_target_height = h;
+    errdefer new_target.deinit();
 
-    self.linear_target_bg = try device.createBindGroup(.{
+    var new_target_bg = try device.createBindGroup(.{
         .label = "linear_ui_target_bg",
         .pipeline = &context.instance_pipeline,
         .layout_index = 1,
         .entries = &.{
-            .{ .binding = 0, .resource = .{ .texture_view = &self.linear_target.? } },
+            .{ .binding = 0, .resource = .{ .texture_view = &new_target } },
             .{ .binding = 1, .resource = .{ .sampler = &context.linear_sampler.? } },
         },
     });
+    errdefer new_target_bg.deinit();
+
+    var old_target = self.linear_target;
+    var old_target_bg = self.linear_target_bg;
+    self.linear_target = new_target;
+    self.linear_target_bg = new_target_bg;
+    self.linear_target_width = w;
+    self.linear_target_height = h;
+    if (old_target_bg) |*bind_group| bind_group.deinit();
+    if (old_target) |*target| target.deinit();
+    std.debug.assert(self.linearTargetStateValid());
+}
+
+fn linearTargetStateValid(self: *const Renderer) bool {
+    if (self.linear_target) |_| {
+        if (self.linear_target_bg == null) return false;
+        if (self.linear_target_width == 0) return false;
+        if (self.linear_target_height == 0) return false;
+        return true;
+    }
+    if (self.linear_target_bg != null) return false;
+    if (self.linear_target_width != 0) return false;
+    if (self.linear_target_height != 0) return false;
+    return true;
 }
 
 fn syncDepthTarget(self: *Renderer, device: *gpu_impl.Device) !void {
@@ -703,6 +727,7 @@ fn syncDepthTarget(self: *Renderer, device: *gpu_impl.Device) !void {
 }
 
 fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
+    std.debug.assert(self.linearTargetStateValid());
     const width = self.surface.cfg.window_width;
     const height = self.surface.cfg.window_height;
     const logical_w: f32 = @as(f32, @floatFromInt(width)) / content_scale;
