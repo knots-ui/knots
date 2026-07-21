@@ -151,10 +151,12 @@ pub fn start(self: *App, frame_cb: Callback) !void {
             self.main_viewport.window.clearFrameHandler();
         }
         try self.takeFrameEventError();
+        try self.consumeCompletions();
         self.sweepClosedViewports();
         while (self.main_viewport.window.isOpen()) {
             self.main_viewport.window.waitEvents(self.io);
             try self.takeFrameEventError();
+            try self.consumeCompletions();
             self.sweepClosedViewports();
         }
     }
@@ -251,7 +253,7 @@ fn renderFrame(self: *App, viewport: *Viewport) !void {
     try viewport.ui.resolveWindow(input, viewport.timer.ms(), viewport.window.getContentScale());
     viewport.ui.reset();
 
-    try self.consumeGlobalCompletions();
+    try self.consumeCompletions();
 
     try @call(.auto, viewport.frame_cb.?, .{self});
     if (!viewport.window.isOpen()) return;
@@ -302,11 +304,25 @@ fn takeFrameEventError(self: *App) !void {
     }
 }
 
-fn consumeGlobalCompletions(self: *App) !void {
+fn consumeCompletions(self: *App) !void {
+    try self.completion_queue.consume(self, self.io, runCompletion);
+}
+
+fn runCompletion(
+    self: *App,
+    viewport_id: Viewport.Id,
+    callback: CompletionQueue.OpaqueCallback,
+    context: *anyopaque,
+) !void {
+    const viewport = self.viewportForId(viewport_id) orelse return;
+    if (!viewport.window.isOpen()) return;
     const previous = self.viewport;
-    self.viewport = self.main_viewport;
+    self.viewport = viewport;
     defer self.viewport = previous;
-    try self.completion_queue.consume(self, self.io);
+
+    try callback(self, context);
+    if (viewport.frame_active) return;
+    if (viewport.window.isOpen()) viewport.window.requestFrame();
 }
 
 fn exitApplication(self: *App) void {
@@ -367,10 +383,30 @@ pub fn gpuContext(self: *App) render.gpu.Context {
     return .{ .inner = self.render_context };
 }
 
-/// Dispatch a function to be executed using the `Io` implementation provided in init.
-/// `onComplete` will be called when the function is complete with the return type of `func`.
-pub fn dispatch(self: *App, func: anytype, args: anytype, onComplete: CompletionQueue.Callback(ReturnType(func))) !void {
-    try self.completion_queue.dispatch(self.io, self.allocator, func, args, onComplete);
+/// Dispatch a function using the `Io` implementation provided in `init`.
+///
+/// `onComplete` runs on the main thread with the viewport that called
+/// `dispatch` active. The callback is discarded if that viewport closes.
+pub fn dispatch(
+    self: *App,
+    func: anytype,
+    args: anytype,
+    onComplete: CompletionQueue.Callback(ReturnType(func)),
+) !void {
+    try self.completion_queue.dispatch(
+        self.io,
+        self.allocator,
+        func,
+        args,
+        onComplete,
+        self.viewport.id,
+        .{ .context = &self.main_viewport.window, .notify = wakeCompletion },
+    );
+}
+
+fn wakeCompletion(context: *anyopaque) void {
+    const main_window: *Window = @ptrCast(@alignCast(context));
+    main_window.postEmptyEvent();
 }
 
 pub fn consumeReconfigure(self: *App) bool {

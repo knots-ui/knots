@@ -53,8 +53,6 @@ fn body(app: *knots.App) !void {
         .color = .dimmed,
         .key = .src(@src()),
     });
-
-    if (self.demo_state.pending_async > 0) app.requestFrame();
 }
 
 fn sleep10(app: *knots.App) !void {
