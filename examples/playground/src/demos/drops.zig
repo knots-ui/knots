@@ -19,7 +19,13 @@ fn body(app: *knots.App) !void {
 
     const new_paths = try app.viewport.window.consumeDrops(self.allocator);
     if (new_paths.len > 0) {
-        try self.demo_state.dropped_paths.appendSlice(self.allocator, new_paths);
+        {
+            errdefer {
+                for (new_paths) |path| self.allocator.free(path);
+                self.allocator.free(new_paths);
+            }
+            try self.demo_state.dropped_paths.appendSlice(self.allocator, new_paths);
+        }
         self.allocator.free(new_paths);
         app.requestFrame();
     }

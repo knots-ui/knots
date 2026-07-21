@@ -1,5 +1,9 @@
 pub const Window = @import("Window.zig");
 
+test {
+    _ = @import("window_drop_paths");
+}
+
 pub const Key = enum(i32) {
     space = 32,
     apostrophe = 39,

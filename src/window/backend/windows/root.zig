@@ -1,6 +1,7 @@
 const std = @import("std");
 const win32 = @import("win32").everything;
 const window = @import("window");
+const drop_paths = @import("window_drop_paths");
 const gpu = @import("gpu");
 
 const events = @import("events.zig");
@@ -270,10 +271,7 @@ pub const Backend = struct {
     }
 
     pub fn consumeDrops(self: *Self, _: *window.Window, allocator: std.mem.Allocator, n: usize) ![][]const u8 {
-        const out = try allocator.alloc([]const u8, n);
-        errdefer allocator.free(out);
-        for (0..n) |i| out[i] = try allocator.dupe(u8, self.drop_slices[i]);
-        return out;
+        return drop_paths.copy(allocator, self.drop_slices[0..n]);
     }
 
     pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {

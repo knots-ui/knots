@@ -120,6 +120,12 @@ pub fn build(b: *std.Build) void {
     gpu_opts.addOption(GPUBackend, "backend", gpu_backend);
     gpu_mod.addOptions("config", gpu_opts);
 
+    const window_drop_paths_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/window/drop_paths.zig"),
+    });
+
     const window_impl_mod = blk: {
         switch (target.result.os.tag) {
             .macos => {
@@ -131,6 +137,7 @@ pub fn build(b: *std.Build) void {
                     .imports = &.{
                         .{ .name = "objc", .module = objc_dep.module("objc") },
                         .{ .name = "gpu", .module = gpu_mod },
+                        .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
                     },
                 });
                 m.linkFramework("Cocoa", .{});
@@ -147,6 +154,7 @@ pub fn build(b: *std.Build) void {
                     .imports = &.{
                         .{ .name = "win32", .module = win32_dep.module("win32") },
                         .{ .name = "gpu", .module = gpu_mod },
+                        .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
                     },
                 });
             },
@@ -174,6 +182,7 @@ pub fn build(b: *std.Build) void {
                     .imports = &.{
                         .{ .name = "wayland", .module = wayland_mod },
                         .{ .name = "gpu", .module = gpu_mod },
+                        .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
                     },
                 });
                 m.link_libc = true;
@@ -207,6 +216,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "gpu", .module = gpu_mod },
             .{ .name = "window_impl", .module = window_impl_mod },
+            .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
         },
     });
     window_impl_mod.addImport("window", window_mod);
