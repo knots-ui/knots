@@ -7,11 +7,17 @@ const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Element = @import("layout").Element;
 const glyph = @import("text").glyph;
+const Face = @import("text").Face;
 const util = @import("util.zig");
 
 const DOUBLE_CLICK_MS: i64 = 400;
 
+pub fn validateByteLimit(bytes_max: u32) !void {
+    if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
+}
+
 pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
+    std.debug.assert(bytes_max <= Face.text_bytes_max);
     const ui = &app.viewport.ui;
     var len: u32 = @intCast(buf.items.len);
     s.cursor = @min(s.cursor, len);
@@ -159,6 +165,7 @@ pub fn processInputLate(
     line_h: f32,
     bytes_max: u32,
 ) !void {
+    std.debug.assert(bytes_max <= Face.text_bytes_max);
     var len: u32 = @intCast(buf.items.len);
     const scale = ui.content_scale;
 
@@ -362,4 +369,29 @@ fn nextCharStart(buf: []const u8, pos: u32) u32 {
         if (buf[i] & 0xC0 != 0x80) return i;
     }
     return @intCast(buf.len);
+}
+
+test "text byte limit accepts one MiB and rejects one byte more" {
+    try validateByteLimit(Face.text_bytes_max);
+    try std.testing.expectError(
+        error.TextLimitTooLarge,
+        validateByteLimit(Face.text_bytes_max + 1),
+    );
+}
+
+test "selection deletion remains available above a smaller caller limit" {
+    const caller_bytes_max: u32 = 3;
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    try buf.appendSlice(std.testing.allocator, "abcde");
+    try std.testing.expect(buf.items.len > caller_bytes_max);
+
+    var len: u32 = @intCast(buf.items.len);
+    var state: State.TextInput = .{ .sel_anchor = 3, .cursor = 5 };
+    deleteSelection(&buf, &len, &state);
+
+    try std.testing.expectEqualStrings("abc", buf.items);
+    try std.testing.expectEqual(caller_bytes_max, len);
+    try std.testing.expectEqual(caller_bytes_max, state.cursor);
+    try std.testing.expectEqual(caller_bytes_max, state.sel_anchor);
 }

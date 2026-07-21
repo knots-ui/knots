@@ -23,7 +23,7 @@ const FaceEntry = struct {
 /// The names and font data must remain valid until `deinit`.
 pub fn init(allocator: std.mem.Allocator, sources: []const FontSource) !Font {
     if (sources.len == 0) return error.EmptyFontSet;
-    if (sources.len > font_count_max) return error.TooManyFonts;
+    try validateFontCount(sources.len);
     for (sources, 0..) |source, source_index| {
         for (sources[0..source_index]) |existing| {
             if (std.mem.eql(u8, source.name, existing.name)) return error.DuplicateFont;
@@ -57,13 +57,16 @@ pub fn init(allocator: std.mem.Allocator, sources: []const FontSource) !Font {
 
 /// The name and font data must remain valid until `deinit`.
 pub fn addFace(self: *Font, name: []const u8, data: []const u8) !void {
+    std.debug.assert(self.faces.items.len <= font_count_max);
     for (self.faces.items) |*entry| {
         if (std.mem.eql(u8, name, entry.name)) return error.DuplicateFont;
     }
+    try validateFontCount(self.faces.items.len + 1);
 
     var face = try Face.init(self.allocator, data, self.glyph_builder);
     errdefer face.deinit();
     try self.faces.append(self.allocator, .{ .name = name, .face = face });
+    std.debug.assert(self.faces.items.len <= font_count_max);
 }
 
 pub fn getFace(self: *Font, name: ?[]const u8) !*Face {
@@ -79,8 +82,21 @@ pub fn endFrame(self: *Font) void {
 }
 
 pub fn deinit(self: *Font) void {
+    std.debug.assert(self.faces.items.len <= font_count_max);
     for (self.faces.items) |*entry| entry.face.deinit();
     self.faces.deinit(self.allocator);
     self.glyph_builder.deinit();
     self.allocator.destroy(self.glyph_builder);
+}
+
+fn validateFontCount(count: usize) !void {
+    if (count > font_count_max) return error.TooManyFonts;
+}
+
+test "font count accepts the boundary and rejects one face more" {
+    try validateFontCount(font_count_max);
+    try std.testing.expectError(
+        error.TooManyFonts,
+        validateFontCount(font_count_max + 1),
+    );
 }

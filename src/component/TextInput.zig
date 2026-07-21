@@ -8,6 +8,7 @@ const Color = @import("ui").Color;
 const Size = @import("ui").Size;
 const Key = @import("ui").Key;
 const Decoration = @import("ui").Decoration;
+const Face = @import("text").Face;
 
 const Element = @import("layout").Element;
 const util = @import("util.zig");
@@ -22,7 +23,7 @@ height: Element.sizing.Axis = .fit(),
 size: Size.Input = .sm,
 buf: *std.ArrayList(u8),
 placeholder: []const u8 = "",
-bytes_max: u32 = std.math.maxInt(u32),
+bytes_max: u32 = Face.text_bytes_max,
 color: Color.Input = .text,
 placeholder_color: Color.Input = .dimmed,
 style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
@@ -34,6 +35,7 @@ key: Key,
 const TextInput = @This();
 
 pub fn open(self: *const TextInput, app: *App) !Element.Id {
+    try edit.validateByteLimit(self.bytes_max);
     const ui = &app.viewport.ui;
     const id = self.key.hash();
     const is_focused = ui.focused(id);

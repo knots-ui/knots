@@ -23,7 +23,7 @@ const Face = @This();
 const cache_evict_age_frames: u32 = 2;
 const cache_entry_count_max: u32 = 4096;
 const cache_evictions_per_frame_max: u32 = 256;
-const text_byte_count_max: u32 = 1024 * 1024;
+pub const text_bytes_max: u32 = 1024 * 1024;
 const quantized_pixel_exclusive_max: f32 = 4294967296.0;
 
 comptime {
@@ -213,7 +213,7 @@ fn quantizePixels(value: f32) !u32 {
 }
 
 fn validateTextLength(text: []const u8) !void {
-    if (text.len > text_byte_count_max) return error.TextTooLong;
+    if (text.len > text_bytes_max) return error.TextTooLong;
 }
 
 /// Shape `text` as a single line at `size_px`. Result is cached for the
