@@ -1,6 +1,6 @@
 .{
     .name = .knots,
-    .version = "0.0.5",
+    .version = "0.1.0",
     .minimum_zig_version = "0.17.0-dev.1267+300116b02",
     .dependencies = .{
         .wgpu = .{
