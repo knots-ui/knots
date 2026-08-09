@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Style = @import("ui").Style;
@@ -40,17 +40,18 @@ key: Key,
 
 const TextArea = @This();
 
-pub fn open(self: *const TextArea, app: *App) !Element.Id {
+pub fn open(self: *const TextArea, frame: *Frame) !Element.Id {
     try edit.validateByteLimit(self.bytes_max);
-    const ui = &app.viewport.ui;
+    const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     if (ui.hovering(id)) ui.requestCursor(.text);
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     if (is_focused) {
+        ui.requestTextInput();
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, app, s, true, self.bytes_max);
+        try edit.processInputEarly(self.buf, frame, s, true, self.bytes_max);
     }
 
     const rs = try ui.state.getOrCreate(.resize, ui.allocator, id);
@@ -96,8 +97,8 @@ pub fn open(self: *const TextArea, app: *App) !Element.Id {
     return element_id;
 }
 
-pub fn close(self: *const TextArea, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const TextArea, frame: *Frame) !void {
+    const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     const items = self.buf.items;

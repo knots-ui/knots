@@ -14,26 +14,36 @@ const Effect = enum { gradient, clock, bars, polygon };
 const canvas_width = 720;
 const canvas_height = 480;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Canvas", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Canvas", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
 
-    try app.e(.{
-        Rect{ .width = .fixed(220), .key = .src(@src()) },
-        .{
-            SelectInput(Effect){
-                .key = .src(@src()),
-                .initial_selected = self.demo_state.canvas_effect,
-                .onSelect = onEffectSelect,
-            },
-        },
+    const controls = Rect{ .width = .fixed(220), .key = .src(@src()) };
+    _ = try controls.open(app);
+    const selection = try app.interact(SelectInput(Effect){
+        .key = .src(@src()),
+        .initial_selected = self.demo_state.canvas_effect,
     });
+    if (selection.selected) |selected| self.demo_state.canvas_effect = selected.index;
+    try controls.close(app);
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
+    var commands: std.ArrayList(Canvas.DrawCmd) = .empty;
+    var painter = Canvas.Painter{
+        .cmds = &commands,
+        .allocator = app.arena(),
+    };
+    const effect: Effect = @enumFromInt(self.demo_state.canvas_effect);
+    switch (effect) {
+        .gradient => try drawGradient(app, &painter),
+        .clock => try drawClock(app, &painter),
+        .bars => try drawBars(&painter),
+        .polygon => try drawPolygon(&painter),
+    }
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -42,38 +52,19 @@ fn body(app: *knots.App) !void {
             .style = .{ .color = .elevated, .corner_radius = .sm },
             .overflow = .scroll,
         },
-        .{
-            Canvas{
-                .width = .fixed(canvas_width),
-                .height = .fixed(canvas_height),
-                .onDraw = onDraw,
-                .key = .src(@src()),
-            },
-        },
+        .{Canvas{
+            .width = .fixed(canvas_width),
+            .height = .fixed(canvas_height),
+            .commands = commands.items,
+            .key = .src(@src()),
+        }},
     });
 }
 
-fn onEffectSelect(app: *knots.App, _: Effect, idx: u32) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    self.demo_state.canvas_effect = idx;
-}
-
-fn onDraw(app: *knots.App, painter: *Canvas.Painter) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    const effect: Effect = @enumFromInt(self.demo_state.canvas_effect);
-
-    switch (effect) {
-        .gradient => try drawGradient(app, painter),
-        .clock => try drawClock(app, painter),
-        .bars => try drawBars(painter),
-        .polygon => try drawPolygon(painter),
-    }
-}
-
-fn drawGradient(app: *knots.App, painter: *Canvas.Painter) !void {
+fn drawGradient(app: *knots.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
-    const t = @as(f32, @floatFromInt(@mod(app.viewport.timer.ms(), 10000))) / 10000.0;
+    const t = @as(f32, @floatFromInt(@mod(app.input().now_ms, 10000))) / 10000.0;
     const n = 12;
 
     var i: usize = 0;
@@ -106,10 +97,10 @@ fn drawGradient(app: *knots.App, painter: *Canvas.Painter) !void {
         }
     }
 
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn drawClock(app: *knots.App, painter: *Canvas.Painter) !void {
+fn drawClock(app: *knots.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
     const cx = w / 2;
@@ -132,7 +123,7 @@ fn drawClock(app: *knots.App, painter: *Canvas.Painter) !void {
         });
     }
 
-    const ms = app.viewport.timer.ms();
+    const ms = app.input().now_ms;
     const seconds_f = @as(f32, @floatFromInt(@mod(ms, 60_000))) / 1000.0;
     const minutes_f = @as(f32, @floatFromInt(@mod(ms, 3_600_000))) / 60_000.0;
     const hours_f = @as(f32, @floatFromInt(@mod(ms, 43_200_000))) / 3_600_000.0;
@@ -162,7 +153,7 @@ fn drawClock(app: *knots.App, painter: *Canvas.Painter) !void {
 
     try painter.fillCircle(.{ .cx = cx, .cy = cy, .radius = 4, .color = .{ 0.83, 0.46, 0.18, 1.0 } });
 
-    app.requestFrame();
+    app.requestRedraw();
 }
 
 fn drawBars(painter: *Canvas.Painter) !void {

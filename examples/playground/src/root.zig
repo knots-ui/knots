@@ -21,6 +21,10 @@ source_cache: [demos.all.len]?code_viewer.Highlighted = @splat(null),
 const Self = @This();
 pub const DemoState = demos.Demo.State;
 
+pub fn of(app: *knots.App) *Self {
+    return @fieldParentPtr("app", app);
+}
+
 pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
     var app = try knots.App.init(io, allocator, .{
         .window = .{
@@ -33,9 +37,12 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
     });
     errdefer app.deinit();
 
-    try app.viewport.ui.font.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
+    try app.mainView().ui().font.addFace(
+        "jetbrains-mono",
+        @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"),
+    );
 
-    var debug_devtools = try knots.debug.DevTools.init(allocator, app.viewport.renderer.cfg.present_mode);
+    var debug_devtools = try knots.debug.DevTools.init(allocator, app.presentMode());
     errdefer debug_devtools.deinit(allocator);
 
     return Self{
@@ -61,70 +68,83 @@ pub fn start(self: *Self) !void {
     try self.app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    const size = app.viewport.window.getSize();
+fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
+    const self = of(app);
+    const size = app.logicalExtent();
 
-    try app.e(.{
-        Rect{
-            .width = .fixed(@floatFromInt(size.width)),
-            .height = .fixed(@floatFromInt(size.height)),
-            .padding = .init(16, 16, 16, 16),
-            .dir = .column,
-            .key = .src(@src()),
-            .style = .{ .color = .bg, .corner_radius = .none },
-        },
-        .{
-            renderHeader,
-            Spacer{ .height = .fixed(12), .key = .src(@src()) },
-            Rect{
-                .width = .grow(),
-                .height = .grow(),
-                .dir = .row,
-                .key = .src(@src()),
-            },
-            .{
-                renderNav,
-                Spacer{ .width = .fixed(12), .key = .src(@src()) },
-                renderActiveDemo,
-            },
-        },
-    });
+    const root = Rect{
+        .width = .fixed(@floatFromInt(size.width)),
+        .height = .fixed(@floatFromInt(size.height)),
+        .padding = .init(16, 16, 16, 16),
+        .dir = .column,
+        .key = .src(@src()),
+        .style = .{ .color = .bg, .corner_radius = .none },
+    };
+    _ = try root.open(frame);
+    try renderHeader(frame);
+    try frame.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    const body = Rect{
+        .width = .grow(),
+        .height = .grow(),
+        .dir = .row,
+        .key = .src(@src()),
+    };
+    _ = try body.open(frame);
+    try self.renderNav(frame);
+    try frame.e(Spacer{ .width = .fixed(12), .key = .src(@src()) });
+    try self.renderActiveDemo(app, frame);
+    try body.close(frame);
+    try root.close(frame);
 
-    try app.e(.{self.debug_devtools});
-}
-
-fn renderActiveDemo(app: *knots.App) !void {
-    try app.e(.{
-        Rect{
-            .width = .grow(),
-            .height = .grow(),
-            .dir = .column,
-            .gap = 10,
-            .key = .src(@src()),
-        },
-        .{
-            renderDemoSummary,
-            Rect{
-                .width = .grow(),
-                .height = .grow(),
-                .dir = .row,
-                .gap = 12,
-                .key = .src(@src()),
-            },
-            .{
-                renderDemoPane,
-                renderSourcePane,
-            },
+    const w: f32 = @floatFromInt(size.width);
+    const h: f32 = @floatFromInt(size.height);
+    try self.debug_devtools.render(frame, .{
+        .frame_delta_ns = frame.input().delta_ns,
+        .window_width = w,
+        .window_height = h,
+        .concurrency_in_flight = app.concurrencyInFlight(),
+        .renderer = .{
+            .present_mode = app.presentMode(),
+            .supported_present_modes = app.supportedPresentModes(),
+            .reconfigure_error = app.rendererReconfigureError(),
         },
     });
+
+    if (self.debug_devtools.takePresentModeRequest()) |present_mode| {
+        var cfg = app.rendererConfig();
+        cfg.present_mode = present_mode;
+        app.reconfigureRenderer(cfg);
+    }
 }
 
-fn renderDemoSummary(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn renderActiveDemo(self: *Self, app: *knots.App, frame: *knots.Frame) !void {
+    const root = Rect{
+        .width = .grow(),
+        .height = .grow(),
+        .dir = .column,
+        .gap = 10,
+        .key = .src(@src()),
+    };
+    _ = try root.open(frame);
+    try self.renderDemoSummary(frame);
+    const body = Rect{
+        .width = .grow(),
+        .height = .grow(),
+        .dir = .row,
+        .gap = 12,
+        .key = .src(@src()),
+    };
+    _ = try body.open(frame);
+    try demos.all[self.active_demo].render(app, frame);
+    try self.renderSourcePane(frame);
+    try body.close(frame);
+    try root.close(frame);
+}
+
+fn renderDemoSummary(self: *Self, frame: *knots.Frame) !void {
     const demo = demos.all[self.active_demo];
 
-    try app.e(.{
+    try frame.e(.{
         Rect{
             .width = .grow(),
             .height = .fixed(64),
@@ -166,27 +186,23 @@ fn renderDemoSummary(app: *knots.App) !void {
     });
 }
 
-fn toggleSource(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    self.demo_state.show_source = !self.demo_state.show_source;
-    app.requestFrame();
-}
-
-fn renderDemoPane(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    try demos.all[self.active_demo].render(app);
-}
-
-fn renderSourcePane(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn renderSourcePane(self: *Self, frame: *knots.Frame) !void {
     const demo = demos.all[self.active_demo];
     if (self.demo_state.show_source and self.source_cache[self.active_demo] == null) {
         self.source_cache[self.active_demo] = try code_viewer.highlight(self.allocator, demo.source);
     }
-    try code_viewer.render(app, demo.source_path, self.source_cache[self.active_demo], self.demo_state.show_source, toggleSource);
+    if (try code_viewer.render(
+        frame,
+        demo.source_path,
+        self.source_cache[self.active_demo],
+        self.demo_state.show_source,
+    )) {
+        self.demo_state.show_source = !self.demo_state.show_source;
+        frame.requestRedraw();
+    }
 }
 
-fn renderHeader(app: *knots.App) !void {
+fn renderHeader(app: *knots.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -208,39 +224,25 @@ fn renderHeader(app: *knots.App) !void {
     });
 }
 
-fn renderNav(app: *knots.App) !void {
+fn renderNav(self: *Self, frame: *knots.Frame) !void {
     @setEvalBranchQuota(50000);
-    try app.e(.{
-        Rect{
-            .width = .fixed(220),
-            .height = .grow(),
-            .padding = .init(8, 8, 8, 8),
-            .dir = .column,
-            .gap = 4,
-            .overflow = .scroll_y,
-            .key = .src(@src()),
-            .style = .{ .corner_radius = .none },
-        },
-        .{navRows},
-    });
-}
-
-fn navRows(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    var inactive_bg = app.viewport.ui.theme.muted.value;
+    const nav = Rect{
+        .width = .fixed(220),
+        .height = .grow(),
+        .padding = .init(8, 8, 8, 8),
+        .dir = .column,
+        .gap = 4,
+        .overflow = .scroll_y,
+        .key = .src(@src()),
+        .style = .{ .corner_radius = .none },
+    };
+    _ = try nav.open(frame);
+    var inactive_bg = frame.ui().theme.muted.value;
     inactive_bg[3] = 0;
 
     inline for (demos.all, 0..) |d, i| {
-        const handler = struct {
-            fn click(a: *knots.App) !void {
-                const s: *Self = @fieldParentPtr("app", a);
-                s.active_demo = i;
-                a.requestFrame();
-            }
-        }.click;
-
         const is_active = self.active_demo == i;
-        try app.e(Button{
+        const response = try frame.interact(Button{
             .key = .str("nav:" ++ d.name),
             .width = .grow(),
             .height = .fixed(28),
@@ -253,8 +255,12 @@ fn navRows(app: *knots.App) !void {
             },
             .hover_style = if (!is_active) .{ .color = .muted } else .{},
             .hover_anim = .{ .opts = .{ .duration_ms = 80 } },
-            .onClick = handler,
             .text = .{ .content = d.name, .size = .sm, .color = if (!is_active) .dimmed else null },
         });
+        if (response.clicked) {
+            self.active_demo = i;
+            frame.requestRedraw();
+        }
     }
+    try nav.close(frame);
 }

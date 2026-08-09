@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const Grid = @import("layout").Grid;
 const math = @import("math");
@@ -51,29 +51,29 @@ pub fn MenuButton(comptime Menu: type) type {
         const POPUP_INDEX: usize = 1;
         const TEXT_INDEX: usize = 2;
 
-        pub fn open(self: *const Self, app: *App) !Element.Id {
-            const ui = &app.viewport.ui;
+        pub fn open(self: *const Self, frame: *Frame) !Element.Id {
+            const ui = frame.ui();
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.menu_button, ui.allocator, id);
 
             if (s.open and ui.input.mouseButton(.left).pressed and !isPointerInside(s, ui.input.mouse_pos)) {
                 s.open = false;
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             if (ui.leftPressed(id, .exact)) {
                 s.open = !s.open;
-                app.requestFrame();
+                frame.requestRedraw();
             } else if (ui.focused(id) and openKeyPressed(ui.input)) {
                 s.open = true;
                 ui.input.consumeKeyboard();
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             if (s.open and ui.input.containsKey(.escape)) {
                 s.open = false;
                 ui.input.consumeKeyboard();
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             const is_hovered = ui.hovering(id);
@@ -120,7 +120,7 @@ pub fn MenuButton(comptime Menu: type) type {
                 const text_color: Color.Input =
                     self.style.color.onColor() orelse
                     text.color orelse .text;
-                try app.e(Text{
+                try frame.e(Text{
                     .content = text.content,
                     .font = text.font,
                     .key = self.key.indexed(TEXT_INDEX),
@@ -133,27 +133,27 @@ pub fn MenuButton(comptime Menu: type) type {
             return rect;
         }
 
-        pub fn close(self: *const Self, app: *App) !void {
-            const ui = &app.viewport.ui;
+        pub fn close(self: *const Self, frame: *Frame) !void {
+            const ui = frame.ui();
             const id = self.key.hash();
             ui.close();
 
             const s = try ui.state.getOrCreate(.menu_button, ui.allocator, id);
             if (!s.open) return;
 
-            try self.renderPopup(app, s);
+            try self.renderPopup(frame, s);
 
             if (self.close_on_popup_click) {
                 const popup_id = self.key.indexed(POPUP_INDEX).hash();
                 if (ui.leftClicked(popup_id, .within)) {
                     s.open = false;
-                    app.requestFrame();
+                    frame.requestRedraw();
                 }
             }
         }
 
-        fn renderPopup(self: *const Self, app: *App, s: *State.MenuButton) !void {
-            const ui = &app.viewport.ui;
+        fn renderPopup(self: *const Self, frame: *Frame, s: *State.MenuButton) !void {
+            const ui = frame.ui();
             const popup_key = self.key.indexed(POPUP_INDEX);
             const popup_id = popup_key.hash();
 
@@ -162,7 +162,7 @@ pub fn MenuButton(comptime Menu: type) type {
             const measured_box = if (measured) |m| m.box else math.Rect.zero;
             if (!s.popup_box.eql(measured_box)) {
                 s.popup_box = measured_box;
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             const measured_h = if (measured_box.h() > 0) measured_box.h() else self.fallback_menu_height;
@@ -180,7 +180,7 @@ pub fn MenuButton(comptime Menu: type) type {
                 .interactive = true,
             }, .{ .rect = self.popup_style.toRect(&ui.theme) });
 
-            try app.e(self.menu);
+            try frame.e(self.menu);
 
             ui.close();
         }

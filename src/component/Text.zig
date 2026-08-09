@@ -1,4 +1,4 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Color = @import("ui").Color;
@@ -23,8 +23,8 @@ const Text = @This();
 const BODY_INDEX: usize = 1; // text decoration
 const SPANS_BASE: usize = 16; // selection line overlays start here, one per line
 
-pub fn open(self: *const Text, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub fn open(self: *const Text, frame: *Frame) !Element.Id {
+    const ui = frame.ui();
     if (!self.selectable) {
         var decoration = try ui.textDecoration(self.content, self.size.resolve(), self.font, self.wrap);
         decoration.text.color = self.color.resolve(&ui.theme);
@@ -41,8 +41,8 @@ pub fn open(self: *const Text, app: *App) !Element.Id {
     }, .none);
 }
 
-pub fn close(self: *const Text, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const Text, frame: *Frame) !void {
+    const ui = frame.ui();
     if (!self.selectable) {
         ui.close();
         return;

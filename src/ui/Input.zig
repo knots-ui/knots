@@ -1,5 +1,5 @@
-const window = @import("window");
-const mouse_button_count = window.mouse_button_count;
+const input_types = @import("input");
+const mouse_button_count = input_types.mouse_button_count;
 
 mouse_pos: [2]f64 = .{ 0, 0 },
 mouse_moved: bool = false,
@@ -8,12 +8,12 @@ now_ms: i64 = 0,
 focused: bool = true,
 focus_lost: bool = false,
 pointer_cancelled: bool = false,
-mouse: [mouse_button_count]window.MouseButtonState = @splat(.{}),
-scroll: window.ScrollInput = .{},
+mouse: [mouse_button_count]input_types.MouseButtonState = @splat(.{}),
+scroll: input_types.ScrollInput = .{},
 scroll_delta: [2]f32 = .{ 0, 0 },
 chars: []const u21 = &.{},
-key_events: []const window.KeyEvent = &.{},
-key_down: *const [window.key_count]bool = &window.no_keys_down,
+key_events: []const input_types.KeyEvent = &.{},
+key_down: *const [input_types.key_count]bool = &input_types.no_keys_down,
 shift_held: bool = false,
 ctrl_held: bool = false,
 alt_held: bool = false,
@@ -24,7 +24,7 @@ _prev_mouse_pos: [2]f64 = .{ 0, 0 },
 _last_move_ms: i64 = 0,
 const Input = @This();
 
-pub fn collect(self: *Input, raw: window.Input, now_ms: i64) void {
+pub fn collect(self: *Input, raw: input_types.Input, now_ms: i64) void {
     self.focus_lost = self.focused and !raw.focused;
     self.focused = raw.focused;
     self.mouse_pos = raw.pos;
@@ -65,30 +65,30 @@ pub fn consumeKeyboard(self: *Input) void {
     self.key_events = &.{};
 }
 
-pub fn containsKey(self: *const Input, key: window.Key) bool {
+pub fn containsKey(self: *const Input, key: input_types.Key) bool {
     return self.keyPressed(key) or self.keyRepeated(key);
 }
 
-pub fn mouseButton(self: *const Input, button: window.MouseButton) *const window.MouseButtonState {
+pub fn mouseButton(self: *const Input, button: input_types.MouseButton) *const input_types.MouseButtonState {
     return &self.mouse[@intFromEnum(button)];
 }
 
-pub fn keyPressed(self: *const Input, key: window.Key) bool {
+pub fn keyPressed(self: *const Input, key: input_types.Key) bool {
     for (self.key_events) |event| if (event.key == key and event.action == .press) return true;
     return false;
 }
 
-pub fn keyRepeated(self: *const Input, key: window.Key) bool {
+pub fn keyRepeated(self: *const Input, key: input_types.Key) bool {
     for (self.key_events) |event| if (event.key == key and event.action == .repeat) return true;
     return false;
 }
 
-pub fn keyReleased(self: *const Input, key: window.Key) bool {
+pub fn keyReleased(self: *const Input, key: input_types.Key) bool {
     for (self.key_events) |event| if (event.key == key and event.action == .release) return true;
     return false;
 }
 
-pub fn keyDown(self: *const Input, key: window.Key) bool {
+pub fn keyDown(self: *const Input, key: input_types.Key) bool {
     const value = @intFromEnum(key);
-    return value >= 0 and value < window.key_count and self.key_down[@intCast(value)];
+    return value >= 0 and value < input_types.key_count and self.key_down[@intCast(value)];
 }

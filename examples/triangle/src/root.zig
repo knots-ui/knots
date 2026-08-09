@@ -24,7 +24,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
 
     return .{
         .app = app,
-        .devtools = try .init(allocator, app.viewport.renderer.cfg.present_mode),
+        .devtools = try .init(allocator, app.presentMode()),
     };
 }
 
@@ -37,13 +37,21 @@ pub fn start(self: *Self) !void {
     try self.app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App) !void {
+fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
     const ctx: *Self = @fieldParentPtr("app", app);
-    const size = app.viewport.window.getSize();
+    const size = app.logicalExtent();
     const w: f32 = @floatFromInt(size.width);
     const h: f32 = @floatFromInt(size.height);
 
-    try app.e(.{
+    const commands = [_]Canvas.DrawCmd{.{ .fill_triangle = .{
+        .points = .{
+            .{ triangle_width / 2.0, 0.0 },
+            .{ triangle_width, triangle_height },
+            .{ 0.0, triangle_height },
+        },
+        .color = .{ 1.0, 0, 0, 1.0 },
+    } }};
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .width = .fixed(w),
@@ -52,23 +60,16 @@ fn frameCb(app: *knots.App) !void {
             .justify = .center,
         },
         .{Canvas{
-            .onDraw = drawTriangle,
+            .commands = &commands,
             .key = .src(@src()),
             .width = .fixed(triangle_width),
             .height = .fixed(triangle_height),
         }},
     });
 
-    try app.e(.{ctx.devtools});
-}
-
-fn drawTriangle(_: *knots.App, painter: *Canvas.Painter) !void {
-    try painter.fillTriangle(.{
-        .points = .{
-            .{ triangle_width / 2.0, 0.0 },
-            .{ triangle_width, triangle_height },
-            .{ 0.0, triangle_height },
-        },
-        .color = .{ 1.0, 0, 0, 1.0 },
+    try ctx.devtools.render(frame, .{
+        .frame_delta_ns = frame.input().delta_ns,
+        .window_width = w,
+        .window_height = h,
     });
 }

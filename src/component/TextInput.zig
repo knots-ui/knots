@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Style = @import("ui").Style;
@@ -34,16 +34,17 @@ key: Key,
 
 const TextInput = @This();
 
-pub fn open(self: *const TextInput, app: *App) !Element.Id {
+pub fn open(self: *const TextInput, frame: *Frame) !Element.Id {
     try edit.validateByteLimit(self.bytes_max);
-    const ui = &app.viewport.ui;
+    const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     if (is_focused) {
+        ui.requestTextInput();
         const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, app, s, false, self.bytes_max);
+        try edit.processInputEarly(self.buf, frame, s, false, self.bytes_max);
     }
 
     const is_hovered = ui.hovering(id);
@@ -79,8 +80,8 @@ pub fn open(self: *const TextInput, app: *App) !Element.Id {
     return element_id;
 }
 
-pub fn close(self: *const TextInput, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const TextInput, frame: *Frame) !void {
+    const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     const items = self.buf.items;

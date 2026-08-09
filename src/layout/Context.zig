@@ -375,7 +375,7 @@ fn fitHeight(self: *Context, slot: Element.Slot, el: *Element) f32 {
 
 pub const ScrollLookup = struct {
     ctx: *anyopaque,
-    getFn: *const fn (*anyopaque, Element.Id) [2]f32,
+    getFn: *const fn (ctx: *anyopaque, id: Element.Id) [2]f32,
 
     pub fn get(self: ScrollLookup, id: Element.Id) [2]f32 {
         return self.getFn(self.ctx, id);

@@ -6,11 +6,11 @@ const Rect = knots.component.Rect;
 const Text = knots.component.Text;
 const Spacer = knots.component.Spacer;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Overflow", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Overflow", body);
 }
 
-fn body(app: *knots.App) !void {
+fn body(_: *knots.App, app: *knots.Frame) !void {
     try caption(app, "hidden", .src(@src()));
     try app.e(.{
         Rect{
@@ -83,16 +83,16 @@ fn body(app: *knots.App) !void {
     });
 }
 
-fn caption(app: *knots.App, content: []const u8, key: knots.ui.Key) !void {
+fn caption(app: *knots.Frame, content: []const u8, key: knots.ui.Key) !void {
     try app.e(Text{ .content = content, .size = .xs, .color = .dimmed, .key = key.indexed(1) });
     try app.e(Spacer{ .height = .fixed(4), .key = key.indexed(2) });
 }
 
-fn scrollYRows(app: *knots.App) !void {
+fn scrollYRows(app: *knots.Frame) !void {
     try scrollRows(app, knots.ui.Key.src(@src()), null, "row");
 }
 
-fn scrollXBoxes(app: *knots.App) !void {
+fn scrollXBoxes(app: *knots.Frame) !void {
     var i: usize = 0;
     while (i < 12) : (i += 1) {
         try app.e(Rect{
@@ -104,15 +104,15 @@ fn scrollXBoxes(app: *knots.App) !void {
     }
 }
 
-fn scrollOnlyYRows(app: *knots.App) !void {
+fn scrollOnlyYRows(app: *knots.Frame) !void {
     try scrollRows(app, knots.ui.Key.src(@src()), null, "row");
 }
 
-fn scrollBothRows(app: *knots.App) !void {
+fn scrollBothRows(app: *knots.Frame) !void {
     try scrollRows(app, knots.ui.Key.src(@src()), 360, "wide row");
 }
 
-fn scrollRows(app: *knots.App, key: knots.ui.Key, fixed_width: ?f32, label: []const u8) !void {
+fn scrollRows(app: *knots.Frame, key: knots.ui.Key, fixed_width: ?f32, label: []const u8) !void {
     const arena = app.arena();
     var i: usize = 0;
     while (i < 16) : (i += 1) {

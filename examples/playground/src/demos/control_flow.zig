@@ -13,66 +13,66 @@ const VirtualList = knots.control.VirtualList;
 const virtual_items_count: usize = 100_000;
 const virtual_row_height: f32 = 22;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Control flow", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Control flow", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const arena = app.arena();
 
+    const actions = Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) };
+    _ = try actions.open(app);
+    if ((try app.interact(Button{
+        .height = .fixed(28),
+        .width = .fixed(60),
+        .style = .{ .color = .success, .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "+1" },
+    })).clicked) try pushItem(self, app);
+    if ((try app.interact(Button{
+        .height = .fixed(28),
+        .width = .fixed(60),
+        .style = .{ .color = .@"error", .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "-1" },
+    })).clicked) popItem(self, app);
+    if ((try app.interact(Button{
+        .height = .fixed(28),
+        .width = .fixed(96),
+        .style = .{ .color = .primary, .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = if (self.demo_state.show_details) "hide" else "show" },
+    })).clicked) toggle(self, app);
     try app.e(.{
-        Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) },
-        .{
-            Button{
-                .height = .fixed(28),
-                .width = .fixed(60),
-                .style = .{ .color = .success, .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = pushItem,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "+1" },
-            },
-            Button{
-                .height = .fixed(28),
-                .width = .fixed(60),
-                .style = .{ .color = .@"error", .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = popItem,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "-1" },
-            },
-            Button{
-                .height = .fixed(28),
-                .width = .fixed(96),
-                .style = .{ .color = .primary, .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = toggle,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = if (self.demo_state.show_details) "hide" else "show" },
-            },
-            Text{
-                .content = try std.fmt.allocPrint(arena, "{d} items", .{self.demo_state.counter_items.items.len}),
-                .size = .sm,
-                .color = .dimmed,
-                .key = .src(@src()),
-            },
+        Text{
+            .content = try std.fmt.allocPrint(arena, "{d} items", .{self.demo_state.counter_items.items.len}),
+            .size = .sm,
+            .color = .dimmed,
+            .key = .src(@src()),
         },
     });
+    try actions.close(app);
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
-    try app.e(knots.animation.Collapsible{
+    const collapsible = knots.animation.Collapsible{
         .key = .str("control_flow.details"),
         .open = self.demo_state.show_details,
-        .child = dynamicList,
-    });
+    };
+    if (try collapsible.openContent(app)) {
+        try dynamicList(self, app);
+        collapsible.closeContent(app);
+    }
 
     try app.e(Spacer{ .height = .fixed(20), .key = .src(@src()) });
     try app.e(Text{
@@ -107,8 +107,7 @@ fn body(app: *knots.App) !void {
     });
 }
 
-fn dynamicList(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn dynamicList(self: *Self, app: *knots.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -139,7 +138,7 @@ fn virtualItems() []const usize {
     return &State.items;
 }
 
-fn renderVirtualItem(app: *knots.App, item: usize, i: usize) !void {
+fn renderVirtualItem(app: *knots.Frame, item: usize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
@@ -157,7 +156,7 @@ fn renderVirtualItem(app: *knots.App, item: usize, i: usize) !void {
     });
 }
 
-fn renderItem(app: *knots.App, item: isize, i: usize) !void {
+fn renderItem(app: *knots.Frame, item: isize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
@@ -176,21 +175,18 @@ fn renderItem(app: *knots.App, item: isize, i: usize) !void {
     });
 }
 
-fn pushItem(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn pushItem(self: *Self, app: *knots.Frame) !void {
     self.demo_state.counter += 1;
     try self.demo_state.counter_items.append(self.allocator, self.demo_state.counter);
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn popItem(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn popItem(self: *Self, app: *knots.Frame) void {
     if (self.demo_state.counter_items.pop() != null) self.demo_state.counter -= 1;
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn toggle(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn toggle(self: *Self, app: *knots.Frame) void {
     self.demo_state.show_details = !self.demo_state.show_details;
-    app.requestFrame();
+    app.requestRedraw();
 }

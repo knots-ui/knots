@@ -1,4 +1,4 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("ui");
 const Text = @import("Text.zig");
@@ -12,7 +12,6 @@ const Style = ui_mod.Style;
 checked: *bool,
 key: Key,
 label: ?[]const u8 = null,
-onChange: ?*const fn (*App) anyerror!void = null,
 
 width: Element.sizing.Axis = .fit(),
 height: Element.sizing.Axis = .fit(),
@@ -27,8 +26,25 @@ hover_border_color: Color.Input = .primary,
 
 const Checkbox = @This();
 
-pub fn open(self: *const Checkbox, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub const Response = struct {
+    id: Element.Id,
+    changed: bool,
+};
+
+pub fn interact(self: *const Checkbox, frame: *Frame) !Response {
+    const response = try self.openResponse(frame);
+    try self.close(frame);
+    return response;
+}
+
+pub fn open(self: *const Checkbox, frame: *Frame) !Element.Id {
+    return (try self.openResponse(frame)).id;
+}
+
+/// Private: a leaf has nothing to nest, so `interact` is the whole interaction.
+/// Containers like `Button` expose `openResponse` instead.
+fn openResponse(self: *const Checkbox, frame: *Frame) !Response {
+    const ui = frame.ui();
 
     const min_height = @max(self.box_size, try ui.lineHeight(self.label_size.resolve(), null));
     const id = try ui.open(self.key, .{
@@ -48,17 +64,17 @@ pub fn open(self: *const Checkbox, app: *App) !Element.Id {
 
     const key_activate = ui.focused(id) and
         (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
-    if (ui.leftClicked(id, .within) or key_activate) {
+    const changed = ui.leftClicked(id, .within) or key_activate;
+    if (changed) {
         self.checked.* = !self.checked.*;
         if (key_activate) ui.input.consumeKeyboard();
-        if (self.onChange) |cb| try cb(app);
     }
 
-    return id;
+    return .{ .id = id, .changed = changed };
 }
 
-pub fn close(self: *const Checkbox, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const Checkbox, frame: *Frame) !void {
+    const ui = frame.ui();
     const id = self.key.hash();
     const hovered = ui.hovering(id) or ui.isHoveredWithin(id);
     const focused = ui.focused(id);
@@ -75,7 +91,7 @@ pub fn close(self: *const Checkbox, app: *App) !void {
     };
 
     const check_color = if (self.checked.*) self.check_color.resolve(&ui.theme) else .{ 0, 0, 0, 0 };
-    const cmds = try app.arena().alloc(Decoration.DrawCmd, 4);
+    const cmds = try frame.arena().alloc(Decoration.DrawCmd, 4);
     cmds[0] = .{ .fill_rect = .{
         .x = 0,
         .y = 0,
@@ -114,7 +130,7 @@ pub fn close(self: *const Checkbox, app: *App) !void {
     ui.close();
 
     if (self.label) |label| {
-        try app.e(Text{
+        try frame.e(Text{
             .content = label,
             .size = self.label_size,
             .color = self.label_color,

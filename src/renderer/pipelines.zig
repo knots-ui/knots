@@ -1,5 +1,5 @@
 const gpu = @import("gpu");
-const shaders = @import("shaders.zig");
+const shaders = @import("render").shaders;
 
 pub const SlugUniforms = extern struct {
     mvp_row0: [4]f32,
@@ -140,7 +140,7 @@ fn slugDescForTarget(target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
     const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
-        .webgpu => .{ .wgsl = shaders.slug_wgsl },
+        .webgpu => .{ .wgsl = shaders.text_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.slug_vert_spv, .fs = shaders.slug_frag_spv, .fs_entry = fs_entry } },
     };
 

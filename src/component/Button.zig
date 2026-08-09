@@ -12,7 +12,7 @@ const UI = ui_mod.UI;
 const Style = ui_mod.Style;
 const animation = ui_mod.animation;
 const Element = @import("layout").Element;
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 
 const Text = @import("Text.zig");
 
@@ -34,8 +34,6 @@ disabled_style: ?Style.Override = null,
 hover_anim: ?HoverAnim = null,
 disabled: bool = false,
 key: Key,
-onClick: ?*const fn (*App) anyerror!void = null,
-onHover: ?*const fn (*App) anyerror!void = null,
 text: ?ButtonText = null,
 
 pub const ButtonText = struct {
@@ -47,8 +45,24 @@ pub const ButtonText = struct {
 
 const Button = @This();
 
-pub fn open(self: *const Button, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub const Response = struct {
+    id: Element.Id,
+    clicked: bool,
+    hovered: bool,
+};
+
+pub fn interact(self: *const Button, frame: *Frame) !Response {
+    const response = try self.openResponse(frame);
+    try self.close(frame);
+    return response;
+}
+
+pub fn open(self: *const Button, frame: *Frame) !Element.Id {
+    return (try self.openResponse(frame)).id;
+}
+
+pub fn openResponse(self: *const Button, frame: *Frame) !Response {
+    const ui = frame.ui();
     const id = self.key.hash();
     const is_hovered = !self.disabled and ui.hovering(id);
     const effective_style = if (self.disabled)
@@ -95,16 +109,12 @@ pub fn open(self: *const Button, app: *App) !Element.Id {
         .state = .{ .disabled = self.disabled },
     });
 
+    var clicked = false;
     if (!self.disabled) {
         const key_activate = ui.focused(rect) and
             (ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter) or ui.input.containsKey(.space));
-        if (self.onClick) |cb| {
-            if (ui.leftClicked(rect, .within) or key_activate) try cb(app);
-        }
+        clicked = ui.leftClicked(rect, .within) or key_activate;
         if (key_activate) ui.input.consumeKeyboard();
-
-        if (self.onHover) |cb|
-            if (is_hovered) try cb(app);
     }
 
     if (self.text) |text| {
@@ -119,13 +129,13 @@ pub fn open(self: *const Button, app: *App) !Element.Id {
             .size = text.size,
             .color = text_color,
         };
-        _ = try txt.open(app);
-        try txt.close(app);
+        _ = try txt.open(frame);
+        try txt.close(frame);
     }
 
-    return rect;
+    return .{ .id = rect, .clicked = clicked, .hovered = is_hovered };
 }
 
-pub fn close(_: *const Button, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const Button, frame: *Frame) !void {
+    frame.ui().close();
 }

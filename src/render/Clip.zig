@@ -1,3 +1,5 @@
+//! Clip-tree types referenced by packet commands.
+
 const std = @import("std");
 const math = @import("math");
 

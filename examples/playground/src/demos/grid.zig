@@ -8,11 +8,11 @@ const Spacer = knots.component.Spacer;
 const cols = [_]Rect.GridTrack{ .{ .fixed = 100 }, .{ .fr = 1 }, .{ .fr = 1 } };
 const rows = [_]Rect.GridTrack{ .{ .fixed = 28 }, .{ .fr = 1 }, .{ .fr = 1 }, .{ .fixed = 24 } };
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Grid", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Grid", body);
 }
 
-fn body(app: *knots.App) !void {
+fn body(_: *knots.App, app: *knots.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),

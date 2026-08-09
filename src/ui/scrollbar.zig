@@ -1,8 +1,8 @@
+const input_types = @import("input");
 const std = @import("std");
 const math = @import("math");
 const layout = @import("layout");
 const gpu = @import("gpu");
-const window = @import("window");
 const DrawList = @import("render").DrawList;
 const Clip = @import("render").Clip;
 
@@ -290,7 +290,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{track_inst}, null, sg.parent_clip);
+            try draw_list.pushInstances(&[_]gpu.Instance{track_inst}, .atlas, sg.parent_clip);
 
             const dragging = if (ui.state.get(.scroll, el.id)) |s| s.drag_axis == bar.axis else false;
             const hovered = ui.state.hovered == sb_id or dragging;
@@ -308,7 +308,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{thumb_inst}, null, sg.parent_clip);
+            try draw_list.pushInstances(&[_]gpu.Instance{thumb_inst}, .atlas, sg.parent_clip);
 
             try ui.appendHitWithScope(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
         }
@@ -327,7 +327,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{corner_inst}, null, sg.parent_clip);
+            try draw_list.pushInstances(&[_]gpu.Instance{corner_inst}, .atlas, sg.parent_clip);
         }
     }
 }
@@ -381,7 +381,7 @@ fn buildScrollYTree(u: *UI) !void {
     u.close();
 }
 
-fn wheelInput(delta: math.Vec2) window.Input {
+fn wheelInput(delta: math.Vec2) input_types.Input {
     return .{
         .pos = .{ 50, 50 },
         .scroll = .{ .pixel = delta },
@@ -392,7 +392,7 @@ fn wheelInput(delta: math.Vec2) window.Input {
     };
 }
 
-fn scrollInput(scroll: window.ScrollInput) window.Input {
+fn scrollInput(scroll: input_types.ScrollInput) input_types.Input {
     return .{
         .pos = .{ 50, 50 },
         .scroll = scroll,
@@ -512,8 +512,8 @@ test "scrollbar drag moves scroll offset proportionally" {
     try ui.resolveWindow(.{
         .pos = .{ bar.thumb.x() + 1, thumb_top_y + 4 },
         .mouse = blk: {
-            var buttons: [window.mouse_button_count]window.MouseButtonState = @splat(.{});
-            buttons[@intFromEnum(window.MouseButton.left)].down = true;
+            var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
+            buttons[@intFromEnum(input_types.MouseButton.left)].down = true;
             break :blk buttons;
         },
         .scroll = .{},
@@ -534,8 +534,8 @@ test "scrollbar drag moves scroll offset proportionally" {
     try ui.resolveWindow(.{
         .pos = .{ bar.thumb.x() + 1, drag_target_y },
         .mouse = blk: {
-            var buttons: [window.mouse_button_count]window.MouseButtonState = @splat(.{});
-            buttons[@intFromEnum(window.MouseButton.left)].down = true;
+            var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
+            buttons[@intFromEnum(input_types.MouseButton.left)].down = true;
             break :blk buttons;
         },
         .scroll = .{},

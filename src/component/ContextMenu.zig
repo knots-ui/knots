@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const Grid = @import("layout").Grid;
 const math = @import("math");
@@ -47,8 +47,8 @@ pub fn ContextMenu(comptime Menu: type) type {
         const Self = @This();
         const POPUP_INDEX: usize = 1;
 
-        pub fn open(self: *const Self, app: *App) !Element.Id {
-            const ui = &app.viewport.ui;
+        pub fn open(self: *const Self, frame: *Frame) !Element.Id {
+            const ui = frame.ui();
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.context_menu, ui.allocator, id);
 
@@ -65,11 +65,11 @@ pub fn ContextMenu(comptime Menu: type) type {
 
             if (ui.input.mouseButton(.right).pressed and containsInputPoint(s.anchor_box, ui.input.mouse_pos)) {
                 openAtPointer(s, ui.input.mouse_pos);
-                app.requestFrame();
+                frame.requestRedraw();
             } else if (ui.focused(id) and ui.input.containsKey(.menu)) {
                 openAtAnchor(s);
                 ui.input.consumeKeyboard();
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             const decoration: Decoration = if (self.style.hasDecoration())
@@ -98,25 +98,25 @@ pub fn ContextMenu(comptime Menu: type) type {
             return element_id;
         }
 
-        pub fn close(self: *const Self, app: *App) !void {
-            const ui = &app.viewport.ui;
+        pub fn close(self: *const Self, frame: *Frame) !void {
+            const ui = frame.ui();
             const id = self.key.hash();
             ui.close();
 
             const s = try ui.state.getOrCreate(.context_menu, ui.allocator, id);
             if (!s.open) return;
 
-            try self.renderPopup(app, s);
+            try self.renderPopup(frame, s);
 
             const popup_id = self.key.indexed(POPUP_INDEX).hash();
             if (ui.input.mouseButton(.left).released and ui.isHoveredWithin(popup_id)) {
                 s.open = false;
-                app.requestFrame();
+                frame.requestRedraw();
             }
         }
 
-        fn renderPopup(self: *const Self, app: *App, s: *State.ContextMenu) !void {
-            const ui = &app.viewport.ui;
+        fn renderPopup(self: *const Self, frame: *Frame, s: *State.ContextMenu) !void {
+            const ui = frame.ui();
             const popup_key = self.key.indexed(POPUP_INDEX);
             const popup_id = popup_key.hash();
 
@@ -125,7 +125,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             const measured_box = if (measured) |m| m.box else math.Rect.zero;
             if (!sameRect(s.popup_box, measured_box)) {
                 s.popup_box = measured_box;
-                app.requestFrame();
+                frame.requestRedraw();
             }
 
             const measured_h = if (measured_box.h() > 0) measured_box.h() else self.fallback_menu_height;
@@ -142,7 +142,7 @@ pub fn ContextMenu(comptime Menu: type) type {
                 .interactive = true,
             }, .{ .rect = self.popup_style.toRect(&ui.theme) });
 
-            try app.e(self.menu);
+            try frame.e(self.menu);
 
             ui.close();
         }

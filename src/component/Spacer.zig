@@ -1,4 +1,4 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Key = @import("ui").Key;
 const Element = @import("layout").Element;
 
@@ -8,13 +8,13 @@ key: Key,
 
 const Spacer = @This();
 
-pub fn open(self: *const Spacer, app: *App) !Element.Id {
-    return try app.viewport.ui.open(self.key, .{
+pub fn open(self: *const Spacer, frame: *Frame) !Element.Id {
+    return try frame.ui().open(self.key, .{
         .width = self.width,
         .height = self.height,
     }, .none);
 }
 
-pub fn close(_: *const Spacer, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const Spacer, frame: *Frame) !void {
+    frame.ui().close();
 }

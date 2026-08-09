@@ -1,7 +1,17 @@
+//! Supported WGSL and Vulkan Zig shader sources.
+
 const cfg = @import("shader_config");
 
-pub const primitives_wgsl: []const u8 = if (cfg.has_wgsl_shaders) @embedFile("primitives_wgsl") else "";
-pub const slug_wgsl: []const u8 = if (cfg.has_wgsl_shaders) @embedFile("slug_wgsl") else "";
+pub const primitives_wgsl: []const u8 = @embedFile("primitives_wgsl");
+pub const text_wgsl: []const u8 = @embedFile("slug_wgsl");
+
+pub const vulkan_zig = struct {
+    pub const primitives_vertex: []const u8 = @embedFile("primitives_vertex_zig");
+    pub const primitives_instance_vertex: []const u8 = @embedFile("primitives_instance_vertex_zig");
+    pub const primitives_fragment: []const u8 = @embedFile("primitives_fragment_zig");
+    pub const text_vertex: []const u8 = @embedFile("text_vertex_zig");
+    pub const text_fragment: []const u8 = @embedFile("text_fragment_zig");
+};
 
 const primitives_vert_bytes align(@alignOf(u32)) = if (cfg.has_spirv_shaders) @embedFile("primitives_vert_spv").* else [_]u8{};
 const primitives_instance_vert_bytes align(@alignOf(u32)) = if (cfg.has_spirv_shaders) @embedFile("primitives_instance_vert_spv").* else [_]u8{};

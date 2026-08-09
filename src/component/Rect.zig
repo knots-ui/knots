@@ -1,4 +1,4 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Style = @import("ui").Style;
 const Key = @import("ui").Key;
 const Decoration = @import("ui").Decoration;
@@ -28,14 +28,14 @@ grid_placement: ?GridPlacement = null,
 
 const Rect = @This();
 
-pub fn open(self: *const Rect, app: *App) !Element.Id {
-    const rect = self.style.toRect(&app.viewport.ui.theme);
+pub fn open(self: *const Rect, frame: *Frame) !Element.Id {
+    const rect = self.style.toRect(&frame.ui().theme);
     const needs_clip_shape = self.overflow != .visible and !rect.corner_radius.isZero();
     const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
         .{ .rect = rect }
     else
         .none;
-    return try app.viewport.ui.open(self.key, .{
+    return try frame.ui().open(self.key, .{
         .alignment = self.@"align",
         .justify = self.justify,
         .width = self.width,
@@ -50,6 +50,6 @@ pub fn open(self: *const Rect, app: *App) !Element.Id {
     }, decoration);
 }
 
-pub fn close(_: *const Rect, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const Rect, frame: *Frame) !void {
+    frame.ui().close();
 }

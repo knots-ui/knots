@@ -1,7 +1,6 @@
 const std = @import("std");
 const gpu = @import("gpu");
 const gpu_impl = @import("gpu_impl");
-const Window = @import("window").Window;
 
 const pipelines = @import("pipelines.zig");
 const Texture = @import("Texture.zig");
@@ -21,11 +20,11 @@ linear_sampler: ?gpu_impl.Sampler,
 atlas: *Texture,
 unit_index_buf: gpu_impl.Buffer,
 
-pub fn create(allocator: std.mem.Allocator, window: *const Window, depth_buffer: bool) !*Context {
+pub fn create(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, depth_buffer: bool) !*Context {
     const self = try allocator.create(Context);
     errdefer allocator.destroy(self);
 
-    self.device = try .init(allocator, window.getWindowHandle());
+    self.device = try .init(allocator, window_handle);
     errdefer self.device.deinit();
     self.depth_buffer = depth_buffer;
 

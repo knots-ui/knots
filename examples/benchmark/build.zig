@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
     switch (target.result.os.tag) {
         .windows => {
             tracy_lib.root_module.linkSystemLibrary("dbghelp", .{});
+            tracy_lib.root_module.linkSystemLibrary("ws2_32", .{});
         },
         else => {},
     }
@@ -75,10 +76,6 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     run_cmd.step.dependOn(b.getInstallStep());
-
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
 }
 
 fn isBrowserWasmTarget(target: std.Target) bool {

@@ -1,7 +1,8 @@
+const input_types = @import("input");
 const win32 = @import("win32").everything;
 const window = @import("window");
 
-const Key = window.Key;
+const Key = input_types.Key;
 
 const vk_to_key: [256]Key = blk: {
     var t: [256]Key = undefined;
@@ -14,10 +15,14 @@ const vk_to_key: [256]Key = blk: {
     while (d <= '9') : (d += 1) t[d] = @enumFromInt(@as(i32, d));
 
     var f: usize = 0;
-    while (f < 24) : (f += 1) t[0x70 + f] = @enumFromInt(@intFromEnum(Key.f1) + @as(i32, @intCast(f)));
+    while (f < 24) : (f += 1) {
+        t[0x70 + f] = @enumFromInt(@intFromEnum(Key.f1) + @as(i32, @intCast(f)));
+    }
 
     var k: usize = 0;
-    while (k < 10) : (k += 1) t[0x60 + k] = @enumFromInt(@intFromEnum(Key.kp_0) + @as(i32, @intCast(k)));
+    while (k < 10) : (k += 1) {
+        t[0x60 + k] = @enumFromInt(@intFromEnum(Key.kp_0) + @as(i32, @intCast(k)));
+    }
 
     t[0x08] = .backspace;
     t[0x09] = .tab;

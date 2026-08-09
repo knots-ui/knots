@@ -30,7 +30,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.zero.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
             },
             .fill_rect_gradient => |fr| {
                 const hw = fr.w / 2.0;
@@ -44,7 +44,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     vertex(fcx + hw, fcy + hh, .{ hw, hh }, fr.colors[2], fr.corner_radius, .{ hw, hh }, prim_type),
                     vertex(fcx - hw, fcy + hh, .{ -hw, hh }, fr.colors[3], fr.corner_radius, .{ hw, hh }, prim_type),
                 };
-                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, .atlas, clip);
             },
             .stroke_rect => |sr| {
                 const inst = gpu.Instance{
@@ -58,7 +58,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = (sr.edge_widths orelse BorderWidth.all(sr.thickness)).value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
             },
             .fill_circle => |fc| {
                 const cr = fc.radius;
@@ -73,7 +73,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.zero.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
             },
             .stroke_circle => |sc| {
                 const cr = sc.radius;
@@ -88,7 +88,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.all(sc.thickness).value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
             },
             .line => |l| {
                 const dx = l.to[0] - l.from[0];
@@ -107,7 +107,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     vertex(x1 - nx, y1 - ny, zero2, l.color, .zero, flat_hs, 0.0),
                     vertex(x0 - nx, y0 - ny, zero2, l.color, .zero, flat_hs, 0.0),
                 };
-                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, null, clip);
+                try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, .atlas, clip);
             },
             .fill_triangle => |t| {
                 const vertices = [3]gpu.Vertex{
@@ -115,7 +115,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     vertex(ox + t.points[1][0], oy + t.points[1][1], zero2, t.color, .zero, flat_hs, 0.0),
                     vertex(ox + t.points[2][0], oy + t.points[2][1], zero2, t.color, .zero, flat_hs, 0.0),
                 };
-                try draw_list.push(&vertices, &.{ 0, 1, 2 }, null, clip);
+                try draw_list.push(&vertices, &.{ 0, 1, 2 }, .atlas, clip);
             },
             .fill_convex_polygon => |p| {
                 if (p.points.len < 3) continue;
@@ -133,7 +133,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     fan_indices[i * 3 + 1] = @as(u32, @intCast(i)) + 1;
                     fan_indices[i * 3 + 2] = @as(u32, @intCast(i)) + 2;
                 }
-                try draw_list.push(verts, fan_indices, null, clip);
+                try draw_list.push(verts, fan_indices, .atlas, clip);
             },
         }
     }

@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const std = @import("std");
 const win32 = @import("win32").everything;
 const window = @import("window");
@@ -83,7 +84,7 @@ pub const Backend = struct {
     hinstance: win32.HINSTANCE,
     high_surrogate: u16 = 0,
     cursor_visible: bool = true,
-    cursor_shape: window.CursorShape = .default,
+    cursor_shape: input_types.CursorShape = .default,
     is_fullscreen: bool = false,
     should_close: bool = false,
     wheel_scroll_lines: u32 = 3,
@@ -92,8 +93,8 @@ pub const Backend = struct {
     saved_style: win32.WINDOW_STYLE = .{},
     drop_paths_buf: [64][260]u8 = undefined,
     drop_slices: [64][]const u8 = undefined,
-    min_size: ?window.Size,
-    max_size: ?window.Size,
+    min_size: ?input_types.Size,
+    max_size: ?input_types.Size,
 
     const Self = @This();
 
@@ -140,7 +141,7 @@ pub const Backend = struct {
         self.should_close = true;
     }
 
-    pub fn getSize(self: *const Self) window.Size {
+    pub fn getSize(self: *const Self) input_types.Size {
         var rect: win32.RECT = undefined;
         _ = win32.GetClientRect(self.hwnd, &rect);
         const scale = self.computeContentScale();
@@ -150,7 +151,7 @@ pub const Backend = struct {
         };
     }
 
-    pub fn getFramebufferSize(self: *const Self) window.Size {
+    pub fn getFramebufferSize(self: *const Self) input_types.Size {
         var rect: win32.RECT = undefined;
         _ = win32.GetClientRect(self.hwnd, &rect);
         return .{
@@ -193,7 +194,7 @@ pub const Backend = struct {
         self.cursor_visible = visible;
     }
 
-    pub fn setCursorShape(self: *Self, shape: window.CursorShape) void {
+    pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
         if (self.cursor_shape == shape) return;
         self.cursor_shape = shape;
         _ = win32.SetCursor(loadCursor(shape));
@@ -451,7 +452,7 @@ fn ownerOf(hwnd: win32.HWND) ?*window.Window {
     return @ptrFromInt(raw);
 }
 
-fn loadCursor(shape: window.CursorShape) ?win32.HCURSOR {
+fn loadCursor(shape: input_types.CursorShape) ?win32.HCURSOR {
     const name = switch (shape) {
         .default => win32.IDC_ARROW,
         .text => win32.IDC_IBEAM,
@@ -467,7 +468,7 @@ fn loadCursor(shape: window.CursorShape) ?win32.HCURSOR {
     return win32.LoadCursorW(null, name);
 }
 
-fn trackSize(hwnd: win32.HWND, size: window.Size, scale: f32) win32.POINT {
+fn trackSize(hwnd: win32.HWND, size: input_types.Size, scale: f32) win32.POINT {
     var outer: win32.RECT = undefined;
     var client: win32.RECT = undefined;
     _ = win32.GetWindowRect(hwnd, &outer);
@@ -552,14 +553,14 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
         win32.WM_MBUTTONDOWN, win32.WM_XBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
             if (ownerOf(hwnd)) |o| {
-                const button: window.MouseButton = if (msg == win32.WM_MBUTTONDOWN) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
+                const button: input_types.MouseButton = if (msg == win32.WM_MBUTTONDOWN) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
                 o.setMouseButton(button, true, mousePos(hwnd, lparam));
             }
             return 0;
         },
         win32.WM_MBUTTONUP, win32.WM_XBUTTONUP => {
             if (ownerOf(hwnd)) |o| {
-                const button: window.MouseButton = if (msg == win32.WM_MBUTTONUP) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
+                const button: input_types.MouseButton = if (msg == win32.WM_MBUTTONUP) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
                 o.setMouseButton(button, false, mousePos(hwnd, lparam));
                 if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
             }

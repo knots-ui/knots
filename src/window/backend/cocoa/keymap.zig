@@ -1,6 +1,7 @@
+const input_types = @import("input");
 const window = @import("window");
 
-const Key = window.Key;
+const Key = input_types.Key;
 
 const kVK_To_Key = blk: {
     var t: [128]Key = undefined;

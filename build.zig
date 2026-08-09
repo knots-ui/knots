@@ -4,6 +4,33 @@ const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
 
+/// Source files for knots' Vulkan UI-rendering shaders, written as comptime Zig and
+/// compiled to SPIR-V at build time. Consumers driving their own Vulkan renderer for
+/// knots' portable render packets can compile and reflect these without
+/// reaching into knots' internal shader paths.
+pub const VulkanShaderSource = enum {
+    ui_primitives_vertex,
+    ui_primitives_instance_vertex,
+    ui_primitives_fragment,
+    slug_vertex,
+    slug_fragment,
+};
+
+fn vulkanUIShaderFileName(which: VulkanShaderSource) []const u8 {
+    const dir = "src/gpu/backend/vulkan/shaders/";
+    return switch (which) {
+        .ui_primitives_vertex => dir ++ "ui_primitives_vertex.zig",
+        .ui_primitives_instance_vertex => dir ++ "ui_primitives_instance_vertex.zig",
+        .ui_primitives_fragment => dir ++ "ui_primitives_fragment.zig",
+        .slug_vertex => dir ++ "slug_vertex.zig",
+        .slug_fragment => dir ++ "slug_fragment.zig",
+    };
+}
+
+pub fn vulkanUIShaderSource(knots_dep: *std.Build.Dependency, which: VulkanShaderSource) std.Build.LazyPath {
+    return knots_dep.path(vulkanUIShaderFileName(which));
+}
+
 pub const web_bridge_export_symbol_names = [_][]const u8{
     "js_bridge_alloc",
     "js_bridge_free",
@@ -116,6 +143,12 @@ pub fn build(b: *std.Build) void {
     });
     gpu_impl_mod.addImport("gpu", gpu_mod);
 
+    const input_mod = b.addModule("input", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/input/root.zig"),
+    });
+
     var gpu_opts = b.addOptions();
     gpu_opts.addOption(GPUBackend, "backend", gpu_backend);
     gpu_mod.addOptions("config", gpu_opts);
@@ -220,6 +253,8 @@ pub fn build(b: *std.Build) void {
         },
     });
     window_impl_mod.addImport("window", window_mod);
+    window_impl_mod.addImport("input", input_mod);
+    window_mod.addImport("input", input_mod);
 
     const math_mod = b.createModule(.{
         .target = target,
@@ -234,28 +269,36 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "TrueType", .module = truetype_dep.module("TrueType") }},
     });
 
-    const render_mod = b.createModule(.{
+    const render_mod = b.addModule("render", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/render/root.zig"),
         .imports = &.{
             .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "gpu_impl", .module = gpu_impl_mod },
-            .{ .name = "text", .module = text_mod },
-            .{ .name = "window", .module = window_mod },
             .{ .name = "math", .module = math_mod },
         },
     });
 
+    const renderer_mod = b.addModule("renderer", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/renderer/root.zig"),
+        .imports = &.{
+            .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "gpu_impl", .module = gpu_impl_mod },
+            .{ .name = "text", .module = text_mod },
+            .{ .name = "math", .module = math_mod },
+            .{ .name = "render", .module = render_mod },
+        },
+    });
+
     var render_shader_opts = b.addOptions();
-    render_shader_opts.addOption(bool, "has_wgsl_shaders", gpu_backend == .webgpu);
+    // Shader sources are always attached and gated by lazy analysis; only the
+    // build-step SPIR-V blobs need a compile-time flag.
     render_shader_opts.addOption(bool, "has_spirv_shaders", gpu_backend == .vulkan);
     render_mod.addOptions("shader_config", render_shader_opts);
 
-    if (gpu_backend == .webgpu) {
-        render_mod.addAnonymousImport("primitives_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/ui_primitives.wgsl") });
-        render_mod.addAnonymousImport("slug_wgsl", .{ .root_source_file = b.path("src/gpu/backend/webgpu/shaders/slug.wgsl") });
-    }
+    addRenderShaderSources(b, render_mod);
     if (gpu_backend == .vulkan) {
         embedSpirV(b, optimize, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
         embedSpirV(b, optimize, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
@@ -278,7 +321,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "text", .module = text_mod },
-            .{ .name = "window", .module = window_mod },
+            .{ .name = "input", .module = input_mod },
             .{ .name = "gpu", .module = gpu_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
@@ -295,7 +338,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "text", .module = text_mod },
             .{ .name = "math", .module = math_mod },
             .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "input", .module = input_mod },
             .{ .name = "render", .module = render_mod },
+            .{ .name = "renderer", .module = renderer_mod },
         },
     });
 
@@ -330,6 +375,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "ui", .module = ui_mod },
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "input", .module = input_mod },
         },
     });
     debug_mod.addOptions("debug_config", debug_opts);
@@ -340,12 +386,16 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
             .{ .name = "render", .module = render_mod },
+            .{ .name = "renderer", .module = renderer_mod },
             .{ .name = "ui", .module = ui_mod },
             .{ .name = "component", .module = component_mod },
             .{ .name = "control", .module = control_mod },
             .{ .name = "animation", .module = animation_mod },
             .{ .name = "window", .module = window_mod },
+            .{ .name = "input", .module = input_mod },
             .{ .name = "debug", .module = debug_mod },
+            .{ .name = "text", .module = text_mod },
+            .{ .name = "gpu", .module = gpu_mod },
         },
     });
     if (browser_wasm) mod.addImport("browser_exports", browser_exports_mod.?);
@@ -360,12 +410,51 @@ pub fn build(b: *std.Build) void {
     const ui_tests = b.addTest(.{ .root_module = ui_mod });
     const text_tests = b.addTest(.{ .root_module = text_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
+    const input_tests = b.addTest(.{ .root_module = input_mod });
+    const public_render_consumer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/public_render_consumer.zig"),
+            .imports = &.{
+                .{ .name = "render", .module = render_mod },
+                .{ .name = "gpu", .module = gpu_mod },
+            },
+        }),
+    });
+
+    const embedded_view_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/View.zig"),
+        .imports = &.{
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "text", .module = text_mod },
+            .{ .name = "ui", .module = ui_mod },
+        },
+    });
+    const embedded_view_consumer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/embedded_view_consumer.zig"),
+            .imports = &.{
+                .{ .name = "view", .module = embedded_view_mod },
+                .{ .name = "input", .module = input_mod },
+                .{ .name = "render", .module = render_mod },
+            },
+        }),
+    });
+    const run_embedded_view_consumer_tests = b.addRunArtifact(embedded_view_consumer_tests);
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const run_layout_tests = b.addRunArtifact(layout_tests);
     const run_ui_tests = b.addRunArtifact(ui_tests);
     const run_text_tests = b.addRunArtifact(text_tests);
     const run_math_tests = b.addRunArtifact(math_tests);
+    const run_input_tests = b.addRunArtifact(input_tests);
+    const run_public_render_consumer_tests = b.addRunArtifact(public_render_consumer_tests);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
@@ -373,6 +462,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ui_tests.step);
     test_step.dependOn(&run_text_tests.step);
     test_step.dependOn(&run_math_tests.step);
+    test_step.dependOn(&run_input_tests.step);
+    test_step.dependOn(&run_public_render_consumer_tests.step);
+    test_step.dependOn(&run_embedded_view_consumer_tests.step);
 
     if (!isBrowserWasmTarget(target.result)) {
         const snapshot_exe = b.addExecutable(.{
@@ -479,6 +571,37 @@ fn defaultGpuBackend(target: std.Target) GPUBackend {
 
 fn isBrowserWasmTarget(target: std.Target) bool {
     return target.cpu.arch.isWasm() and target.os.tag == .freestanding;
+}
+
+fn addRenderShaderSources(b: *std.Build, render_mod: *std.Build.Module) void {
+    const webgpu_dir = "src/gpu/backend/webgpu/shaders/";
+    const vulkan_dir = "src/gpu/backend/vulkan/shaders/";
+    addShaderSource(b, render_mod, "primitives_wgsl", webgpu_dir ++ "ui_primitives.wgsl");
+    addShaderSource(b, render_mod, "slug_wgsl", webgpu_dir ++ "slug.wgsl");
+    addShaderSource(
+        b,
+        render_mod,
+        "primitives_vertex_zig",
+        vulkan_dir ++ "ui_primitives_vertex.zig",
+    );
+    addShaderSource(
+        b,
+        render_mod,
+        "primitives_instance_vertex_zig",
+        vulkan_dir ++ "ui_primitives_instance_vertex.zig",
+    );
+    addShaderSource(
+        b,
+        render_mod,
+        "primitives_fragment_zig",
+        vulkan_dir ++ "ui_primitives_fragment.zig",
+    );
+    addShaderSource(b, render_mod, "text_vertex_zig", vulkan_dir ++ "slug_vertex.zig");
+    addShaderSource(b, render_mod, "text_fragment_zig", vulkan_dir ++ "slug_fragment.zig");
+}
+
+fn addShaderSource(b: *std.Build, module: *std.Build.Module, name: []const u8, path: []const u8) void {
+    module.addAnonymousImport(name, .{ .root_source_file = b.path(path) });
 }
 
 fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {

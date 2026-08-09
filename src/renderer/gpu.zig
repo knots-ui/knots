@@ -248,7 +248,12 @@ pub const DrawContext = struct {
     content_scale: f32,
 };
 
-pub const DrawCallback = *const fn (?*anyopaque, *DrawContext) anyerror!void;
+/// Typed form of `render.DrawList.CustomDrawCallback`. `draw_context` is scoped
+/// to the canvas bounds and valid only for the call.
+pub const DrawCallback = *const fn (
+    user_data: ?*anyopaque,
+    draw_context: *DrawContext,
+) anyerror!void;
 
 fn bindGroupDesc(desc: BindGroup.Desc, entries: *[16]gpu_impl.BindGroup.BindingEntry, frame_uploads: ?*FrameUploads) !gpu_impl.BindGroup.Desc {
     if (desc.entries.len > entries.len) return error.TooManyBindGroupEntries;

@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const std = @import("std");
 const objc = @import("objc");
 const gpu = @import("gpu");
@@ -18,7 +19,7 @@ pub const Backend = struct {
     delegate: objc.Object,
     should_close: bool = false,
     cursor_visible: bool = true,
-    cursor_shape: window.CursorShape = .default,
+    cursor_shape: input_types.CursorShape = .default,
     display_mode: window.DisplayMode = .windowed,
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
@@ -124,7 +125,7 @@ pub const Backend = struct {
         self.should_close = true;
     }
 
-    pub fn getSize(self: *const Self) window.Size {
+    pub fn getSize(self: *const Self) input_types.Size {
         const view_frame = self.ns_view.msgSend(ak.NSRect, "frame", .{});
         return .{
             .width = @intFromFloat(@round(view_frame.size.width)),
@@ -132,7 +133,7 @@ pub const Backend = struct {
         };
     }
 
-    pub fn getFramebufferSize(self: *const Self) window.Size {
+    pub fn getFramebufferSize(self: *const Self) input_types.Size {
         const view_frame = self.ns_view.msgSend(ak.NSRect, "frame", .{});
         const backing = self.ns_view.msgSend(ak.NSRect, "convertRectToBacking:", .{view_frame});
         return .{
@@ -166,7 +167,7 @@ pub const Backend = struct {
         self.cursor_visible = visible;
     }
 
-    pub fn setCursorShape(self: *Self, shape: window.CursorShape) void {
+    pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
         if (self.cursor_shape == shape) return;
         self.cursor_shape = shape;
         const NSCursor = objc.getClass("NSCursor").?;

@@ -1,6 +1,6 @@
+const input_types = @import("input");
 const layout = @import("layout");
 const text = @import("text");
-const window = @import("window");
 const math = @import("math");
 
 const Element = layout.Element;
@@ -98,9 +98,10 @@ input_scopes: InputScope,
 content_scale: f32,
 scroll_line_size: Size.Input,
 anim_active: bool,
+text_input_requested: bool,
 theme: Theme,
 last_stats: Stats,
-cursor_shape: window.CursorShape,
+cursor_shape: input_types.CursorShape,
 
 const UI = @This();
 
@@ -127,6 +128,7 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .content_scale = 1.0,
         .scroll_line_size = cfg.scroll_line_size,
         .anim_active = false,
+        .text_input_requested = false,
         .theme = cfg.theme,
         .last_stats = .{},
         .cursor_shape = .default,
@@ -320,11 +322,16 @@ pub fn reset(self: *UI) void {
     self.clip_nodes.clearRetainingCapacity();
     self.input_scopes.resetFrame();
     self.anim_active = false;
+    self.text_input_requested = false;
     self.cursor_shape = .default;
 }
 
-pub fn requestCursor(self: *UI, shape: window.CursorShape) void {
+pub fn requestCursor(self: *UI, shape: input_types.CursorShape) void {
     self.cursor_shape = shape;
+}
+
+pub fn requestTextInput(self: *UI) void {
+    self.text_input_requested = true;
 }
 
 /// Drive a time-based animation toward `target` for the given (element_id, channel)
@@ -604,7 +611,7 @@ fn captureHitAncestors(allocator: Allocator, layout_ctx: *layout.Context, id: El
     }
 }
 
-pub fn resolveWindow(self: *UI, input: window.Input, now_ms: i64, content_scale: f32) !void {
+pub fn resolveWindow(self: *UI, input: input_types.Input, now_ms: i64, content_scale: f32) !void {
     self.content_scale = content_scale;
     self.state.selection_text = &.{};
     self.input.collect(input, now_ms);
@@ -717,10 +724,9 @@ fn advanceFocus(self: *UI, backward: bool) void {
 /// Advance the per widget state TTL clock. Call once per frame after the
 /// users frame callback has had a chance to touch its state, otherwise
 /// entries lose a frame of TTL grace before the sweep sees them.
-pub fn endFrame(self: *UI, host: *window.Window) !void {
+pub fn endFrame(self: *UI) !void {
     try self.state.endFrame();
     self.input_scopes.resolveActive();
-    host.setCursorShape(self.cursor_shape);
 }
 
 const press_drag_threshold_sq: f64 = 9.0;
@@ -920,7 +926,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = r.border_width.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, null, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
             },
             .text => |t| if (t.content.len > 0) {
                 const face = try self.font.getFace(t.font);
@@ -1024,7 +1030,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = BorderWidth.zero.value,
                     .prim_type = if (img.@"opaque") 4.0 else 2.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.texture, clip);
+                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.source, clip);
             },
             .range => |r| try renderRange(draw_list, el.box, r, clip),
         }
@@ -1043,11 +1049,11 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
     const progress = std.math.clamp(r.progress, 0.0, 1.0);
 
     const track = solidRectInstance(bx, ty, bw, th, r.track_color, r.corner_radius);
-    try draw_list.pushInstances(&[_]gpu.Instance{track}, null, clip);
+    try draw_list.pushInstances(&[_]gpu.Instance{track}, .atlas, clip);
 
     if (progress > 0) {
         const fill = solidRectInstance(bx, ty, bw * progress, th, r.fill_color, r.corner_radius);
-        try draw_list.pushInstances(&[_]gpu.Instance{fill}, null, clip);
+        try draw_list.pushInstances(&[_]gpu.Instance{fill}, .atlas, clip);
     }
 
     if (r.halo_radius > 0 and r.halo_color[3] > 0) {
@@ -1055,7 +1061,7 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
         const cx = bx + bw * progress;
         const cy = by + bh * 0.5;
         const halo = solidRectInstance(cx - hr, cy - hr, hr * 2, hr * 2, r.halo_color, Radius.all(hr));
-        try draw_list.pushInstances(&[_]gpu.Instance{halo}, null, clip);
+        try draw_list.pushInstances(&[_]gpu.Instance{halo}, .atlas, clip);
     }
 
     if (r.knob_radius > 0) {
@@ -1063,7 +1069,7 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
         const cx = bx + bw * progress;
         const cy = by + bh * 0.5;
         const knob = solidRectInstance(cx - kr, cy - kr, kr * 2, kr * 2, r.knob_color, Radius.all(kr));
-        try draw_list.pushInstances(&[_]gpu.Instance{knob}, null, clip);
+        try draw_list.pushInstances(&[_]gpu.Instance{knob}, .atlas, clip);
     }
 }
 

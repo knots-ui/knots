@@ -10,7 +10,7 @@ const Size = ui_mod.Size;
 const Key = ui_mod.Key;
 const Decoration = ui_mod.Decoration;
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 
 const Element = @import("layout").Element;
 
@@ -50,14 +50,45 @@ pub fn SelectInput(comptime T: type) type {
         option_style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
         option_hover_color: Color.Input = .muted,
         dropdown_z_index: Layer = .dropdown,
-        onSelect: ?*const fn (*App, T, u32) anyerror!void = null,
-
         const Self = @This();
 
-        pub fn open(self: *const Self, app: *App) !Element.Id {
+        pub const Selection = struct {
+            value: T,
+            index: u32,
+        };
+
+        pub const Response = struct {
+            id: Element.Id,
+            selected: ?Selection,
+        };
+
+        pub fn interact(self: *const Self, frame: *Frame) !Response {
+            const id = self.key.hash();
+            const previous = if (frame.ui().state.get(.select_input, id)) |state|
+                state.selected
+            else
+                self.initial_selected;
+            const element_id = try self.open(frame);
+            try self.close(frame);
+            const state = try frame.ui().state.getOrCreate(
+                .select_input,
+                frame.ui().allocator,
+                id,
+            );
+            const selected = if (state.selected != previous)
+                if (state.selected) |index|
+                    Selection{ .value = self.values[index], .index = index }
+                else
+                    null
+            else
+                null;
+            return .{ .id = element_id, .selected = selected };
+        }
+
+        pub fn open(self: *const Self, frame: *Frame) !Element.Id {
             if (self.labels.len != self.values.len) return error.SelectInputMismatchedOptions;
             if (!has_implicit_options and self.values.len == 0) return error.SelectInputRequiresOptions;
-            const ui = &app.viewport.ui;
+            const ui = frame.ui();
 
             const id = self.key.hash();
             const existed = ui.state.get(.select_input, id) != null;
@@ -95,7 +126,6 @@ pub fn SelectInput(comptime T: type) type {
                     if (next_selected) |i| {
                         const idx_u32: u32 = @intCast(i);
                         s.selected = idx_u32;
-                        if (self.onSelect) |cb| try cb(app, self.values[i], idx_u32);
                     }
                     ui.input.consumeKeyboard();
                 }
@@ -110,9 +140,8 @@ pub fn SelectInput(comptime T: type) type {
                     const opt_id = self.key.indexed(4 + i).hash();
                     if (ui.leftPressed(opt_id, .exact)) {
                         const idx_u32: u32 = @intCast(i);
-                        s.selected = idx_u32;
                         s.open = false;
-                        if (self.onSelect) |cb| try cb(app, self.values[i], idx_u32);
+                        s.selected = idx_u32;
                         break;
                     }
                 }
@@ -161,8 +190,8 @@ pub fn SelectInput(comptime T: type) type {
             return element_id;
         }
 
-        pub fn close(self: *const Self, app: *App) !void {
-            const ui = &app.viewport.ui;
+        pub fn close(self: *const Self, frame: *Frame) !void {
+            const ui = frame.ui();
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.select_input, ui.allocator, id);
             const size = self.size.resolve();
@@ -186,7 +215,7 @@ pub fn SelectInput(comptime T: type) type {
                 const icon_size: f32 = @max(10, size.value * 0.55);
                 const mid = icon_size * 0.5;
                 const icon_color = self.color.resolve(&ui.theme);
-                const cmds = try app.arena().alloc(Decoration.DrawCmd, 2);
+                const cmds = try frame.arena().alloc(Decoration.DrawCmd, 2);
 
                 if (s.open) {
                     cmds[0] = .{ .line = .{

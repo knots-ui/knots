@@ -64,9 +64,9 @@ pub fn main(init: std.process.Init) !void {
     try app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App) !void {
-    const size = app.viewport.window.getSize();
-    return app.e(.{
+fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
+    const size = app.logicalExtent();
+    return frame.e(.{
         knots.component.Rect{
             .width = .fixed(@floatFromInt(size.width)),
             .height = .fixed(@floatFromInt(size.height)),
@@ -77,6 +77,73 @@ fn frameCb(app: *knots.App) !void {
     });
 }
 ```
+
+Application state can embed `knots.App` and recover itself without frame user
+data:
+
+```zig
+const State = struct {
+    app: knots.App,
+    count: u32 = 0,
+
+    fn frame(app: *knots.App, frame_context: *knots.Frame) !void {
+        const self: *State = @fieldParentPtr("app", app);
+        const response = try frame_context.interact(knots.component.Button{
+            .key = .str("increment"),
+            .text = .{ .content = "increment" },
+        });
+        if (response.clicked) self.count += 1;
+    }
+};
+```
+
+## Embedding in an existing renderer
+
+Import the host-neutral modules directly; they are intentionally not aliases
+under `knots`:
+
+```zig
+app_module.addImport("knots", knots_dependency.module("knots"));
+app_module.addImport("input", knots_dependency.module("input"));
+app_module.addImport("render", knots_dependency.module("render"));
+app_module.addImport("gpu", knots_dependency.module("gpu"));
+```
+
+`render` contains only the portable packet contract. The separate `renderer`
+module contains Knots' App-owned renderer, draw list, textures, and custom GPU
+draw API. Applications normally need `renderer` directly only when declaring a
+`GPUCanvas` callback:
+
+```zig
+app_module.addImport("renderer", knots_dependency.module("renderer"));
+```
+
+One `knots.View` owns the persistent UI state for one host viewport:
+
+```zig
+const input = @import("input");
+
+var frame = try view.beginFrame(input.FrameInput{
+    .input = host_input,
+    .now_ms = now_ms,
+    .delta_ns = delta_ns,
+    .logical_extent = logical_extent,
+    .physical_extent = physical_extent,
+    .content_scale = content_scale,
+});
+errdefer view.abortFrame(&frame);
+
+try buildUi(&frame);
+const output = try view.endFrame(&frame);
+if (output.packet.glyphUpdate()) |update| {
+    try host_renderer.uploadGlyphs(update);
+    _ = view.acknowledgeGlyphUpload(update.generation);
+}
+try host_renderer.encode(&output.packet);
+```
+
+Packet and effect slices are borrowed until the same view begins its next
+frame. Embedded packets support primitives, text, and clipping.
 
 ## Browser WASM
 
@@ -118,9 +185,9 @@ const knots = @import("knots");
 
 pub const std_options: std.Options = .{ .logFn = knots.web.logFn };
 
-fn frame(app: *knots.App) !void {
-    const size = app.viewport.window.getSize();
-    try app.e(.{
+fn frame(app: *knots.App, frame_context: *knots.Frame) !void {
+    const size = app.logicalExtent();
+    try frame_context.e(.{
         knots.component.Rect{
             .width = .fixed(@floatFromInt(size.width)),
             .height = .fixed(@floatFromInt(size.height)),

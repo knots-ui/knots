@@ -1,5 +1,5 @@
-const App = @import("knots").App;
-const gpu = @import("knots").render.gpu;
+const Frame = @import("knots").Frame;
+const gpu = @import("renderer").gpu;
 const Element = @import("layout").Element;
 const Key = @import("ui").Key;
 
@@ -12,8 +12,8 @@ key: Key,
 
 const GPUCanvas = @This();
 
-pub fn open(self: *const GPUCanvas, app: *App) !Element.Id {
-    return app.viewport.ui.open(self.key, .{
+pub fn open(self: *const GPUCanvas, frame: *Frame) !Element.Id {
+    return frame.ui().open(self.key, .{
         .width = self.width,
         .height = self.height,
         .overflow = .hidden,
@@ -21,10 +21,10 @@ pub fn open(self: *const GPUCanvas, app: *App) !Element.Id {
     }, .none);
 }
 
-pub fn close(self: *const GPUCanvas, app: *App) !void {
-    app.viewport.ui.setDecoration(app.viewport.ui.currentSlot(), .{ .gpu_canvas = .{
-        .on_draw = self.onDraw,
+pub fn close(self: *const GPUCanvas, frame: *Frame) !void {
+    frame.ui().setDecoration(frame.ui().currentSlot(), .{ .gpu_canvas = .{
+        .on_draw = @ptrCast(self.onDraw),
         .user_data = self.user_data,
     } });
-    app.viewport.ui.close();
+    frame.ui().close();
 }

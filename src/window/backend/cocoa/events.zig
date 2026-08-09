@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const objc = @import("objc");
 const window = @import("window");
 const ak = @import("appkit.zig");
@@ -101,7 +102,7 @@ fn otherMouseDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
     const event = objc.Object.fromId(event_id);
     const number = event.msgSend(c_long, "buttonNumber", .{});
-    const button: window.MouseButton = switch (number) {
+    const button: input_types.MouseButton = switch (number) {
         2 => .middle,
         3 => .back,
         4 => .forward,
@@ -114,7 +115,7 @@ fn otherMouseUp(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
     const event = objc.Object.fromId(event_id);
     const number = event.msgSend(c_long, "buttonNumber", .{});
-    const button: window.MouseButton = switch (number) {
+    const button: input_types.MouseButton = switch (number) {
         2 => .middle,
         3 => .back,
         4 => .forward,
@@ -189,7 +190,7 @@ fn flagsChanged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
         0x3B, 0x3E => ak.NSEventModifierFlagControl,
         else => 0,
     };
-    const action: window.KeyAction = if (key_bit != 0 and (flags & key_bit) != 0) .press else .release;
+    const action: input_types.KeyAction = if (key_bit != 0 and (flags & key_bit) != 0) .press else .release;
     owner.pushKey(@intFromEnum(key), action, modsFromFlags(flags));
 }
 
@@ -272,7 +273,7 @@ fn windowDidEndLiveResize(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     owner.requestFrame();
 }
 
-fn modsFromFlags(flags: c_ulong) window.Mods {
+fn modsFromFlags(flags: c_ulong) input_types.Mods {
     return .{
         .shift = (flags & ak.NSEventModifierFlagShift) != 0,
         .ctrl = (flags & ak.NSEventModifierFlagControl) != 0,

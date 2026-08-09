@@ -5,11 +5,11 @@ const Rect = knots.component.Rect;
 const Text = knots.component.Text;
 const Spacer = knots.component.Spacer;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Layer", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Layer", body);
 }
 
-fn body(app: *knots.App) !void {
+fn body(_: *knots.App, app: *knots.Frame) !void {
     try app.e(.{
         Rect{ .dir = .layer, .key = .src(@src()) },
         .{

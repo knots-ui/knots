@@ -1,8 +1,7 @@
 const std = @import("std");
-const builtin = @import("builtin");
 
-const App = @import("knots").App;
-const platform = @import("knots").platform;
+const Frame = @import("knots").Frame;
+const input_types = @import("input");
 const UI = @import("ui").UI;
 const State = @import("ui").State;
 const Element = @import("layout").Element;
@@ -16,9 +15,9 @@ pub fn validateByteLimit(bytes_max: u32) !void {
     if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
 }
 
-pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
+pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
     std.debug.assert(bytes_max <= Face.text_bytes_max);
-    const ui = &app.viewport.ui;
+    const ui = frame.ui();
     var len: u32 = @intCast(buf.items.len);
     s.cursor = @min(s.cursor, len);
     s.sel_anchor = @min(s.sel_anchor, len);
@@ -42,26 +41,24 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), app: *App, s: *State.TextInput
     for (ui.input.key_events) |event| {
         if (event.action == .release) continue;
         const key = event.key;
-        const super_ctrl_held = if (builtin.os.tag == .macos)
-            event.mods.super
-        else if (platform.is_browser_wasm)
-            (event.mods.ctrl and !event.mods.alt) or event.mods.super
-        else
-            event.mods.ctrl and !event.mods.alt;
+        const super_ctrl_held = input_types.clipboardModifierHeld(event.mods);
         switch (key) {
             .c => if (super_ctrl_held) {
                 const sel = selectionRange(s);
-                if (sel.lo != sel.hi) _ = app.viewport.window.setClipboardText(app.allocator, buf.items[sel.lo..sel.hi]) catch false;
+                if (sel.lo != sel.hi) {
+                    try frame.writeClipboard(buf.items[sel.lo..sel.hi]);
+                }
             },
             .x => if (super_ctrl_held) {
                 const sel = selectionRange(s);
-                if (sel.lo != sel.hi and (app.viewport.window.setClipboardText(app.allocator, buf.items[sel.lo..sel.hi]) catch false)) {
+                if (sel.lo != sel.hi) {
+                    try frame.writeClipboard(buf.items[sel.lo..sel.hi]);
                     deleteSelection(buf, &len, s);
                 }
             },
             .v => if (super_ctrl_held) {
-                const raw = (app.viewport.window.getClipboardText(app.allocator) catch null) orelse continue;
-                defer app.allocator.free(raw);
+                const paste_text = frame.pasteText() orelse continue;
+                const raw = try frame.arena().dupe(u8, paste_text);
                 _ = std.unicode.Utf8View.init(raw) catch continue;
 
                 var paste_len: usize = 0;

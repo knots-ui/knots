@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const Grid = @import("layout").Grid;
 const math = @import("math");
@@ -58,8 +58,8 @@ const Tooltip = @This();
 const POPUP_INDEX: usize = 1;
 const TEXT_INDEX: usize = 2;
 
-pub fn open(self: *const Tooltip, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub fn open(self: *const Tooltip, frame: *Frame) !Element.Id {
+    const ui = frame.ui();
     const id = self.key.hash();
     _ = try ui.state.getOrCreate(.tooltip, ui.allocator, id);
 
@@ -84,8 +84,8 @@ pub fn open(self: *const Tooltip, app: *App) !Element.Id {
     }, decoration);
 }
 
-pub fn close(self: *const Tooltip, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const Tooltip, frame: *Frame) !void {
+    const ui = frame.ui();
     const id = self.key.hash();
     ui.close();
 
@@ -98,28 +98,28 @@ pub fn close(self: *const Tooltip, app: *App) !void {
         return;
     }
 
-    if (!focused and !(try hoverDelayElapsed(app, s, self.delay_ms))) return;
+    if (!focused and !(try hoverDelayElapsed(frame, s, self.delay_ms))) return;
 
-    try self.renderPopup(app, s);
+    try self.renderPopup(frame, s);
 }
 
-fn hoverDelayElapsed(app: *App, s: *State.Tooltip, delay_ms: u32) !bool {
-    const now = app.viewport.ui.input.now_ms;
+fn hoverDelayElapsed(frame: *Frame, s: *State.Tooltip, delay_ms: u32) !bool {
+    const now = frame.ui().input.now_ms;
     if (s.hover_started_ms == null) {
         s.hover_started_ms = now;
-        app.requestFrame();
+        frame.requestRedraw();
         return delay_ms == 0;
     }
 
     const elapsed = now - s.hover_started_ms.?;
     if (elapsed >= @as(i64, @intCast(delay_ms))) return true;
 
-    app.requestFrame();
+    frame.requestRedraw();
     return false;
 }
 
-fn renderPopup(self: *const Tooltip, app: *App, s: *State.Tooltip) !void {
-    const ui = &app.viewport.ui;
+fn renderPopup(self: *const Tooltip, frame: *Frame, s: *State.Tooltip) !void {
+    const ui = frame.ui();
     const popup_key = self.key.indexed(POPUP_INDEX);
     const popup_id = popup_key.hash();
 
@@ -127,7 +127,7 @@ fn renderPopup(self: *const Tooltip, app: *App, s: *State.Tooltip) !void {
     const measured_box = if (ui.state.get(.measured, popup_id)) |m| m.box else math.Rect.zero;
     if (!sameRect(s.popup_box, measured_box)) {
         s.popup_box = measured_box;
-        app.requestFrame();
+        frame.requestRedraw();
     }
 
     const fallback_size = try self.fallbackPopupSize(ui, s.viewport_box);

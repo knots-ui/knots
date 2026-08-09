@@ -163,20 +163,19 @@ pub fn highlight(allocator: std.mem.Allocator, source: [:0]const u8) !Highlighte
 }
 
 pub fn render(
-    app: *knots.App,
+    app: *knots.Frame,
     source_path: []const u8,
     highlighted: ?Highlighted,
     expanded: bool,
-    onToggle: *const fn (*knots.App) anyerror!void,
-) !void {
+) !bool {
     const panel_key = knots.ui.Key.str("code.viewer");
-    const panel_w = app.viewport.ui.anim(panel_key.hash(), "w", if (expanded) expanded_width else 0, .{
+    const panel_w = app.ui().anim(panel_key.hash(), "w", if (expanded) expanded_width else 0, .{
         .duration_ms = 180,
         .ease = .ease_out_cubic,
     });
 
     if (!expanded and panel_w <= 1) {
-        try app.e(Button{
+        const response = try app.interact(Button{
             .padding = .init(3, 8, 3, 8),
             .@"align" = .center,
             .justify = .center,
@@ -189,10 +188,9 @@ pub fn render(
             },
             .hover_style = .{ .border_color = .primary },
             .hover_anim = .{},
-            .onClick = onToggle,
             .text = .{ .content = icon_expand_source, .size = .xs },
         });
-        return;
+        return response.clicked;
     }
 
     const panel = Rect{
@@ -212,17 +210,14 @@ pub fn render(
     };
     _ = try panel.open(app);
 
-    try app.e(.{
-        Button{
-            .padding = .init(3, 8, 3, 8),
-            .@"align" = .center,
-            .justify = .center,
-            .key = .src(@src()),
-            .style = .{ .color = .primary, .corner_radius = .sm },
-            .hover_anim = .{},
-            .onClick = onToggle,
-            .text = .{ .content = icon_collapse_source, .size = .xs },
-        },
+    const toggle = try app.interact(Button{
+        .padding = .init(3, 8, 3, 8),
+        .@"align" = .center,
+        .justify = .center,
+        .key = .src(@src()),
+        .style = .{ .color = .primary, .corner_radius = .sm },
+        .hover_anim = .{},
+        .text = .{ .content = icon_collapse_source, .size = .xs },
     });
 
     const body = Rect{
@@ -241,9 +236,10 @@ pub fn render(
     try body.close(app);
 
     try panel.close(app);
+    return toggle.clicked;
 }
 
-fn renderLines(app: *knots.App, highlighted: Highlighted, source_path: []const u8) !void {
+fn renderLines(app: *knots.Frame, highlighted: Highlighted, source_path: []const u8) !void {
     try app.e(knots.control.VirtualList(Row){
         .key = knots.ui.Key.str(source_path).indexed(1),
         .items = highlighted.rows,
@@ -253,7 +249,7 @@ fn renderLines(app: *knots.App, highlighted: Highlighted, source_path: []const u
     });
 }
 
-fn renderLine(app: *knots.App, row_item: Row, line_idx: usize) !void {
+fn renderLine(app: *knots.Frame, row_item: Row, line_idx: usize) !void {
     const row = Rect{
         .width = .fit(),
         .height = .fixed(line_height),

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("ui");
 
@@ -51,24 +51,24 @@ pub const Rule = struct {
     thickness: f32 = 1,
 };
 
-pub fn open(self: *const Graph, app: *App) !Element.Id {
+pub fn open(self: *const Graph, frame: *Frame) !Element.Id {
     const id = self.key.hash();
-    _ = try app.viewport.ui.state.getOrCreate(.measured, app.viewport.ui.allocator, id);
-    const rect = self.style.toRect(&app.viewport.ui.theme);
+    _ = try frame.ui().state.getOrCreate(.measured, frame.ui().allocator, id);
+    const rect = self.style.toRect(&frame.ui().theme);
     const needs_clip_shape = !rect.corner_radius.isZero() or !rect.border_width.isZero();
     const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
         .{ .rect = rect }
     else
         .none;
-    return try app.viewport.ui.open(self.key, .{
+    return try frame.ui().open(self.key, .{
         .width = self.width,
         .height = self.height,
         .overflow = .hidden,
     }, decoration);
 }
 
-pub fn close(self: *const Graph, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn close(self: *const Graph, frame: *Frame) !void {
+    const ui = frame.ui();
     const slot = ui.currentSlot();
     const s = self.size(ui);
 
@@ -80,8 +80,8 @@ pub fn close(self: *const Graph, app: *App) !void {
         const capacity = self.maxStyleCommandCount() + graph_cmd_count;
 
         if (capacity > 0) {
-            var writer = CommandWriter{ .cmds = try app.arena().alloc(DrawCmd, capacity) };
-            self.appendStyle(&writer, app, s);
+            var writer = CommandWriter{ .cmds = try frame.arena().alloc(DrawCmd, capacity) };
+            self.appendStyle(&writer, frame, s);
 
             if (graph_cmd_count > 0) {
                 const x_domain = expandDomain(self.x_domain orelse self.autoDomain(.x));
@@ -94,8 +94,8 @@ pub fn close(self: *const Graph, app: *App) !void {
                     .y_inv_range = 1.0 / (y_domain.max - y_domain.min),
                 };
 
-                for (self.rules) |rule| appendRule(&writer, app, mapper, rule);
-                for (self.series) |series| appendSeries(&writer, app, mapper, series);
+                for (self.rules) |rule| appendRule(&writer, frame, mapper, rule);
+                for (self.series) |series| appendSeries(&writer, frame, mapper, series);
             }
 
             canvas_cmds = writer.items();
@@ -155,10 +155,10 @@ fn maxGraphCommandCount(self: *const Graph) usize {
     return count;
 }
 
-fn appendStyle(self: *const Graph, writer: *CommandWriter, app: *App, s: Size) void {
+fn appendStyle(self: *const Graph, writer: *CommandWriter, frame: *Frame, s: Size) void {
     if (!self.style.hasDecoration()) return;
 
-    const rect = self.style.toRect(&app.viewport.ui.theme);
+    const rect = self.style.toRect(&frame.ui().theme);
     if (rect.color[3] > 0) {
         writer.append(.{ .fill_rect = .{
             .x = 0,
@@ -190,10 +190,10 @@ fn appendStyle(self: *const Graph, writer: *CommandWriter, app: *App, s: Size) v
     }
 }
 
-fn appendRule(writer: *CommandWriter, app: *App, mapper: Mapper, rule: Rule) void {
+fn appendRule(writer: *CommandWriter, frame: *Frame, mapper: Mapper, rule: Rule) void {
     if (rule.thickness <= 0) return;
 
-    const color = rule.color.resolve(&app.viewport.ui.theme);
+    const color = rule.color.resolve(&frame.ui().theme);
     if (color[3] <= 0) return;
 
     const plot = mapper.plot;
@@ -219,18 +219,18 @@ fn appendRule(writer: *CommandWriter, app: *App, mapper: Mapper, rule: Rule) voi
     }
 }
 
-fn appendSeries(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series) void {
+fn appendSeries(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
     switch (series_.kind) {
-        .line => appendLine(writer, app, mapper, series_),
-        .bars => appendBars(writer, app, mapper, series_),
-        .points => appendPoints(writer, app, mapper, series_),
+        .line => appendLine(writer, frame, mapper, series_),
+        .bars => appendBars(writer, frame, mapper, series_),
+        .points => appendPoints(writer, frame, mapper, series_),
     }
 }
 
-fn appendLine(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series) void {
+fn appendLine(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
     if (series_.thickness <= 0) return;
 
-    const color = series_.color.resolve(&app.viewport.ui.theme);
+    const color = series_.color.resolve(&frame.ui().theme);
     if (color[3] <= 0) return;
 
     switch (series_.data) {
@@ -273,8 +273,8 @@ fn appendLine(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series
     }
 }
 
-fn appendBars(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series) void {
-    const color = series_.color.resolve(&app.viewport.ui.theme);
+fn appendBars(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
+    const color = series_.color.resolve(&frame.ui().theme);
     if (color[3] <= 0) return;
 
     const baseline = mapper.y(series_.baseline);
@@ -322,10 +322,10 @@ fn appendBars(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series
     }
 }
 
-fn appendPoints(writer: *CommandWriter, app: *App, mapper: Mapper, series_: Series) void {
+fn appendPoints(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
     if (series_.radius <= 0) return;
 
-    const color = series_.color.resolve(&app.viewport.ui.theme);
+    const color = series_.color.resolve(&frame.ui().theme);
     if (color[3] <= 0) return;
 
     switch (series_.data) {

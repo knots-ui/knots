@@ -10,6 +10,7 @@ curve_dirty_max_y_excl: u32,
 band_dirty_min_y: u32,
 band_dirty_max_y_excl: u32,
 allocator: std.mem.Allocator,
+revision_value: u64,
 
 // A square 4096 atlas fits every supported backend and keeps coordinates compact.
 pub const texture_width: u32 = 4096;
@@ -57,6 +58,7 @@ pub fn init(allocator: std.mem.Allocator) !GlyphBuilder {
         .band_dirty_min_y = std.math.maxInt(u32),
         .band_dirty_max_y_excl = 0,
         .allocator = allocator,
+        .revision_value = 0,
     };
 
     // Empty glyphs point to this zero-curve header so the shader produces no coverage.
@@ -75,6 +77,13 @@ pub fn isDirty(self: *const GlyphBuilder) bool {
     return self.band_dirty_min_y < self.band_dirty_max_y_excl;
 }
 
+/// Advanced by every mutation that dirties rows, letting consumers tell a
+/// re-emitted dirty range from newly dirtied ones. Anything that widens a dirty
+/// range must bump it.
+pub fn revision(self: *const GlyphBuilder) u64 {
+    return self.revision_value;
+}
+
 pub fn markClean(self: *GlyphBuilder) void {
     self.curve_dirty_min_y = std.math.maxInt(u32);
     self.curve_dirty_max_y_excl = 0;
@@ -87,18 +96,21 @@ pub fn markAllDirty(self: *GlyphBuilder) void {
     self.curve_dirty_max_y_excl = self.curveTextureHeight();
     self.band_dirty_min_y = 0;
     self.band_dirty_max_y_excl = self.bandTextureHeight();
+    self.bumpRevision();
 }
 
 pub fn markCurveDirtyTo(self: *GlyphBuilder, y_exclusive: u32) void {
     std.debug.assert(y_exclusive <= texture_width);
     self.curve_dirty_min_y = 0;
     self.curve_dirty_max_y_excl = y_exclusive;
+    self.bumpRevision();
 }
 
 pub fn markBandDirtyTo(self: *GlyphBuilder, y_exclusive: u32) void {
     std.debug.assert(y_exclusive <= texture_width);
     self.band_dirty_min_y = 0;
     self.band_dirty_max_y_excl = y_exclusive;
+    self.bumpRevision();
 }
 
 pub fn curveTextureHeight(self: *const GlyphBuilder) u32 {
@@ -129,6 +141,22 @@ pub fn bandDirtyRange(self: *const GlyphBuilder) ?DirtyRange {
     return null;
 }
 
+pub fn curveBytes(self: *const GlyphBuilder, range: DirtyRange) []const u8 {
+    const start: usize = @as(usize, range.y_start) * texture_width;
+    const end_max: usize = @as(usize, range.y_end) * texture_width;
+    const end = @min(end_max, self.curve_data.items.len);
+    std.debug.assert(start <= end);
+    return std.mem.sliceAsBytes(self.curve_data.items[start..end]);
+}
+
+pub fn bandBytes(self: *const GlyphBuilder, range: DirtyRange) []const u8 {
+    const start: usize = @as(usize, range.y_start) * texture_width;
+    const end_max: usize = @as(usize, range.y_end) * texture_width;
+    const end = @min(end_max, self.band_data.items.len);
+    std.debug.assert(start <= end);
+    return std.mem.sliceAsBytes(self.band_data.items[start..end]);
+}
+
 fn textureHeight(texel_count: usize) u32 {
     std.debug.assert(texel_count <= texture_texel_count_max);
     const count: u32 = @intCast(texel_count);
@@ -140,6 +168,7 @@ fn markCurveDirty(self: *GlyphBuilder, y_start: u32, y_end: u32) void {
     std.debug.assert(y_end <= texture_width);
     self.curve_dirty_min_y = @min(self.curve_dirty_min_y, y_start);
     self.curve_dirty_max_y_excl = @max(self.curve_dirty_max_y_excl, y_end);
+    self.bumpRevision();
 }
 
 fn markBandDirty(self: *GlyphBuilder, y_start: u32, y_end: u32) void {
@@ -147,6 +176,12 @@ fn markBandDirty(self: *GlyphBuilder, y_start: u32, y_end: u32) void {
     std.debug.assert(y_end <= texture_width);
     self.band_dirty_min_y = @min(self.band_dirty_min_y, y_start);
     self.band_dirty_max_y_excl = @max(self.band_dirty_max_y_excl, y_end);
+    self.bumpRevision();
+}
+
+fn bumpRevision(self: *GlyphBuilder) void {
+    self.revision_value +%= 1;
+    if (self.revision_value == 0) self.revision_value = 1;
 }
 
 fn bandTexelCount(partition_result: *const band.PartitionResult) u64 {

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("ui");
 
@@ -14,7 +14,6 @@ const Style = ui_mod.Style;
 
 value: *Color,
 key: Key,
-onChange: ?*const fn (*App) anyerror!void = null,
 
 width: Element.sizing.Axis = .fixed(180),
 height: Element.sizing.Axis = .fit(),
@@ -30,6 +29,11 @@ strip_height: f32 = 16,
 
 const ColorPicker = @This();
 
+pub const Response = struct {
+    id: Element.Id,
+    changed: bool,
+};
+
 const SWATCH_INDEX: usize = 1;
 const TEXT_INDEX: usize = 2;
 const POPUP_INDEX: usize = 3;
@@ -39,8 +43,8 @@ const ALPHA_INDEX: usize = 6;
 const PREVIEW_INDEX: usize = 7;
 const HEX_INDEX: usize = 8;
 
-pub fn open(self: *const ColorPicker, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub fn open(self: *const ColorPicker, frame: *Frame) !Element.Id {
+    const ui = frame.ui();
     const id = self.key.hash();
     const s = try ui.state.getOrCreate(.color_picker, ui.allocator, id);
 
@@ -58,8 +62,8 @@ pub fn open(self: *const ColorPicker, app: *App) !Element.Id {
     }
 
     if (s.open) {
-        try handlePickerInput(self, app, s);
-        if (ui.input.mouseButton(.left).pressed and !self.isPointerInside(app, s)) {
+        try handlePickerInput(self, frame, s);
+        if (ui.input.mouseButton(.left).pressed and !self.isPointerInside(frame, s)) {
             s.open = false;
             s.editing_hex = false;
             s.has_original = false;
@@ -81,13 +85,23 @@ pub fn open(self: *const ColorPicker, app: *App) !Element.Id {
     }, .{ .rect = current_style.toRect(&ui.theme) });
 }
 
-pub fn close(self: *const ColorPicker, app: *App) !void {
-    const ui = &app.viewport.ui;
+pub fn interact(self: *const ColorPicker, frame: *Frame) !Response {
+    const previous = self.value.*;
+    const id = try self.open(frame);
+    try self.close(frame);
+    return .{
+        .id = id,
+        .changed = !std.meta.eql(previous, self.value.*),
+    };
+}
+
+pub fn close(self: *const ColorPicker, frame: *Frame) !void {
+    const ui = frame.ui();
     const id = self.key.hash();
     const s = try ui.state.getOrCreate(.color_picker, ui.allocator, id);
 
     var swatch_cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
-    const arena = app.arena();
+    const arena = frame.arena();
     try appendCheckerboard(&swatch_cmds, arena, self.swatch_size, self.swatch_size, 6);
     try swatch_cmds.append(arena, .{ .fill_rect = .{
         .x = 0,
@@ -113,7 +127,7 @@ pub fn close(self: *const ColorPicker, app: *App) !void {
     ui.close();
 
     {
-        const hex = try formatHexAlloc(app.arena(), self.value.*, true);
+        const hex = try formatHexAlloc(frame.arena(), self.value.*, true);
         var deco = try ui.textDecoration(hex, self.size.resolve(), null, false);
         deco.text.color = self.text_color.resolve(&ui.theme);
         _ = try ui.open(self.key.indexed(TEXT_INDEX), .{ .width = .fit(), .height = .fit() }, deco);
@@ -122,11 +136,11 @@ pub fn close(self: *const ColorPicker, app: *App) !void {
 
     ui.close();
 
-    if (s.open) try self.renderPopover(app, s);
+    if (s.open) try self.renderPopover(frame, s);
 }
 
-fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const sv_id = self.key.indexed(SV_INDEX).hash();
     const hue_id = self.key.indexed(HUE_INDEX).hash();
     const alpha_id = self.key.indexed(ALPHA_INDEX).hash();
@@ -137,21 +151,21 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
             const p = pointInBox(m, ui.input.mouse_pos);
             s.saturation = p[0];
             s.value = 1.0 - p[1];
-            try setColorFromState(self, app, s);
+            try setColorFromState(self, frame, s);
         }
     }
 
     if (ui.pressing(hue_id) and ui.input.mouseButton(.left).down) {
         if (ui.state.get(.measured, hue_id)) |m| {
             s.hue = pointInBox(m, ui.input.mouse_pos)[0];
-            try setColorFromState(self, app, s);
+            try setColorFromState(self, frame, s);
         }
     }
 
     if (ui.pressing(alpha_id) and ui.input.mouseButton(.left).down) {
         if (ui.state.get(.measured, alpha_id)) |m| {
             s.alpha = pointInBox(m, ui.input.mouse_pos)[0];
-            try setColorFromState(self, app, s);
+            try setColorFromState(self, frame, s);
         }
     }
 
@@ -163,7 +177,7 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
         s.hex_len = hex.len;
         s.editing_hex = true;
     } else if (!hex_focused and s.editing_hex) {
-        try commitHexInput(self, app, s, true);
+        try commitHexInput(self, frame, s, true);
         s.editing_hex = false;
     }
 
@@ -215,16 +229,16 @@ fn handlePickerInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker)
             }
         }
 
-        if (changed) try commitHexInput(self, app, s, false);
-        if (commit) try commitHexInput(self, app, s, true);
+        if (changed) try commitHexInput(self, frame, s, false);
+        if (commit) try commitHexInput(self, frame, s, true);
         ui.input.consumeKeyboard();
     }
 }
 
-fn commitHexInput(self: *const ColorPicker, app: *App, s: *State.ColorPicker, allow_shorthand: bool) !void {
+fn commitHexInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, allow_shorthand: bool) !void {
     const hex = s.hex_buf[0..s.hex_len];
     if (!isCommittableHexLen(hex, allow_shorthand)) return;
-    if (Color.hex(hex)) |color| try setColor(self, app, s, color) else |_| {}
+    if (Color.hex(hex)) |color| try setColor(self, frame, s, color) else |_| {}
 }
 
 fn isCommittableHexLen(hex: []const u8, allow_shorthand: bool) bool {
@@ -233,8 +247,8 @@ fn isCommittableHexLen(hex: []const u8, allow_shorthand: bool) bool {
     return len == 6 or len == 8 or (allow_shorthand and (len == 3 or len == 4));
 }
 
-fn renderPopover(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderPopover(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const anchor = s.anchor_box;
     const viewport = s.viewport_box;
     const popup_id = self.key.indexed(POPUP_INDEX).hash();
@@ -260,17 +274,17 @@ fn renderPopover(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !vo
         .interactive = true,
     }, .{ .rect = self.popover_style.toRect(&ui.theme) });
 
-    try self.renderSvControl(app, s);
-    try self.renderHueControl(app, s);
-    try self.renderAlphaControl(app, s);
-    try self.renderPreview(app, s);
-    try self.renderHexField(app, s);
+    try self.renderSvControl(frame, s);
+    try self.renderHueControl(frame, s);
+    try self.renderAlphaControl(frame, s);
+    try self.renderPreview(frame, s);
+    try self.renderHexField(frame, s);
 
     ui.close();
 }
 
-fn isPointerInside(self: *const ColorPicker, app: *App, s: *const State.ColorPicker) bool {
-    const ui = &app.viewport.ui;
+fn isPointerInside(self: *const ColorPicker, frame: *Frame, s: *const State.ColorPicker) bool {
+    const ui = frame.ui();
     const p = .{ @as(f32, @floatCast(ui.input.mouse_pos[0])), @as(f32, @floatCast(ui.input.mouse_pos[1])) };
     if (s.anchor_box.contains(p)) return true;
 
@@ -282,13 +296,13 @@ fn isPointerInside(self: *const ColorPicker, app: *App, s: *const State.ColorPic
     return false;
 }
 
-fn renderSvControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderSvControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const id = self.key.indexed(SV_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
-    const arena = app.arena();
+    const arena = frame.arena();
     const w = self.popover_width - 20;
     const h = self.sv_height;
     const hue_color = hsvToLinearColor(s.hue, 1, 1, 1);
@@ -341,13 +355,13 @@ fn renderSvControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !
     ui.close();
 }
 
-fn renderHueControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderHueControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const id = self.key.indexed(HUE_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
-    const arena = app.arena();
+    const arena = frame.arena();
     const w = self.popover_width - 20;
     const h = self.strip_height;
     const segment_w = w / 6.0;
@@ -379,13 +393,13 @@ fn renderHueControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker) 
     ui.close();
 }
 
-fn renderAlphaControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderAlphaControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const id = self.key.indexed(ALPHA_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
-    const arena = app.arena();
+    const arena = frame.arena();
     const w = self.popover_width - 20;
     const h = self.strip_height;
     try appendCheckerboard(&cmds, arena, w, h, 8);
@@ -413,10 +427,10 @@ fn renderAlphaControl(self: *const ColorPicker, app: *App, s: *State.ColorPicker
     ui.close();
 }
 
-fn renderPreview(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderPreview(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
-    const arena = app.arena();
+    const arena = frame.arena();
     const w = self.popover_width - 20;
     const h: f32 = 28;
     const half = w * 0.5;
@@ -435,8 +449,8 @@ fn renderPreview(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !vo
     ui.close();
 }
 
-fn renderHexField(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    const ui = &app.viewport.ui;
+fn renderHexField(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    const ui = frame.ui();
     const id = self.key.indexed(HEX_INDEX).hash();
     const focused = ui.focused(id);
     const style = if (focused) self.focused_style else self.style;
@@ -453,7 +467,7 @@ fn renderHexField(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !v
     const display = if (s.editing_hex)
         s.hex_buf[0..s.hex_len]
     else
-        try formatHexAlloc(app.arena(), self.value.*, true);
+        try formatHexAlloc(frame.arena(), self.value.*, true);
     var deco = try ui.textDecoration(display, self.size.resolve(), null, false);
     deco.text.color = self.text_color.resolve(&ui.theme);
     _ = try ui.open(self.key.indexed(HEX_INDEX + 100), .{ .width = .fit(), .height = .fit() }, deco);
@@ -471,15 +485,15 @@ fn syncStateFromColor(s: *State.ColorPicker, color: Color) void {
     s.alpha = srgb[3];
 }
 
-fn setColorFromState(self: *const ColorPicker, app: *App, s: *State.ColorPicker) !void {
-    try setColor(self, app, s, hsvToLinearColor(s.hue, s.saturation, s.value, s.alpha));
+fn setColorFromState(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+    try setColor(self, frame, s, hsvToLinearColor(s.hue, s.saturation, s.value, s.alpha));
 }
 
-fn setColor(self: *const ColorPicker, app: *App, s: *State.ColorPicker, color: Color) !void {
+fn setColor(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, color: Color) !void {
     if (std.meta.eql(self.value.value, color.value)) return;
     self.value.* = color;
     syncStateFromColor(s, color);
-    if (self.onChange) |cb| try cb(app);
+    _ = frame;
 }
 
 fn pointInBox(m: *const State.Measured, mouse_pos: [2]f64) [2]f32 {

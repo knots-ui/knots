@@ -5,11 +5,11 @@ const Rect = knots.component.Rect;
 const Spacer = knots.component.Spacer;
 const Text = knots.component.Text;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Layout", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Layout", body);
 }
 
-fn body(app: *knots.App) !void {
+fn body(_: *knots.App, app: *knots.Frame) !void {
     @setEvalBranchQuota(3000);
     try section(app, "Sizing", .src(@src()));
     try sizing(app);
@@ -24,17 +24,17 @@ fn body(app: *knots.App) !void {
     try justify(app);
 }
 
-fn section(app: *knots.App, title: []const u8, key: knots.ui.Key) !void {
+fn section(app: *knots.Frame, title: []const u8, key: knots.ui.Key) !void {
     try app.e(Text{ .content = title, .size = .md, .key = key.indexed(1) });
     try app.e(Spacer{ .height = .fixed(8), .key = key.indexed(2) });
 }
 
-fn caption(app: *knots.App, content: []const u8, key: knots.ui.Key) !void {
+fn caption(app: *knots.Frame, content: []const u8, key: knots.ui.Key) !void {
     try app.e(Text{ .content = content, .size = .xs, .color = .dimmed, .key = key.indexed(1) });
     try app.e(Spacer{ .height = .fixed(4), .key = key.indexed(2) });
 }
 
-fn sizing(app: *knots.App) !void {
+fn sizing(app: *knots.Frame) !void {
     try caption(app, "grow | fixed(80) | grow", .src(@src()));
     try app.e(.{
         Rect{ .width = .grow(), .height = .fixed(28), .dir = .row, .gap = 6, .key = .src(@src()) },
@@ -80,7 +80,7 @@ fn sizing(app: *knots.App) !void {
     });
 }
 
-fn nesting(app: *knots.App) !void {
+fn nesting(app: *knots.Frame) !void {
     try app.e(.{
         Rect{ .width = .grow(), .padding = .init(12, 12, 12, 12), .key = .src(@src()), .style = .{ .color = .muted, .corner_radius = .xl, .border_width = .all(2), .border_color = .@"error" } },
         .{.{
@@ -96,7 +96,7 @@ fn nesting(app: *knots.App) !void {
     });
 }
 
-fn alignment(app: *knots.App) !void {
+fn alignment(app: *knots.Frame) !void {
     try app.e(.{
         Rect{ .width = .grow(), .height = .fixed(140), .dir = .row, .gap = 8, .key = .src(@src()) },
         .{
@@ -128,7 +128,7 @@ fn alignment(app: *knots.App) !void {
     });
 }
 
-fn justify(app: *knots.App) !void {
+fn justify(app: *knots.Frame) !void {
     try justifyRow(app, .start, .@"error", "start", .src(@src()));
     try justifyRow(app, .center, .success, "center", .src(@src()));
     try justifyRow(app, .end, .primary, "end", .src(@src()));
@@ -136,7 +136,7 @@ fn justify(app: *knots.App) !void {
     try justifyRow(app, .space_around, .warning, "space_around", .src(@src()));
 }
 
-fn justifyRow(app: *knots.App, comptime distribution: @FieldType(Rect, "justify"), comptime color: knots.ui.Color.Input, comptime label: []const u8, key: knots.ui.Key) !void {
+fn justifyRow(app: *knots.Frame, comptime distribution: @FieldType(Rect, "justify"), comptime color: knots.ui.Color.Input, comptime label: []const u8, key: knots.ui.Key) !void {
     try caption(app, label, key.indexed(1));
     try app.e(.{
         Rect{ .width = .fixed(360), .height = .fixed(36), .padding = .init(4, 4, 4, 4), .dir = .row, .gap = if (distribution == .space_between or distribution == .space_around) 0 else 6, .justify = distribution, .key = key.indexed(2), .style = .{ .color = .muted, .corner_radius = .sm } },

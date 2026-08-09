@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const std = @import("std");
 const gpu = @import("gpu");
 const js = @import("js-bridge");
@@ -7,15 +8,15 @@ pub const Backend = struct {
     allocator: std.mem.Allocator,
     selector: [:0]const u8,
     canvas: js.Value,
-    logical_size: window.Size,
-    physical_size: window.Size,
+    logical_size: input_types.Size,
+    physical_size: input_types.Size,
     content_scale: f32,
     pending_resize: ?window.ResizeEvent,
     is_fullscreen: bool = false,
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
     cursor_visible: bool = true,
-    cursor_shape: window.CursorShape = .default,
+    cursor_shape: input_types.CursorShape = .default,
     owner_addr: usize = 0,
     capture: ?Capture = null,
     clipboard_text: std.ArrayList(u8) = .empty,
@@ -65,11 +66,11 @@ pub const Backend = struct {
         self.cancelFrame();
     }
 
-    pub fn getSize(self: *const Self) window.Size {
+    pub fn getSize(self: *const Self) input_types.Size {
         return self.logical_size;
     }
 
-    pub fn getFramebufferSize(self: *const Self) window.Size {
+    pub fn getFramebufferSize(self: *const Self) input_types.Size {
         return self.physical_size;
     }
 
@@ -91,7 +92,7 @@ pub const Backend = struct {
         self.applyCursor();
     }
 
-    pub fn setCursorShape(self: *Self, shape: window.CursorShape) void {
+    pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
         if (self.cursor_shape == shape) return;
         self.cursor_shape = shape;
         self.applyCursor();
@@ -517,7 +518,7 @@ fn endMouseCapture(backend: *Backend) void {
     }) catch {};
 }
 
-fn modsFromBits(bits: u32) window.Mods {
+fn modsFromBits(bits: u32) input_types.Mods {
     return .{
         .shift = bits & 1 != 0,
         .ctrl = bits & 2 != 0,
@@ -526,7 +527,7 @@ fn modsFromBits(bits: u32) window.Mods {
     };
 }
 
-fn eventMods(event: js.Value) ?window.Mods {
+fn eventMods(event: js.Value) ?input_types.Mods {
     const host = webHost() catch return null;
     defer host.release();
     const bits = host.call("modsOf", &.{js.Arg.value(event)}) catch return null;
@@ -621,7 +622,7 @@ fn onMouseButton(context: ?*anyopaque, args: js.Value, args_len: u32, down: bool
     defer event.release();
     const button_value = event.get("button") catch return;
     defer button_value.release();
-    const b: window.MouseButton = switch (button_value.tryU32() catch return) {
+    const b: input_types.MouseButton = switch (button_value.tryU32() catch return) {
         0 => .left,
         1 => .middle,
         2 => .right,
@@ -676,9 +677,9 @@ fn onKeyDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     if (!shouldHandleEvent(backend, event)) return;
     if (eventKeyCode(event)) |key| {
         if (key >= 0) {
-            const key_action: window.KeyAction = if (eventBool(event, "repeat")) .repeat else .press;
-            const mods = eventMods(event) orelse window.Mods{};
-            if (((mods.ctrl and !mods.alt) or mods.super) and key == @intFromEnum(window.Key.v) and key_action == .press) {
+            const key_action: input_types.KeyAction = if (eventBool(event, "repeat")) .repeat else .press;
+            const mods = eventMods(event) orelse input_types.Mods{};
+            if (((mods.ctrl and !mods.alt) or mods.super) and key == @intFromEnum(input_types.Key.v) and key_action == .press) {
                 backend.preparePaste();
                 return;
             }
@@ -713,7 +714,7 @@ fn onKeyUp(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     if (!shouldHandleEvent(backend, event)) return;
     const key = eventKeyCode(event) orelse return;
     if (key < 0) return;
-    owner.pushKey(key, .release, eventMods(event) orelse window.Mods{});
+    owner.pushKey(key, .release, eventMods(event) orelse input_types.Mods{});
 }
 
 fn onPaste(context: ?*anyopaque, args: js.Value, args_len: u32) void {
@@ -737,8 +738,8 @@ fn onPaste(context: ?*anyopaque, args: js.Value, args_len: u32) void {
         return;
     };
     backend.clipboard_valid = true;
-    owner.pushKey(@intFromEnum(window.Key.v), .press, .{ .ctrl = true });
-    owner.pushKey(@intFromEnum(window.Key.v), .release, .{ .ctrl = true });
+    owner.pushKey(@intFromEnum(input_types.Key.v), .press, .{ .ctrl = true });
+    owner.pushKey(@intFromEnum(input_types.Key.v), .release, .{ .ctrl = true });
     preventDefault(event);
 }
 

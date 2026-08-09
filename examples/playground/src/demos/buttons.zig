@@ -12,12 +12,12 @@ const Spacer = knots.component.Spacer;
 const Menu = MenuButton(ButtonMenu);
 const DEMO_TITLE = "Buttons";
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, DEMO_TITLE, body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, DEMO_TITLE, body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const arena = app.arena();
 
     try app.e(.{
@@ -30,106 +30,118 @@ fn body(app: *knots.App) !void {
             .key = .src(@src()),
         },
         Spacer{ .height = .fixed(12), .key = .src(@src()) },
-        Rect{
-            .width = .grow(),
-            .dir = .column,
-            .gap = 8,
-            .key = .src(@src()),
-            .overflow = .scroll,
-            .padding = .init(8, 8, 8, 8),
-        },
-        .{
-            Button{
-                .height = .fixed(32),
-                .width = .fixed(80),
-                .style = .{ .color = .success, .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = increment,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "+1" },
-            },
-            Button{
-                .height = .fixed(32),
-                .width = .fixed(80),
-                .style = .{ .color = .@"error", .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = decrement,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "-1" },
-            },
-            Button{
-                .height = .fixed(32),
-                .width = .fixed(80),
-                .style = .{ .color = .primary, .corner_radius = .{ .fixed = 16 } },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = reset,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "reset" },
-            },
-            Button{
-                .height = .fixed(32),
-                .width = .fixed(80),
-                .style = .{
-                    .color = .{ .color = .rgba(0, 0, 0, 0) },
-                    .corner_radius = .sm,
-                    .border_width = .all(1),
-                    .border_color = .dimmed,
-                },
-                .hover_style = .{ .border_color = .primary },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = increment,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "ghost" },
-            },
-            Menu{
-                .key = .str("buttons.menu"),
-                .menu = .{},
-                .height = .fixed(32),
-                .width = .fixed(96),
-                .padding = .init(0, 12, 0, 12),
-                .style = .{ .color = .primary, .corner_radius = .sm },
-                .hover_anim = .{},
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "menu" },
-            },
-            Button{
-                .height = .fixed(32),
-                .width = .fixed(80),
-                .key = .src(@src()),
-                .onClick = increment,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "disabled" },
-                .disabled = true,
-                .disabled_style = .{ .color = .muted, .corner_radius = .md },
-            },
-        },
     });
+    const actions = Rect{
+        .width = .grow(),
+        .dir = .column,
+        .gap = 8,
+        .key = .src(@src()),
+        .overflow = .scroll,
+        .padding = .init(8, 8, 8, 8),
+    };
+    _ = try actions.open(app);
+    if ((try app.interact(Button{
+        .height = .fixed(32),
+        .width = .fixed(80),
+        .style = .{ .color = .success, .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "+1" },
+    })).clicked) try increment(self, app);
+    if ((try app.interact(Button{
+        .height = .fixed(32),
+        .width = .fixed(80),
+        .style = .{ .color = .@"error", .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "-1" },
+    })).clicked) decrement(self, app);
+    if ((try app.interact(Button{
+        .height = .fixed(32),
+        .width = .fixed(80),
+        .style = .{ .color = .primary, .corner_radius = .{ .fixed = 16 } },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "reset" },
+    })).clicked) reset(self, app);
+    if ((try app.interact(Button{
+        .height = .fixed(32),
+        .width = .fixed(80),
+        .style = .{
+            .color = .{ .color = .rgba(0, 0, 0, 0) },
+            .corner_radius = .sm,
+            .border_width = .all(1),
+            .border_color = .dimmed,
+        },
+        .hover_style = .{ .border_color = .primary },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "ghost" },
+    })).clicked) try increment(self, app);
+    try app.e(Menu{
+        .key = .str("buttons.menu"),
+        .menu = .{ .state = self },
+        .height = .fixed(32),
+        .width = .fixed(96),
+        .padding = .init(0, 12, 0, 12),
+        .style = .{ .color = .primary, .corner_radius = .sm },
+        .hover_anim = .{},
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "menu" },
+    });
+    _ = try app.interact(Button{
+        .height = .fixed(32),
+        .width = .fixed(80),
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "disabled" },
+        .disabled = true,
+        .disabled_style = .{ .color = .muted, .corner_radius = .md },
+    });
+    try actions.close(app);
 }
 
 const ButtonMenu = struct {
-    pub fn render(_: *const ButtonMenu, app: *knots.App) anyerror!void {
-        try app.e(.{
-            menuAction("Copy", knots.ui.Key.str("buttons.menu.copy"), copy),
-            menuAction("Rename", knots.ui.Key.str("buttons.menu.rename"), rename),
-            menuAction("Archive", knots.ui.Key.str("buttons.menu.archive"), archive),
-        });
+    state: *Self,
+
+    pub fn render(self: *const ButtonMenu, app: *knots.Frame) anyerror!void {
+        if ((try app.interact(menuAction(
+            "Copy",
+            knots.ui.Key.str("buttons.menu.copy"),
+        ))).clicked) {
+            self.state.demo_state.menu_button_last_action = "copy";
+            app.requestRedraw();
+        }
+        if ((try app.interact(menuAction(
+            "Rename",
+            knots.ui.Key.str("buttons.menu.rename"),
+        ))).clicked) {
+            self.state.demo_state.menu_button_last_action = "rename";
+            app.requestRedraw();
+        }
+        if ((try app.interact(menuAction(
+            "Archive",
+            knots.ui.Key.str("buttons.menu.archive"),
+        ))).clicked) {
+            self.state.demo_state.menu_button_last_action = "archive";
+            app.requestRedraw();
+        }
     }
 };
 
-fn menuAction(comptime label: []const u8, key: knots.ui.Key, onClick: knots.App.Callback) Button {
+fn menuAction(comptime label: []const u8, key: knots.ui.Key) Button {
     return Button{
         .key = key,
-        .onClick = onClick,
         .width = .grow(),
         .height = .fixed(30),
         .padding = .init(0, 10, 0, 10),
@@ -141,41 +153,20 @@ fn menuAction(comptime label: []const u8, key: knots.ui.Key, onClick: knots.App.
     };
 }
 
-fn increment(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn increment(self: *Self, app: *knots.Frame) !void {
     self.demo_state.counter += 1;
     try self.demo_state.counter_items.append(self.allocator, self.demo_state.counter);
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn decrement(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn decrement(self: *Self, app: *knots.Frame) void {
     self.demo_state.counter -= 1;
     _ = self.demo_state.counter_items.pop();
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn reset(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn reset(self: *Self, app: *knots.Frame) void {
     self.demo_state.counter = 0;
     self.demo_state.counter_items.clearRetainingCapacity();
-    app.requestFrame();
-}
-
-fn copy(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    self.demo_state.menu_button_last_action = "copy";
-    app.requestFrame();
-}
-
-fn rename(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    self.demo_state.menu_button_last_action = "rename";
-    app.requestFrame();
-}
-
-fn archive(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-    self.demo_state.menu_button_last_action = "archive";
-    app.requestFrame();
+    app.requestRedraw();
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Element = @import("layout").Element;
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const ui_mod = @import("ui");
 const Color = ui_mod.Color;
 const Key = ui_mod.Key;
@@ -19,14 +19,30 @@ fill_color: Color.Input = .highlighted,
 corner_radius: Radius.Input = .{ .fixed = 2 },
 knob_radius: f32 = 7,
 knob_color: Color.Input = .accented,
-onChange: ?*const fn (*App) anyerror!void = null,
 key: Key,
 
 const SliderInput = @This();
 
-pub fn open(self: *const SliderInput, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub const Response = struct {
+    id: Element.Id,
+    changed: bool,
+};
+
+pub fn interact(self: *const SliderInput, frame: *Frame) !Response {
+    const response = try self.openResponse(frame);
+    try self.close(frame);
+    return response;
+}
+
+pub fn open(self: *const SliderInput, frame: *Frame) !Element.Id {
+    return (try self.openResponse(frame)).id;
+}
+
+/// Private for the same reason as `Checkbox.openResponse`: a slider is a leaf.
+fn openResponse(self: *const SliderInput, frame: *Frame) !Response {
+    const ui = frame.ui();
     const id = self.key.hash();
+    var changed = false;
 
     const slider_state = try ui.state.getOrCreate(.slider, ui.allocator, id);
 
@@ -38,7 +54,7 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
             const new_value = self.steppedValue(self.min + t * (self.max - self.min));
             if (new_value != self.value.*) {
                 self.value.* = new_value;
-                if (self.onChange) |cb| try cb(app);
+                changed = true;
             }
         }
     }
@@ -60,7 +76,7 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
             const new_value = self.steppedValue(v);
             if (new_value != self.value.*) {
                 self.value.* = new_value;
-                if (self.onChange) |cb| try cb(app);
+                changed = true;
             }
             ui.input.consumeKeyboard();
         }
@@ -110,11 +126,11 @@ pub fn open(self: *const SliderInput, app: *App) !Element.Id {
             .max = self.max,
         },
     });
-    return element_id;
+    return .{ .id = element_id, .changed = changed };
 }
 
-pub fn close(_: *const SliderInput, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const SliderInput, frame: *Frame) !void {
+    frame.ui().close();
 }
 
 fn steppedValue(self: *const SliderInput, value: f32) f32 {

@@ -1,9 +1,12 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Key = @import("ui").Key;
 const Element = @import("layout").Element;
 const gpu = @import("gpu");
 const render = @import("render");
+const renderer = @import("renderer");
 
+/// `data` is borrowed and uploaded at draw time, after the frame callback
+/// returns, so it must stay valid until the next frame begins.
 pub const Pixels = struct {
     pub const UploadPolicy = enum {
         /// Upload every frame. This is the safe default for mutable slices.
@@ -21,8 +24,9 @@ pub const Pixels = struct {
     version: u64 = 0,
 };
 
+/// Both variants are desktop only; an embedded `View` reports `ImageUnsupported`.
 pub const Source = union(enum) {
-    texture: *const render.Texture,
+    texture: *const renderer.Texture,
     pixels: Pixels,
 };
 
@@ -41,33 +45,33 @@ key: Key,
 
 const Image = @This();
 
-pub fn open(self: *const Image, app: *App) !Element.Id {
-    const texture = switch (self.source) {
-        .texture => |value| value,
-        .pixels => |p| try app.viewport.renderer.textureFromPixels(
-            self.key.hash(),
-            p.data,
-            p.width,
-            p.height,
-            p.format,
-            p.bytes_per_row,
-            p.version,
-            p.upload_policy == .always,
-        ),
+pub fn open(self: *const Image, frame: *Frame) !Element.Id {
+    const source: render.DrawList.TextureSource = switch (self.source) {
+        .texture => |value| .{ .texture = @ptrCast(value) },
+        .pixels => |p| .{ .pixels = .{
+            .key = self.key.hash(),
+            .data = p.data,
+            .width = p.width,
+            .height = p.height,
+            .format = p.format,
+            .bytes_per_row = p.bytes_per_row,
+            .version = p.version,
+            .force_upload = p.upload_policy == .always,
+        } },
     };
 
-    return try app.viewport.ui.open(self.key, .{
+    return try frame.ui().open(self.key, .{
         .width = self.width,
         .height = self.height,
         .position = self.position,
         .overflow = .hidden,
     }, .{ .image = .{
-        .texture = texture,
+        .source = source,
         .tint = self.tint,
         .@"opaque" = self.sampling_mode == .@"opaque",
     } });
 }
 
-pub fn close(_: *const Image, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const Image, frame: *Frame) !void {
+    frame.ui().close();
 }

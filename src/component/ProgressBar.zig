@@ -1,4 +1,4 @@
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const ui_mod = @import("ui");
 const Color = ui_mod.Color;
 const Key = ui_mod.Key;
@@ -15,8 +15,8 @@ key: Key,
 
 const ProgressBar = @This();
 
-pub fn open(self: *const ProgressBar, app: *App) !Element.Id {
-    const ui = &app.viewport.ui;
+pub fn open(self: *const ProgressBar, frame: *Frame) !Element.Id {
+    const ui = frame.ui();
     return try ui.open(self.key, .{
         .width = self.width,
         .height = self.height,
@@ -28,6 +28,6 @@ pub fn open(self: *const ProgressBar, app: *App) !Element.Id {
     } });
 }
 
-pub fn close(_: *const ProgressBar, app: *App) !void {
-    app.viewport.ui.close();
+pub fn close(_: *const ProgressBar, frame: *Frame) !void {
+    frame.ui().close();
 }

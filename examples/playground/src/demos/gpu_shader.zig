@@ -1,5 +1,6 @@
 const std = @import("std");
 const knots = @import("knots");
+const renderer = @import("renderer");
 const shader_config = @import("gpu_shader_config");
 
 const Self = @import("../root.zig");
@@ -75,16 +76,18 @@ comptime {
     std.debug.assert(@offsetOf(Uniforms, "clip_transform") == 48);
 }
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Knot Laboratory", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Knot Laboratory", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const state = &self.demo_state;
-    if (state.gpu_resources == null) state.gpu_resources = try createResources(app, self.allocator);
+    if (state.gpu_resources == null) {
+        state.gpu_resources = try createResources(desktop, self.allocator);
+    }
 
-    const delta_seconds = @as(f32, @floatFromInt(app.viewport.timer.delta.nanoseconds)) * 0.000000001;
+    const delta_seconds = @as(f32, @floatFromInt(app.input().delta_ns)) * 0.000000001;
     state.gpu_time += delta_seconds;
     if (!state.gpu_dragging) state.gpu_orbit += delta_seconds * state.gpu_spin;
 
@@ -145,7 +148,7 @@ fn body(app: *knots.App) !void {
         .key = .src(@src()),
     };
     const canvas_id = try canvas.open(app);
-    const ui = &app.viewport.ui;
+    const ui = app.ui();
     const raw_mouse = ui.mousePosition();
     const mouse = [2]f32{ @floatCast(raw_mouse[0]), @floatCast(raw_mouse[1]) };
     const left = ui.input.mouseButton(.left);
@@ -169,10 +172,10 @@ fn body(app: *knots.App) !void {
     try canvas.close(app);
     try canvas_panel.close(app);
 
-    app.requestFrame();
+    app.requestRedraw();
 }
 
-fn control(app: *knots.App, comptime label: []const u8, value: anytype) !void {
+fn control(app: *knots.Frame, comptime label: []const u8, value: anytype) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -187,7 +190,7 @@ fn control(app: *knots.App, comptime label: []const u8, value: anytype) !void {
     });
 }
 
-fn slider(app: *knots.App, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
+fn slider(app: *knots.Frame, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
     try control(app, label, SliderInput{
         .value = value,
         .min = min,
@@ -293,7 +296,7 @@ fn unitHash(seed: u32) f32 {
     return @as(f32, @floatFromInt(value)) * (1.0 / 4294967295.0);
 }
 
-fn drawKnot(user_data: ?*anyopaque, context: *knots.render.gpu.DrawContext) !void {
+fn drawKnot(user_data: ?*anyopaque, context: *renderer.gpu.DrawContext) !void {
     const self: *Self = @ptrCast(@alignCast(user_data.?));
     const state = &self.demo_state;
     const resources = &state.gpu_resources.?;

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("ui");
 const Text = @import("Text.zig");
@@ -40,8 +40,6 @@ pub fn RadioButton(comptime T: type) type {
         value: T,
         key: Key,
         label: ?[]const u8 = null,
-        onChange: ?*const fn (*App, T) anyerror!void = null,
-
         width: Element.sizing.Axis = .fit(),
         height: Element.sizing.Axis = .fit(),
         dot_size: f32 = 18,
@@ -55,8 +53,23 @@ pub fn RadioButton(comptime T: type) type {
 
         const Self = @This();
 
-        pub fn open(self: *const Self, app: *App) !Element.Id {
-            const ui = &app.viewport.ui;
+        pub const Response = struct {
+            id: Element.Id,
+            changed: bool,
+        };
+
+        pub fn interact(self: *const Self, frame: *Frame) !Response {
+            const previous = self.selected.*;
+            const id = try self.open(frame);
+            try self.close(frame);
+            return .{
+                .id = id,
+                .changed = !std.meta.eql(previous, self.selected.*),
+            };
+        }
+
+        pub fn open(self: *const Self, frame: *Frame) !Element.Id {
+            const ui = frame.ui();
 
             const min_height = @max(self.dot_size, try ui.lineHeight(self.label_size.resolve(), null));
             const id = try ui.open(self.key, .{
@@ -80,7 +93,6 @@ pub fn RadioButton(comptime T: type) type {
             if (activate) {
                 if (!std.meta.eql(self.selected.*, self.value)) {
                     self.selected.* = self.value;
-                    if (self.onChange) |cb| try cb(app, self.value);
                 }
                 if (key_activate) ui.input.consumeKeyboard();
             }
@@ -88,8 +100,8 @@ pub fn RadioButton(comptime T: type) type {
             return id;
         }
 
-        pub fn close(self: *const Self, app: *App) !void {
-            const ui = &app.viewport.ui;
+        pub fn close(self: *const Self, frame: *Frame) !void {
+            const ui = frame.ui();
             const id = self.key.hash();
             const selected = std.meta.eql(self.selected.*, self.value);
             const hovered = ui.hovering(id) or ui.isHoveredWithin(id);
@@ -106,7 +118,7 @@ pub fn RadioButton(comptime T: type) type {
                 rect.border_color[3] + (hover_border[3] - rect.border_color[3]) * t,
             };
 
-            const cmds = try app.arena().alloc(Decoration.DrawCmd, 3);
+            const cmds = try frame.arena().alloc(Decoration.DrawCmd, 3);
             const center = self.dot_size * 0.5;
             const outer_radius = @max(0, self.dot_size * 0.5 - 1);
             const inner_radius = @max(0, self.dot_size * 0.27);
@@ -137,7 +149,7 @@ pub fn RadioButton(comptime T: type) type {
             ui.close();
 
             if (self.label) |label| {
-                try app.e(Text{
+                try frame.e(Text{
                     .content = label,
                     .size = self.label_size,
                     .color = self.label_color,
@@ -160,8 +172,6 @@ pub fn RadioGroup(comptime T: type) type {
         key: Key,
         values: []const T = enum_values,
         labels: []const []const u8 = enum_labels,
-        onChange: ?*const fn (*App, T) anyerror!void = null,
-
         width: Element.sizing.Axis = .fit(),
         height: Element.sizing.Axis = .fit(),
         padding: Element.Padding = .init(0, 0, 0, 0),
@@ -180,21 +190,36 @@ pub fn RadioGroup(comptime T: type) type {
 
         const Self = @This();
 
-        pub fn open(self: *const Self, app: *App) !Element.Id {
+        pub const Response = struct {
+            id: Element.Id,
+            changed: bool,
+        };
+
+        pub fn interact(self: *const Self, frame: *Frame) !Response {
+            const previous = self.selected.*;
+            const id = try self.open(frame);
+            try self.close(frame);
+            return .{
+                .id = id,
+                .changed = !std.meta.eql(previous, self.selected.*),
+            };
+        }
+
+        pub fn open(self: *const Self, frame: *Frame) !Element.Id {
             if (self.values.len != self.labels.len) return error.RadioGroupMismatchedOptions;
             if (self.values.len > 0 and
-                (app.viewport.ui.input.containsKey(.left) or app.viewport.ui.input.containsKey(.up) or
-                    app.viewport.ui.input.containsKey(.right) or app.viewport.ui.input.containsKey(.down)))
+                (frame.ui().input.containsKey(.left) or frame.ui().input.containsKey(.up) or
+                    frame.ui().input.containsKey(.right) or frame.ui().input.containsKey(.down)))
             {
                 var focused_index: ?usize = null;
                 for (self.values, 0..) |_, i| {
-                    if (app.viewport.ui.state.focused == self.key.indexed(1 + i).hash()) {
+                    if (frame.ui().state.focused == self.key.indexed(1 + i).hash()) {
                         focused_index = i;
                         break;
                     }
                 }
                 if (focused_index) |i| {
-                    const backward = app.viewport.ui.input.containsKey(.left) or app.viewport.ui.input.containsKey(.up);
+                    const backward = frame.ui().input.containsKey(.left) or frame.ui().input.containsKey(.up);
                     const next_i = if (backward)
                         (i + self.values.len - 1) % self.values.len
                     else
@@ -202,13 +227,12 @@ pub fn RadioGroup(comptime T: type) type {
                     const next = self.values[next_i];
                     if (!std.meta.eql(self.selected.*, next)) {
                         self.selected.* = next;
-                        if (self.onChange) |cb| try cb(app, next);
                     }
-                    app.viewport.ui.state.focused = self.key.indexed(1 + next_i).hash();
-                    app.viewport.ui.input.consumeKeyboard();
+                    frame.ui().state.focused = self.key.indexed(1 + next_i).hash();
+                    frame.ui().input.consumeKeyboard();
                 }
             }
-            return try app.viewport.ui.open(self.key, .{
+            return try frame.ui().open(self.key, .{
                 .width = self.width,
                 .height = self.height,
                 .padding = self.padding,
@@ -219,14 +243,13 @@ pub fn RadioGroup(comptime T: type) type {
             }, .none);
         }
 
-        pub fn close(self: *const Self, app: *App) !void {
+        pub fn close(self: *const Self, frame: *Frame) !void {
             for (self.values, self.labels, 0..) |value, label, i| {
-                try app.e(RadioButton(T){
+                try frame.e(RadioButton(T){
                     .selected = self.selected,
                     .value = value,
                     .key = self.key.indexed(1 + i),
                     .label = label,
-                    .onChange = self.onChange,
                     .dot_size = self.dot_size,
                     .label_size = self.label_size,
                     .label_color = self.label_color,
@@ -236,7 +259,7 @@ pub fn RadioGroup(comptime T: type) type {
                     .hover_border_color = self.hover_border_color,
                 });
             }
-            app.viewport.ui.close();
+            frame.ui().close();
         }
     };
 }

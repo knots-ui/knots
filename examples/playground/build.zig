@@ -13,7 +13,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "knots", .module = knots.module("knots") }},
+        .imports = &.{
+            .{ .name = "knots", .module = knots.module("knots") },
+            .{ .name = "renderer", .module = knots.module("renderer") },
+        },
     });
     var shader_config = b.addOptions();
     shader_config.addOption(bool, "has_wgsl", gpu_backend == .webgpu);

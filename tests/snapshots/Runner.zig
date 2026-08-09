@@ -58,9 +58,9 @@ pub fn start(self: *Runner) !void {
     }
 }
 
-fn frame(app: *knots.App) !void {
-    const self: *Runner = @fieldParentPtr("app", app);
-    if (app.viewport.renderer.takeReadback()) |completed| {
+fn frame(desktop: *knots.App, app: *knots.Frame) !void {
+    const self: *Runner = @fieldParentPtr("app", desktop);
+    if (desktop.takeReadback()) |completed| {
         var readback = completed;
         defer readback.deinit();
         var capture = try capture_utils.fromReadback(self.allocator, readback);
@@ -68,12 +68,12 @@ fn frame(app: *knots.App) !void {
         if (!try self.check(scene_names[self.scene], capture)) self.failures += 1;
         self.scene += 1;
         if (self.scene == scene_names.len) {
-            app.closeWindow();
+            app.requestClose();
             return;
         }
     }
 
-    app.viewport.ui.content_scale = 1.0;
+    app.ui().content_scale = 1.0;
     switch (self.scene) {
         0 => try renderLayout(app),
         1 => try self.renderComponents(app),
@@ -81,8 +81,8 @@ fn frame(app: *knots.App) !void {
         3 => try self.renderOverlay(app),
         else => unreachable,
     }
-    try app.viewport.renderer.requestReadback(self.allocator);
-    app.requestFrame();
+    try desktop.requestReadback(self.allocator);
+    app.requestRedraw();
 }
 
 fn check(self: *Runner, name: []const u8, capture: capture_utils.Frame) !bool {
@@ -161,11 +161,11 @@ fn check(self: *Runner, name: []const u8, capture: capture_utils.Frame) !bool {
     return false;
 }
 
-fn renderComponents(self: *Runner, app: *knots.App) !void {
+fn renderComponents(self: *Runner, app: *knots.Frame) !void {
     const hovered = knots.ui.Key.str("component-primary").hash();
-    app.viewport.ui.state.hovered = hovered;
-    app.viewport.ui.state.focused = knots.ui.Key.str("component-checkbox").hash();
-    const scroll = try app.viewport.ui.state.getOrCreate(.scroll, app.viewport.ui.allocator, knots.ui.Key.str("component-scroll").hash());
+    app.ui().state.hovered = hovered;
+    app.ui().state.focused = knots.ui.Key.str("component-checkbox").hash();
+    const scroll = try app.ui().state.getOrCreate(.scroll, app.ui().allocator, knots.ui.Key.str("component-scroll").hash());
     scroll.offset[1] = 30;
     try app.e(.{
         page(),
@@ -197,7 +197,7 @@ fn renderComponents(self: *Runner, app: *knots.App) !void {
     });
 }
 
-fn renderOverlay(self: *Runner, app: *knots.App) !void {
+fn renderOverlay(self: *Runner, app: *knots.Frame) !void {
     try app.e(.{
         page(),
         .{
@@ -241,7 +241,14 @@ fn makeChecker() [16 * 16 * 4]u8 {
     return pixels;
 }
 
-fn renderGraphics(app: *knots.App) !void {
+fn renderGraphics(app: *knots.Frame) !void {
+    const canvas_commands = [_]Canvas.DrawCmd{
+        .{ .fill_rect_gradient = .{ .x = 18, .y = 18, .w = 304, .h = 70, .corner_radius = .all(14), .colors = .{ .{ 0.28, 0.36, 0.95, 1 }, .{ 0.70, 0.28, 0.92, 1 }, .{ 0.95, 0.35, 0.48, 1 }, .{ 0.25, 0.75, 0.90, 1 } } } },
+        .{ .fill_circle = .{ .cx = 82, .cy = 155, .radius = 42, .color = .{ 0.2, 0.75, 0.52, 1 } } },
+        .{ .stroke_circle = .{ .cx = 170, .cy = 155, .radius = 42, .thickness = 7, .color = .{ 0.95, 0.72, 0.18, 1 } } },
+        .{ .fill_triangle = .{ .points = .{ .{ 240, 196 }, .{ 292, 112 }, .{ 322, 196 } }, .color = .{ 0.92, 0.3, 0.38, 1 } } },
+        .{ .line = .{ .from = .{ 25, 216 }, .to = .{ 315, 216 }, .thickness = 3, .color = .{ 0.75, 0.8, 0.9, 1 } } },
+    };
     try app.e(.{
         page(),
         .{
@@ -249,7 +256,7 @@ fn renderGraphics(app: *knots.App) !void {
             Spacer{ .height = .fixed(18), .key = .str("graphics-space") },
             Rect{ .width = .grow(), .height = .fixed(250), .dir = .row, .gap = 24, .key = .str("graphics-row") },
             .{
-                Canvas{ .width = .fixed(340), .height = .fixed(230), .style = .{ .color = .muted, .corner_radius = .lg, .border_width = .all(1), .border_color = .toned }, .onDraw = drawCanvas, .key = .str("graphics-canvas") },
+                Canvas{ .width = .fixed(340), .height = .fixed(230), .style = .{ .color = .muted, .corner_radius = .lg, .border_width = .all(1), .border_color = .toned }, .commands = &canvas_commands, .key = .str("graphics-canvas") },
                 Rect{ .width = .fixed(230), .height = .fixed(230), .dir = .column, .gap = 16, .key = .str("graphics-side") },
                 .{
                     Image{ .source = .{ .pixels = .{ .data = &checker, .width = 16, .height = 16, .upload_policy = .versioned } }, .width = .fixed(150), .height = .fixed(100), .key = .str("graphics-image") },
@@ -262,14 +269,6 @@ fn renderGraphics(app: *knots.App) !void {
             },
         },
     });
-}
-
-fn drawCanvas(_: *knots.App, painter: *Canvas.Painter) !void {
-    try painter.fillRectGradient(.{ .x = 18, .y = 18, .w = 304, .h = 70, .corner_radius = .all(14), .colors = .{ .{ 0.28, 0.36, 0.95, 1 }, .{ 0.70, 0.28, 0.92, 1 }, .{ 0.95, 0.35, 0.48, 1 }, .{ 0.25, 0.75, 0.90, 1 } } });
-    try painter.fillCircle(.{ .cx = 82, .cy = 155, .radius = 42, .color = .{ 0.2, 0.75, 0.52, 1 } });
-    try painter.strokeCircle(.{ .cx = 170, .cy = 155, .radius = 42, .thickness = 7, .color = .{ 0.95, 0.72, 0.18, 1 } });
-    try painter.fillTriangle(.{ .points = .{ .{ 240, 196 }, .{ 292, 112 }, .{ 322, 196 } }, .color = .{ 0.92, 0.3, 0.38, 1 } });
-    try painter.line(.{ .from = .{ 25, 216 }, .to = .{ 315, 216 }, .thickness = 3, .color = .{ 0.75, 0.8, 0.9, 1 } });
 }
 
 fn ensureDiffDir(io: std.Io) !void {
@@ -297,7 +296,7 @@ fn ensureBaselineDirs(io: std.Io, allocator: std.mem.Allocator, backend: []const
     try makeDir(io, path);
 }
 
-fn renderLayout(app: *knots.App) !void {
+fn renderLayout(app: *knots.Frame) !void {
     try app.e(.{
         page(),
         .{

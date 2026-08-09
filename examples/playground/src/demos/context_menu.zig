@@ -10,12 +10,12 @@ const ContextMenu = knots.component.ContextMenu;
 
 const Menu = ContextMenu(ContextActions);
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Context menu", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Context menu", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const arena = app.arena();
 
     try app.e(.{
@@ -44,15 +44,16 @@ fn body(app: *knots.App) !void {
     };
 
     _ = try grid.open(app);
-    try card(app, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
-    try card(app, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
-    try card(app, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
-    try card(app, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
+    try card(self, app, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
+    try card(self, app, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
+    try card(self, app, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
+    try card(self, app, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
     try grid.close(app);
 }
 
 fn card(
-    app: *knots.App,
+    state: *Self,
+    app: *knots.Frame,
     comptime target: []const u8,
     comptime title: []const u8,
     comptime key_prefix: []const u8,
@@ -62,6 +63,7 @@ fn card(
         Menu{
             .key = .str(key_prefix ++ ".wrap"),
             .menu = ContextActions{
+                .state = state,
                 .target = target,
                 .inspect_key = .str(key_prefix ++ ".inspect"),
                 .duplicate_key = .str(key_prefix ++ ".duplicate"),
@@ -97,28 +99,30 @@ fn card(
 }
 
 const ContextActions = struct {
+    state: *Self,
     target: []const u8,
     inspect_key: knots.ui.Key,
     duplicate_key: knots.ui.Key,
     archive_key: knots.ui.Key,
 
-    pub fn render(self: *const ContextActions, app: *knots.App) anyerror!void {
+    pub fn render(self: *const ContextActions, app: *knots.Frame) anyerror!void {
         try app.e(.{
-            ActionRow{ .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
-            ActionRow{ .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
-            ActionRow{ .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
+            ActionRow{ .state = self.state, .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
+            ActionRow{ .state = self.state, .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
+            ActionRow{ .state = self.state, .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
         });
     }
 };
 
 const ActionRow = struct {
+    state: *Self,
     target: []const u8,
     action: []const u8,
     label: []const u8,
     key: knots.ui.Key,
 
-    pub fn open(self: *const ActionRow, app: *knots.App) !u64 {
-        const ui = &app.viewport.ui;
+    pub fn open(self: *const ActionRow, app: *knots.Frame) !u64 {
+        const ui = app.ui();
         const id = self.key.hash();
         const hovered = ui.hovering(id);
 
@@ -143,16 +147,15 @@ const ActionRow = struct {
         return id;
     }
 
-    pub fn close(self: *const ActionRow, app: *knots.App) !void {
-        const ui = &app.viewport.ui;
+    pub fn close(self: *const ActionRow, app: *knots.Frame) !void {
+        const ui = app.ui();
         const id = self.key.hash();
         ui.close();
 
         if (ui.leftClicked(id, .within)) {
-            const root: *Self = @fieldParentPtr("app", app);
-            root.demo_state.context_menu_last_action = self.action;
-            root.demo_state.context_menu_last_target = self.target;
-            app.requestFrame();
+            self.state.demo_state.context_menu_last_action = self.action;
+            self.state.demo_state.context_menu_last_target = self.target;
+            app.requestRedraw();
         }
     }
 };

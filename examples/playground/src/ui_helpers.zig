@@ -2,9 +2,10 @@ const knots = @import("knots");
 const Rect = knots.component.Rect;
 
 pub fn panel(
-    app: *knots.App,
+    desktop: *knots.App,
+    frame: *knots.Frame,
     comptime title: []const u8,
-    body: *const fn (*knots.App) anyerror!void,
+    body: *const fn (*knots.App, *knots.Frame) anyerror!void,
 ) !void {
     const wrap = Rect{
         .width = .grow(),
@@ -20,7 +21,7 @@ pub fn panel(
             .border_color = .toned,
         },
     };
-    _ = try wrap.open(app);
-    try body(app);
-    try wrap.close(app);
+    _ = try wrap.open(frame);
+    try body(desktop, frame);
+    try wrap.close(frame);
 }

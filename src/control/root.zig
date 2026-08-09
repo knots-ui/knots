@@ -1,33 +1,33 @@
 const std = @import("std");
 
-const App = @import("knots").App;
+const Frame = @import("knots").Frame;
 const Key = @import("ui").Key;
 const Element = @import("layout").Element;
 
 pub const If = struct {
     when: bool,
-    then: *const fn (*App) anyerror!void,
-    @"else": ?*const fn (*App) anyerror!void = null,
+    then: *const fn (*Frame) anyerror!void,
+    @"else": ?*const fn (*Frame) anyerror!void = null,
 
     const Self = @This();
 
-    pub fn eval(self: *const Self, app: *App) !void {
+    pub fn eval(self: *const Self, frame: *Frame) !void {
         if (self.when)
-            try self.then(app)
+            try self.then(frame)
         else if (self.@"else") |fb|
-            try fb(app);
+            try fb(frame);
     }
 };
 
 pub fn For(comptime T: type) type {
     return struct {
         items: []const T,
-        each: *const fn (*App, T, usize) anyerror!void,
+        each: *const fn (*Frame, T, usize) anyerror!void,
 
         const Self = @This();
 
-        pub fn eval(self: *const Self, app: *App) !void {
-            for (self.items, 0..) |item, i| try self.each(app, item, i);
+        pub fn eval(self: *const Self, frame: *Frame) !void {
+            for (self.items, 0..) |item, i| try self.each(frame, item, i);
         }
     };
 }
@@ -80,56 +80,56 @@ pub fn VirtualList(comptime T: type) type {
         key: Key,
         items: []const T,
         row_height: f32,
-        each: *const fn (*App, T, usize) anyerror!void,
+        each: *const fn (*Frame, T, usize) anyerror!void,
         overscan: u32 = 4,
 
         const Self = @This();
 
-        pub fn eval(self: *const Self, app: *App) !void {
-            const stack = app.viewport.ui.layout_ctx.stack.items;
+        pub fn eval(self: *const Self, frame: *Frame) !void {
+            const stack = frame.ui().layout_ctx.stack.items;
 
             // Must be opened inside a parent.
             std.debug.assert(stack.len > 0);
 
             const parent_slot = stack[stack.len - 1];
-            const parent_el = app.viewport.ui.layout_ctx.pool.get(parent_slot);
+            const parent_el = frame.ui().layout_ctx.pool.get(parent_slot);
             const parent_id = parent_el.id;
-            _ = try app.viewport.ui.state.getOrCreate(.measured, app.viewport.ui.allocator, parent_id);
+            _ = try frame.ui().state.getOrCreate(.measured, frame.ui().allocator, parent_id);
 
-            const measured_h: f32 = if (app.viewport.ui.state.get(.measured, parent_id)) |s| s.height else 0;
+            const measured_h: f32 = if (frame.ui().state.get(.measured, parent_id)) |s| s.height else 0;
             const configured_h: f32 = if (parent_el.height.kind == .fixed) parent_el.height.value else 0;
             const parent_h: f32 = if (measured_h > 0) measured_h else configured_h;
-            const scroll_y = app.viewport.ui.state.getScroll(parent_id)[1];
+            const scroll_y = frame.ui().state.getScroll(parent_id)[1];
 
             switch (virtualRange(self.items.len, self.row_height, parent_h, scroll_y, self.overscan)) {
                 .empty => return,
                 .placeholder => |r| {
                     if (r.total_h > 0) {
-                        _ = try app.viewport.ui.open(self.key.indexed(0), .{
+                        _ = try frame.ui().open(self.key.indexed(0), .{
                             .width = .grow(),
                             .height = .fixed(r.total_h),
                         }, .none);
-                        app.viewport.ui.close();
-                        app.requestFrame();
+                        frame.ui().close();
+                        frame.requestRedraw();
                     }
                 },
                 .visible => |r| {
                     if (r.lead_h > 0) {
-                        _ = try app.viewport.ui.open(self.key.indexed(0), .{
+                        _ = try frame.ui().open(self.key.indexed(0), .{
                             .width = .grow(),
                             .height = .fixed(r.lead_h),
                         }, .none);
-                        app.viewport.ui.close();
+                        frame.ui().close();
                     }
                     for (self.items[r.first..r.last], r.first..) |item, i| {
-                        try self.each(app, item, i);
+                        try self.each(frame, item, i);
                     }
                     if (r.trail_h > 0) {
-                        _ = try app.viewport.ui.open(self.key.indexed(1), .{
+                        _ = try frame.ui().open(self.key.indexed(1), .{
                             .width = .grow(),
                             .height = .fixed(r.trail_h),
                         }, .none);
-                        app.viewport.ui.close();
+                        frame.ui().close();
                     }
                 },
             }

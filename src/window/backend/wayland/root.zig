@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const std = @import("std");
 const linux = std.os.linux;
 const posix = std.posix;
@@ -67,7 +68,7 @@ const Shared = struct {
     repeat_rate: i32 = 0,
     repeat_delay_ms: i32 = 600,
     repeat_key: ?u32 = null,
-    repeat_window_key: window.Key = @enumFromInt(0),
+    repeat_window_key: input_types.Key = @enumFromInt(0),
     repeat_char: ?u21 = null,
     repeat_next_ms: i64 = 0,
     last_keyboard_serial: u32 = 0,
@@ -124,7 +125,7 @@ const Shared = struct {
         }
     }
 
-    fn currentMods(self: *const Shared) window.Mods {
+    fn currentMods(self: *const Shared) input_types.Mods {
         const state = self.xkb_state orelse return .{};
         return .{
             .shift = xkb.xkb_state_mod_name_is_active(state, "Shift", xkb.STATE_MODS_EFFECTIVE) > 0,
@@ -149,7 +150,7 @@ const Shared = struct {
         self.repeat_next_ms = 0;
     }
 
-    fn startRepeat(self: *Shared, evdev_key: u32, translated: window.Key, cp: ?u21) void {
+    fn startRepeat(self: *Shared, evdev_key: u32, translated: input_types.Key, cp: ?u21) void {
         if (self.repeat_rate <= 0) {
             self.clearRepeat();
             return;
@@ -253,8 +254,8 @@ const State = struct {
     decoration: ?*zxdg.ToplevelDecorationV1 = null,
     owner: ?*window.Window = null,
     frame_requested: bool = false,
-    logical_size: window.Size,
-    configured_size: window.Size,
+    logical_size: input_types.Size,
+    configured_size: input_types.Size,
     scale: i32 = 1,
     preferred_scale: i32 = 1,
     configured: bool = false,
@@ -263,7 +264,7 @@ const State = struct {
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
     cursor_visible: bool = true,
-    cursor_shape: window.CursorShape = .default,
+    cursor_shape: input_types.CursorShape = .default,
     cursor: ?*wl.Cursor = null,
     pointer_enter_serial: u32 = 0,
     cursor_pos: [2]f64 = .{ 0, 0 },
@@ -433,11 +434,11 @@ pub const Backend = struct {
         self.postEmptyEvent();
     }
 
-    pub fn getSize(self: *const Self) window.Size {
+    pub fn getSize(self: *const Self) input_types.Size {
         return self.state.logical_size;
     }
 
-    pub fn getFramebufferSize(self: *const Self) window.Size {
+    pub fn getFramebufferSize(self: *const Self) input_types.Size {
         return .{
             .width = self.state.logical_size.width * @as(u32, @intCast(self.state.scale)),
             .height = self.state.logical_size.height * @as(u32, @intCast(self.state.scale)),
@@ -465,7 +466,7 @@ pub const Backend = struct {
         self.state.applyCursor();
     }
 
-    pub fn setCursorShape(self: *Self, shape: window.CursorShape) void {
+    pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
         if (self.state.cursor_shape == shape) return;
         self.state.cursor_shape = shape;
         if (self.state.shared.cursor_theme) |theme| {
@@ -842,7 +843,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
         },
         .button => |button| {
             const state = shared.pointer_state orelse return;
-            const translated: ?window.MouseButton = switch (button.button) {
+            const translated: ?input_types.MouseButton = switch (button.button) {
                 BTN_LEFT => .left,
                 BTN_RIGHT => .right,
                 BTN_MIDDLE => .middle,

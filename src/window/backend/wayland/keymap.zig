@@ -1,6 +1,7 @@
+const input_types = @import("input");
 const window = @import("window");
 
-const Key = window.Key;
+const Key = input_types.Key;
 
 pub fn translateEvdev(code: u32) Key {
     return switch (code) {

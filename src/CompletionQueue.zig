@@ -1,14 +1,20 @@
 const std = @import("std");
-const App = @import("App.zig");
+const Frame = @import("Frame.zig");
 const ReturnType = @import("util.zig").ReturnType;
 const Viewport = @import("Viewport.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const OpaqueCallback = *const fn (*App, *anyopaque) anyerror!void;
+/// `context` is the queue's `Context(App, T)`; `frame` belongs to the viewport
+/// the work originated on. Both are restored by the closure in `Context.init`.
+pub const OpaqueCallback = *const fn (
+    app: *anyopaque,
+    frame: *Frame,
+    context: *anyopaque,
+) anyerror!void;
 
-pub fn Callback(comptime T: type) type {
-    return *const fn (*App, T) anyerror!void;
+pub fn Callback(comptime App: type, comptime T: type) type {
+    return *const fn (*App, *Frame, T) anyerror!void;
 }
 
 pub const DispatchError = std.mem.Allocator.Error || std.Io.ConcurrentError;
@@ -17,26 +23,26 @@ const Completion = struct {
     viewport_id: Viewport.Id,
     ptr: *anyopaque,
     callback: OpaqueCallback,
-    destroy: *const fn (*anyopaque) void,
+    destroy: *const fn (context: *anyopaque) void,
 };
 
 pub const Wake = struct {
     context: *anyopaque,
-    notify: *const fn (*anyopaque) void,
+    notify: *const fn (context: *anyopaque) void,
 };
 
-fn Context(T: type) type {
+fn Context(comptime App: type, comptime T: type) type {
     return struct {
         completion: Completion,
         result: T = undefined,
-        onComplete: Callback(T),
+        onComplete: Callback(App, T),
         allocator: Allocator,
 
         const Self = @This();
 
         pub fn init(
             self: *Self,
-            onComplete: Callback(T),
+            onComplete: Callback(App, T),
             allocator: Allocator,
             viewport_id: Viewport.Id,
         ) void {
@@ -47,9 +53,14 @@ fn Context(T: type) type {
                     .viewport_id = viewport_id,
                     .ptr = self,
                     .callback = (struct {
-                        fn cb(app: *App, ptr: *anyopaque) anyerror!void {
+                        fn cb(
+                            app_ptr: *anyopaque,
+                            frame: *Frame,
+                            ptr: *anyopaque,
+                        ) anyerror!void {
                             const ctx: *Self = @ptrCast(@alignCast(ptr));
-                            try ctx.onComplete(app, ctx.result);
+                            const app: *App = @ptrCast(@alignCast(app_ptr));
+                            try ctx.onComplete(app, frame, ctx.result);
                         }
                     }).cb,
                     .destroy = (struct {
@@ -66,9 +77,11 @@ fn Context(T: type) type {
 
 recv_buf: []Completion,
 buf: []Completion,
+pending: std.ArrayList(Completion),
 queue: std.Io.Queue(Completion),
 wg: std.Io.Group,
 in_flight: std.atomic.Value(usize),
+allocator: Allocator,
 
 const CompletionQueue = @This();
 
@@ -78,10 +91,12 @@ pub fn init(allocator: Allocator, max_completions: usize) !CompletionQueue {
     errdefer allocator.free(buf);
     return .{
         .buf = buf,
+        .pending = .empty,
         .queue = .init(buf),
         .wg = .init,
         .in_flight = .init(0),
         .recv_buf = try allocator.alloc(Completion, max_completions),
+        .allocator = allocator,
     };
 }
 
@@ -96,6 +111,11 @@ pub fn deinit(self: *CompletionQueue, allocator: Allocator, io: std.Io) void {
             self.completeInFlight();
         }
     } else |_| {}
+    for (self.pending.items) |completion| {
+        completion.destroy(completion.ptr);
+        self.completeInFlight();
+    }
+    self.pending.deinit(allocator);
     std.debug.assert(self.in_flight.load(.monotonic) == 0);
     allocator.free(self.buf);
     allocator.free(self.recv_buf);
@@ -103,15 +123,16 @@ pub fn deinit(self: *CompletionQueue, allocator: Allocator, io: std.Io) void {
 
 pub fn dispatch(
     self: *CompletionQueue,
+    comptime App: type,
     io: std.Io,
     allocator: Allocator,
     func: anytype,
     args: anytype,
-    onComplete: Callback(ReturnType(func)),
+    onComplete: Callback(App, ReturnType(func)),
     viewport_id: Viewport.Id,
     wake: Wake,
 ) DispatchError!void {
-    const ctx = try allocator.create(Context(ReturnType(func)));
+    const ctx = try allocator.create(Context(App, ReturnType(func)));
     errdefer allocator.destroy(ctx);
     ctx.init(onComplete, allocator, viewport_id);
     const in_flight_before = self.in_flight.fetchAdd(1, .monotonic);
@@ -119,14 +140,73 @@ pub fn dispatch(
     errdefer self.completeInFlight();
     try self.wg.concurrent(
         io,
-        workerFn(@TypeOf(args), func),
+        workerFn(App, @TypeOf(args), func),
         .{ io, args, ctx, &self.queue, &self.in_flight, wake },
     );
 }
 
-pub fn consume(self: *CompletionQueue, app: *App, io: std.Io, route: anytype) !void {
+pub fn receive(self: *CompletionQueue, io: std.Io) !void {
     const n = try self.queue.get(io, self.recv_buf, 0);
-    try self.consumeReceived(app, self.recv_buf[0..n], route);
+    self.pending.appendSlice(self.allocator, self.recv_buf[0..n]) catch |err| {
+        for (self.recv_buf[0..n]) |completion| {
+            completion.destroy(completion.ptr);
+            self.completeInFlight();
+        }
+        return err;
+    };
+}
+
+/// Discard completions for a viewport that is going away; their callbacks need an
+/// active frame on it, which will never come.
+pub fn dropPendingFor(self: *CompletionQueue, viewport_id: Viewport.Id) void {
+    var index: usize = 0;
+    while (index < self.pending.items.len) {
+        if (self.pending.items[index].viewport_id != viewport_id) {
+            index += 1;
+            continue;
+        }
+        const completion = self.pending.orderedRemove(index);
+        completion.destroy(completion.ptr);
+        self.completeInFlight();
+    }
+}
+
+pub fn hasPendingFor(self: *const CompletionQueue, viewport_id: Viewport.Id) bool {
+    for (self.pending.items) |completion| {
+        if (completion.viewport_id == viewport_id) return true;
+    }
+    return false;
+}
+
+pub fn consumeFor(
+    self: *CompletionQueue,
+    route_context: anytype,
+    io: std.Io,
+    viewport_id: Viewport.Id,
+    route: anytype,
+) !void {
+    try self.receive(io);
+    var callback_error: ?anyerror = null;
+    var index: usize = 0;
+    while (index < self.pending.items.len) {
+        if (self.pending.items[index].viewport_id != viewport_id) {
+            index += 1;
+            continue;
+        }
+        const completion = self.pending.orderedRemove(index);
+        defer self.completeInFlight();
+        defer completion.destroy(completion.ptr);
+        if (callback_error != null) continue;
+        @call(.auto, route, .{
+            route_context,
+            completion.viewport_id,
+            completion.callback,
+            completion.ptr,
+        }) catch |err| {
+            callback_error = err;
+        };
+    }
+    if (callback_error) |err| return err;
 }
 
 fn consumeReceived(
@@ -162,12 +242,13 @@ fn completeInFlight(self: *CompletionQueue) void {
 }
 
 fn workerFn(
+    comptime App: type,
     comptime Args: type,
     func: anytype,
 ) fn (
     std.Io,
     Args,
-    *Context(ReturnType(func)),
+    *Context(App, ReturnType(func)),
     *std.Io.Queue(Completion),
     *std.atomic.Value(usize),
     Wake,
@@ -176,7 +257,7 @@ fn workerFn(
         fn run(
             io: std.Io,
             args: Args,
-            ctx: *Context(ReturnType(func)),
+            ctx: *Context(App, ReturnType(func)),
             queue: *std.Io.Queue(Completion),
             in_flight: *std.atomic.Value(usize),
             wake: Wake,
@@ -236,8 +317,9 @@ test "callback error still destroys every received completion" {
         .{ .destroyed_count = &destroyed_count },
     };
     const callback = struct {
-        fn run(app: *App, ptr: *anyopaque) !void {
+        fn run(app: *anyopaque, frame: *Frame, ptr: *anyopaque) !void {
             _ = app;
+            _ = frame;
             _ = ptr;
         }
     }.run;
@@ -299,8 +381,9 @@ test "dispatch wakes after enqueue and preserves the origin viewport" {
             return 42;
         }
 
-        fn complete(app: *App, result: u32) !void {
+        fn complete(app: *@This(), frame: *Frame, result: u32) !void {
             _ = app;
+            _ = frame;
             std.debug.assert(result == 42);
         }
     };
@@ -310,6 +393,7 @@ test "dispatch wakes after enqueue and preserves the origin viewport" {
     var wake_context: WakeContext = .{};
     const origin: Viewport.Id = @enumFromInt(7);
     try queue.dispatch(
+        Work,
         std.testing.io,
         std.testing.allocator,
         Work.run,
@@ -332,4 +416,53 @@ test "dispatch wakes after enqueue and preserves the origin viewport" {
     try std.testing.expectEqual(@as(u32, 1), route_context.called_count);
     try std.testing.expectEqual(origin, route_context.viewport_id.?);
     try std.testing.expectEqual(@as(usize, 0), queue.inFlight());
+}
+
+test "dropping a closed viewport's completions releases them" {
+    const TestContext = struct {
+        destroyed_count: *u32,
+
+        fn destroy(ptr: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.destroyed_count.* += 1;
+        }
+    };
+    const callback = struct {
+        fn run(_: *anyopaque, _: *Frame, _: *anyopaque) !void {}
+    }.run;
+
+    var destroyed_count: u32 = 0;
+    var contexts = [_]TestContext{
+        .{ .destroyed_count = &destroyed_count },
+        .{ .destroyed_count = &destroyed_count },
+    };
+
+    const closing: Viewport.Id = @enumFromInt(3);
+    var queue: CompletionQueue = undefined;
+    queue.allocator = std.testing.allocator;
+    queue.pending = .empty;
+    defer queue.pending.deinit(std.testing.allocator);
+    queue.in_flight = .init(contexts.len);
+    try queue.pending.appendSlice(std.testing.allocator, &.{
+        .{
+            .viewport_id = closing,
+            .ptr = &contexts[0],
+            .callback = callback,
+            .destroy = TestContext.destroy,
+        },
+        .{
+            .viewport_id = .main,
+            .ptr = &contexts[1],
+            .callback = callback,
+            .destroy = TestContext.destroy,
+        },
+    });
+
+    queue.dropPendingFor(closing);
+
+    try std.testing.expectEqual(@as(u32, 1), destroyed_count);
+    try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
+    try std.testing.expectEqual(@as(usize, 1), queue.inFlight());
+    try std.testing.expect(queue.hasPendingFor(.main));
+    try std.testing.expect(!queue.hasPendingFor(closing));
 }

@@ -8,42 +8,41 @@ const Text = knots.component.Text;
 const Button = knots.component.Button;
 const Spacer = knots.component.Spacer;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Async dispatch", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Async dispatch", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const arena = app.arena();
 
+    const row = Rect{ .width = .grow(), .dir = .row, .gap = 12, .@"align" = .center, .key = .src(@src()) };
+    _ = try row.open(app);
+    if ((try app.interact(Button{
+        .key = .src(@src()),
+        .width = .fixed(140),
+        .height = .fixed(34),
+        .style = .{ .color = .primary, .corner_radius = .sm },
+        .hover_anim = .{},
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "sleep x10" },
+    })).clicked) try sleep10(self, app);
     try app.e(.{
-        Rect{ .width = .grow(), .dir = .row, .gap = 12, .@"align" = .center, .key = .src(@src()) },
-        .{
-            Button{
-                .key = .src(@src()),
-                .width = .fixed(140),
-                .height = .fixed(34),
-                .style = .{ .color = .primary, .corner_radius = .sm },
-                .hover_anim = .{},
-                .justify = .center,
-                .@"align" = .center,
-                .onClick = sleep10,
-                .text = .{ .content = "sleep x10" },
-            },
-            Text{
-                .content = try std.fmt.allocPrint(arena, "pending: {d}", .{self.demo_state.pending_async}),
-                .size = .sm,
-                .color = if (self.demo_state.pending_async > 0) .warning else .dimmed,
-                .key = .src(@src()),
-            },
-            Text{
-                .content = try std.fmt.allocPrint(arena, "wakeups received: {d}", .{self.demo_state.counter}),
-                .size = .sm,
-                .color = .dimmed,
-                .key = .src(@src()),
-            },
+        Text{
+            .content = try std.fmt.allocPrint(arena, "pending: {d}", .{self.demo_state.pending_async}),
+            .size = .sm,
+            .color = if (self.demo_state.pending_async > 0) .warning else .dimmed,
+            .key = .src(@src()),
+        },
+        Text{
+            .content = try std.fmt.allocPrint(arena, "wakeups received: {d}", .{self.demo_state.counter}),
+            .size = .sm,
+            .color = .dimmed,
+            .key = .src(@src()),
         },
     });
+    try row.close(app);
 
     try app.e(Spacer{ .height = .fixed(16), .key = .src(@src()) });
 
@@ -55,37 +54,32 @@ fn body(app: *knots.App) !void {
     });
 }
 
-fn sleep10(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
-
+fn sleep10(self: *Self, app: *knots.Frame) !void {
     for (1..11) |i| {
-        app.dispatch(
+        self.app.dispatch(
             doSleep,
             .{ self.io, @as(i64, @intCast(i)) },
             onWakeup,
         ) catch |err| switch (err) {
             error.ConcurrencyUnavailable => {
                 std.log.warn("async dispatch is unavailable because this build has no thread support", .{});
-                if (self.demo_state.pending_async > 0) app.requestFrame();
+                if (self.demo_state.pending_async > 0) app.requestRedraw();
                 return;
             },
             else => return err,
         };
         self.demo_state.pending_async += 1;
     }
-    app.requestFrame();
+    app.requestRedraw();
 }
 
 fn doSleep(io: std.Io, seconds: i64) std.Io.Cancelable!void {
     try io.sleep(.fromSeconds(seconds), .boot);
 }
 
-fn onWakeup(app: *knots.App, _: std.Io.Cancelable!void) !void {
-    completeOne(app);
-}
-
-fn completeOne(app: *knots.App) void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn onWakeup(desktop: *knots.App, app: *knots.Frame, _: std.Io.Cancelable!void) !void {
+    const self = Self.of(desktop);
     self.demo_state.counter += 1;
     if (self.demo_state.pending_async > 0) self.demo_state.pending_async -= 1;
+    app.requestRedraw();
 }

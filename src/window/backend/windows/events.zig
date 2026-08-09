@@ -1,3 +1,4 @@
+const input_types = @import("input");
 const std = @import("std");
 const win32 = @import("win32").everything;
 const window = @import("window");
@@ -10,7 +11,7 @@ fn keyDown(vk: anytype) bool {
     return win32.GetKeyState(@intFromEnum(vk)) < 0;
 }
 
-pub fn modsFromKeyState() window.Mods {
+pub fn modsFromKeyState() input_types.Mods {
     return .{
         .shift = keyDown(win32.VK_SHIFT),
         .ctrl = keyDown(win32.VK_CONTROL),
@@ -24,7 +25,7 @@ pub fn onKey(owner: *window.Window, wparam: win32.WPARAM, lparam: win32.LPARAM, 
     const key = keymap.translateVk(vk, lparam);
     const lp: u64 = @bitCast(@as(i64, lparam));
     const repeat_bit: u1 = @intCast((lp >> 30) & 1);
-    const action: window.KeyAction =
+    const action: input_types.KeyAction =
         if (!pressed) .release else if (repeat_bit == 1) .repeat else .press;
     owner.pushKey(@intFromEnum(key), action, modsFromKeyState());
 }

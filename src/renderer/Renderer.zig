@@ -2,11 +2,10 @@ const std = @import("std");
 const gpu = @import("gpu");
 const gpu_impl = @import("gpu_impl");
 const text = @import("text");
-const Window = @import("window").Window;
 const math = @import("math");
 
-const DrawList = @import("DrawList.zig");
-const Clip = @import("Clip.zig");
+const DrawList = @import("render").DrawList;
+const Clip = @import("render").Clip;
 const pipelines = @import("pipelines.zig");
 const FrameUploads = @import("FrameUploads.zig");
 const Context = @import("Context.zig");
@@ -16,6 +15,7 @@ const PhysicalViewport = @import("gpu.zig").PhysicalViewport;
 const PhysicalScissor = @import("gpu.zig").PhysicalScissor;
 const ClipSpaceTransform = @import("gpu.zig").ClipSpaceTransform;
 const DrawContext = @import("gpu.zig").DrawContext;
+const DrawCallback = @import("gpu.zig").DrawCallback;
 
 const PixelTextureKey = u64;
 const PIXEL_TEXTURE_TTL_FRAMES: u64 = 2;
@@ -83,17 +83,16 @@ const PixelTextureEntry = struct {
     last_seen: u64,
 };
 
-pub fn create(allocator: std.mem.Allocator, context: *Context, window: *const Window, cfg: Config) !*Renderer {
-    const fb = window.getFramebufferSize();
+pub fn create(allocator: std.mem.Allocator, context: *Context, window_handle: gpu.Context.WindowHandle, framebuffer_width: u32, framebuffer_height: u32, cfg: Config) !*Renderer {
     const surface_cfg = gpu.Context.Config{
-        .window_width = fb.width,
-        .window_height = fb.height,
+        .window_width = framebuffer_width,
+        .window_height = framebuffer_height,
         .present_mode = cfg.present_mode,
     };
 
     const surface = try allocator.create(gpu_impl.Surface);
     errdefer allocator.destroy(surface);
-    surface.* = gpu_impl.Surface.init(&context.device, window.getWindowHandle(), surface_cfg) catch |err| switch (err) {
+    surface.* = gpu_impl.Surface.init(&context.device, window_handle, surface_cfg) catch |err| switch (err) {
         error.UnsupportedPresentMode => return error.UnsupportedPresentMode,
         else => return mapFrameError(err),
     };
@@ -191,7 +190,7 @@ pub fn destroy(self: *Renderer) void {
     self.allocator.destroy(self);
 }
 
-pub fn textureFromPixels(
+fn textureFromPixels(
     self: *Renderer,
     id: PixelTextureKey,
     data: []const u8,
@@ -388,6 +387,7 @@ const DrawState = struct {
 fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) ?RenderFailure {
     const context = self.context;
     const device = &context.device;
+    self.preparePixelTextures(dl) catch |err| return .{ .renderer = err };
     var frame_ctx = self.frame.begin() catch |err| return .{ .renderer = err };
     const upload_slot: usize = @intCast(frame_ctx.upload_slot);
     std.debug.assert(upload_slot < self.frame_uploads.len);
@@ -477,7 +477,8 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
                     .clip_space_transform = region.clip_space_transform,
                     .content_scale = content_scale,
                 };
-                custom.callback(custom.user_data, &public_context) catch |callback_error| {
+                const typed_callback: DrawCallback = @ptrCast(custom.callback);
+                typed_callback(custom.user_data, &public_context) catch |callback_error| {
                     pass.end();
                     self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |err| return .{ .renderer = err };
                     return .{ .callback = callback_error };
@@ -496,8 +497,8 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
                 state.kind = kind;
             }
             const texture = switch (cmd.payload) {
-                .vertex => |value| value.texture,
-                .instance => |value| value.texture,
+                .vertex => |value| self.textureForSource(value.texture),
+                .instance => |value| self.textureForSource(value.texture),
                 .text => null,
                 .custom_draw => unreachable,
             };
@@ -522,6 +523,45 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |err| return .{ .renderer = err };
     self.sweepPixelTextures() catch |err| return .{ .renderer = err };
     return null;
+}
+
+fn preparePixelTextures(self: *Renderer, draw_list: *const DrawList) !void {
+    var layer_iterator = draw_list.layers_dirty.iterator(.{});
+    while (layer_iterator.next()) |layer| {
+        const range = draw_list.layer_ranges[layer];
+        const commands =
+            draw_list.layer_cmds.items[range.start .. range.start + range.len];
+        for (commands) |command| {
+            const source = switch (command.payload) {
+                .vertex => |value| value.texture,
+                .instance => |value| value.texture,
+                .text, .custom_draw => continue,
+            };
+            switch (source) {
+                .atlas, .texture => {},
+                .pixels => |pixels| {
+                    _ = try self.textureFromPixels(
+                        pixels.key,
+                        pixels.data,
+                        pixels.width,
+                        pixels.height,
+                        pixels.format,
+                        pixels.bytes_per_row,
+                        pixels.version,
+                        pixels.force_upload,
+                    );
+                },
+            }
+        }
+    }
+}
+
+fn textureForSource(self: *Renderer, source: DrawList.TextureSource) ?*const Texture {
+    return switch (source) {
+        .atlas => null,
+        .texture => |handle| @ptrCast(@alignCast(handle)),
+        .pixels => |pixels| self.pixel_textures.getPtr(pixels.key).?.texture,
+    };
 }
 
 fn finishFrame(self: *Renderer, frame_ctx: *gpu_impl.Frame.Context, upload: *FrameUploads, content_scale: f32, use_linear_target: bool) !void {

@@ -9,49 +9,45 @@ const Button = knots.component.Button;
 const Spacer = knots.component.Spacer;
 const For = knots.control.For;
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Drops", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Drops", body);
 }
 
-fn body(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
     const arena = app.arena();
 
-    const new_paths = try app.viewport.window.consumeDrops(self.allocator);
+    const new_paths = app.droppedPaths();
     if (new_paths.len > 0) {
-        {
-            errdefer {
-                for (new_paths) |path| self.allocator.free(path);
-                self.allocator.free(new_paths);
-            }
-            try self.demo_state.dropped_paths.appendSlice(self.allocator, new_paths);
+        for (new_paths) |path| {
+            const copy = try self.allocator.dupe(u8, path);
+            errdefer self.allocator.free(copy);
+            try self.demo_state.dropped_paths.append(self.allocator, copy);
         }
-        self.allocator.free(new_paths);
-        app.requestFrame();
+        app.requestRedraw();
     }
 
+    const row = Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) };
+    _ = try row.open(app);
+    if ((try app.interact(Button{
+        .height = .fixed(28),
+        .width = .fixed(80),
+        .style = .{ .color = .@"error", .corner_radius = .sm },
+        .hover_anim = .{},
+        .key = .src(@src()),
+        .justify = .center,
+        .@"align" = .center,
+        .text = .{ .content = "clear" },
+    })).clicked) clear(self, app);
     try app.e(.{
-        Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) },
-        .{
-            Button{
-                .height = .fixed(28),
-                .width = .fixed(80),
-                .style = .{ .color = .@"error", .corner_radius = .sm },
-                .hover_anim = .{},
-                .key = .src(@src()),
-                .onClick = clear,
-                .justify = .center,
-                .@"align" = .center,
-                .text = .{ .content = "clear" },
-            },
-            Text{
-                .content = try std.fmt.allocPrint(arena, "{d} paths", .{self.demo_state.dropped_paths.items.len}),
-                .size = .sm,
-                .color = .dimmed,
-                .key = .src(@src()),
-            },
+        Text{
+            .content = try std.fmt.allocPrint(arena, "{d} paths", .{self.demo_state.dropped_paths.items.len}),
+            .size = .sm,
+            .color = .dimmed,
+            .key = .src(@src()),
         },
     });
+    try row.close(app);
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
@@ -83,7 +79,7 @@ fn body(app: *knots.App) !void {
     });
 }
 
-fn renderItem(app: *knots.App, path: []const u8, i: usize) !void {
+fn renderItem(app: *knots.Frame, path: []const u8, i: usize) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -101,9 +97,8 @@ fn renderItem(app: *knots.App, path: []const u8, i: usize) !void {
     });
 }
 
-fn clear(app: *knots.App) !void {
-    const self: *Self = @fieldParentPtr("app", app);
+fn clear(self: *Self, app: *knots.Frame) void {
     for (self.demo_state.dropped_paths.items) |p| self.allocator.free(p);
     self.demo_state.dropped_paths.clearRetainingCapacity();
-    app.requestFrame();
+    app.requestRedraw();
 }

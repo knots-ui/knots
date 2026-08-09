@@ -1,19 +1,20 @@
 const std = @import("std");
 const knots = @import("knots");
+const renderer = @import("renderer");
 
 pub const Demo = struct {
     name: []const u8,
     description: []const u8,
     source_path: []const u8,
     source: [:0]const u8,
-    render: *const fn (*knots.App) anyerror!void,
+    render: *const fn (*knots.App, *knots.Frame) anyerror!void,
 
     pub const State = struct {
         pub const GpuResources = struct {
-            pipeline: knots.render.gpu.Pipeline,
-            vertex_buffer: knots.render.gpu.Buffer,
-            index_buffer: knots.render.gpu.Buffer,
-            instance_buffer: knots.render.gpu.Buffer,
+            pipeline: renderer.gpu.Pipeline,
+            vertex_buffer: renderer.gpu.Buffer,
+            index_buffer: renderer.gpu.Buffer,
+            instance_buffer: renderer.gpu.Buffer,
 
             pub fn deinit(self: *GpuResources) void {
                 self.instance_buffer.deinit();
@@ -79,7 +80,7 @@ fn demo(
     comptime icon: []const u8,
     comptime name: []const u8,
     comptime description: []const u8,
-    comptime render: *const fn (*knots.App) anyerror!void,
+    comptime render: *const fn (*knots.App, *knots.Frame) anyerror!void,
 ) Demo {
     return .{
         .name = icon ++ " " ++ name,

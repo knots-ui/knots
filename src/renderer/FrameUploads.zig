@@ -2,7 +2,7 @@ const std = @import("std");
 const gpu = @import("gpu");
 const gpu_impl = @import("gpu_impl");
 const pipelines = @import("pipelines.zig");
-const Clip = @import("Clip.zig");
+const Clip = @import("render").Clip;
 const Context = @import("Context.zig");
 
 const INIT_VERTEX_BYTES = 256 * 1024;

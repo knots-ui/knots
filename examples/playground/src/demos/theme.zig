@@ -30,106 +30,95 @@ const entries = blk: {
     };
 };
 
-pub fn render(app: *knots.App) !void {
-    try ui_helpers.panel(app, "Theme", body);
+pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+    try ui_helpers.panel(desktop, app, "Theme", body);
 }
 
-fn body(app: *knots.App) !void {
-    try app.e(.{
-        Rect{
-            .width = .grow(),
-            .height = .fixed(800),
-            .dir = .column,
-            .gap = 12,
-            .key = .src(@src()),
-        },
-        .{
-            Slot(0).render,
-            Slot(1).render,
-            Slot(2).render,
-            Slot(3).render,
-            Slot(4).render,
-            Slot(5).render,
-            Slot(6).render,
-            Slot(7).render,
-            Slot(8).render,
-        },
-    });
+fn body(desktop: *knots.App, app: *knots.Frame) !void {
+    const self = Self.of(desktop);
+    const root = Rect{
+        .width = .grow(),
+        .height = .fixed(800),
+        .dir = .column,
+        .gap = 12,
+        .key = .src(@src()),
+    };
+    _ = try root.open(app);
+    inline for (0..entries.len) |index| {
+        try Slot(index).render(self, app);
+    }
+    try root.close(app);
 }
 
 fn Slot(comptime idx: u32) type {
     return struct {
-        pub fn render(app: *knots.App) !void {
-            const self: *Self = @fieldParentPtr("app", app);
+        pub fn render(self: *Self, app: *knots.Frame) !void {
             const entry = entries[idx];
             const is_active = self.demo_state.theme_idx == idx;
 
+            const cell = Rect{
+                .width = .grow(),
+                .height = .grow(),
+                .key = .str("theme.cell:" ++ entry.name),
+                .dir = .column,
+            };
+            _ = try cell.open(app);
+            const button = Button{
+                .width = .grow(),
+                .height = .grow(),
+                .padding = .init(12, 12, 12, 12),
+                .key = .str("theme.swatch:" ++ entry.name),
+                .style = .{
+                    .color = .{ .color = entry.theme.elevated },
+                    .corner_radius = .md,
+                    .border_width = if (is_active) .all(2) else .all(1),
+                    .border_color = if (is_active)
+                        .{ .color = entry.theme.primary }
+                    else
+                        .{ .color = entry.theme.toned },
+                },
+                .hover_anim = .{},
+            };
+            const response = try button.openResponse(app);
             try app.e(.{
                 Rect{
-                    .width = .grow(),
-                    .height = .grow(),
-                    .key = .str("theme.cell:" ++ entry.name),
+                    .@"align" = .center,
+                    .justify = .space_between,
+                    .key = .str("theme.button.container:" ++ entry.name),
                     .dir = .column,
                 },
                 .{
-                    Button{
+                    Text{
+                        .content = entry.name,
+                        .size = .md,
+                        .color = .{ .color = entry.theme.text },
+                        .selectable = false,
+                        .key = .str("theme.label:" ++ entry.name),
+                    },
+                    Rect{
                         .width = .grow(),
-                        .height = .grow(),
-                        .padding = .init(12, 12, 12, 12),
-                        .key = .str("theme.swatch:" ++ entry.name),
-                        .style = .{
-                            .color = .{ .color = entry.theme.elevated },
-                            .corner_radius = .md,
-                            .border_width = if (is_active) .all(2) else .all(1),
-                            .border_color = if (is_active)
-                                .{ .color = entry.theme.primary }
-                            else
-                                .{ .color = entry.theme.toned },
-                        },
-                        .hover_anim = .{},
-                        .onClick = onClick,
+                        .height = .fixed(20),
+                        .dir = .row,
+                        .gap = 4,
+                        .key = .str("theme.row:" ++ entry.name),
                     },
                     .{
-                        Rect{
-                            .@"align" = .center,
-                            .justify = .space_between,
-                            .key = .str("theme.button.container:" ++ entry.name),
-                            .dir = .column,
-                        },
-                        .{
-                            Text{
-                                .content = entry.name,
-                                .size = .md,
-                                .color = .{ .color = entry.theme.text },
-                                .selectable = false,
-                                .key = .str("theme.label:" ++ entry.name),
-                            },
-                            Rect{
-                                .width = .grow(),
-                                .height = .fixed(20),
-                                .dir = .row,
-                                .gap = 4,
-                                .key = .str("theme.row:" ++ entry.name),
-                            },
-                            .{
-                                chip(entry.theme.primary, "p", entry.name),
-                                chip(entry.theme.secondary, "s", entry.name),
-                                chip(entry.theme.success, "ok", entry.name),
-                                chip(entry.theme.warning, "wa", entry.name),
-                                chip(entry.theme.@"error", "er", entry.name),
-                                chip(entry.theme.muted, "mu", entry.name),
-                            },
-                        },
+                        chip(entry.theme.primary, "p", entry.name),
+                        chip(entry.theme.secondary, "s", entry.name),
+                        chip(entry.theme.success, "ok", entry.name),
+                        chip(entry.theme.warning, "wa", entry.name),
+                        chip(entry.theme.@"error", "er", entry.name),
+                        chip(entry.theme.muted, "mu", entry.name),
                     },
                 },
             });
-        }
-
-        fn onClick(app: *knots.App) !void {
-            const self: *Self = @fieldParentPtr("app", app);
-            self.demo_state.theme_idx = idx;
-            app.viewport.ui.theme = entries[idx].theme;
-            app.requestFrame();
+            try button.close(app);
+            try cell.close(app);
+            if (response.clicked) {
+                self.demo_state.theme_idx = idx;
+                app.ui().theme = entries[idx].theme;
+                app.requestRedraw();
+            }
         }
     };
 }

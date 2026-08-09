@@ -1,23 +1,24 @@
 const std = @import("std");
 const gpu = @import("gpu");
 const impl = @import("window_impl");
+const input = @import("input");
 
-const Key = @import("root.zig").Key;
+const Key = input.Key;
 const Config = @import("root.zig").Config;
-const Input = @import("root.zig").Input;
-const ScrollInput = @import("root.zig").ScrollInput;
-const KeyAction = @import("root.zig").KeyAction;
-const Mods = @import("root.zig").Mods;
-const KeyEvent = @import("root.zig").KeyEvent;
-const Size = @import("root.zig").Size;
+const Input = input.Input;
+const ScrollInput = input.ScrollInput;
+const KeyAction = input.KeyAction;
+const Mods = input.Mods;
+const KeyEvent = input.KeyEvent;
+const Size = input.Size;
 const ResizeEvent = @import("root.zig").ResizeEvent;
 const DisplayMode = @import("root.zig").DisplayMode;
 const FrameHandler = @import("root.zig").FrameHandler;
-const MouseButton = @import("root.zig").MouseButton;
-const mouse_button_count = @import("root.zig").mouse_button_count;
-const MouseButtonState = @import("root.zig").MouseButtonState;
-const key_count = @import("root.zig").key_count;
-const CursorShape = @import("root.zig").CursorShape;
+const MouseButton = input.MouseButton;
+const mouse_button_count = input.mouse_button_count;
+const MouseButtonState = input.MouseButtonState;
+const key_count = input.key_count;
+const CursorShape = input.CursorShape;
 
 backend: impl.Backend,
 allocator: std.mem.Allocator,
@@ -242,7 +243,9 @@ pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {
     self.mods = mods;
     const translated = std.enums.fromInt(Key, key) orelse return;
     const index = @intFromEnum(translated);
-    if (index >= 0 and index < key_count) self.key_down[@intCast(index)] = action != .release;
+    if (index >= 0 and index < key_count) {
+        self.key_down[@intCast(index)] = action != .release;
+    }
     self.key_events.append(self.allocator, .{ .key = translated, .action = action, .mods = mods }) catch |err| {
         self.input_error = err;
         self.markInputChanged();
