@@ -90,7 +90,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(allocator);
     defer allocator.free(available_layers);
-    const validation = builtin.mode == .Debug and hasLayer(available_layers, validation_layers[0]);
+    const validation = builtin.mode == .debug and hasLayer(available_layers, validation_layers[0]);
     const instance = try vkb.createInstance(&.{
         .p_application_info = &.{
             .p_application_name = "knots",
@@ -108,7 +108,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
 
     const vki = vk.InstanceWrapper.load(instance, vkb.dispatch.vkGetInstanceProcAddr.?);
     errdefer vki.destroyInstance(instance, null);
-    const debug_messenger = if (debug_utils and builtin.mode == .Debug)
+    const debug_messenger = if (debug_utils and builtin.mode == .debug)
         try vki.createDebugUtilsMessengerEXT(instance, &.{
             .message_severity = .{ .warning_ext = true, .error_ext = true },
             .message_type = .{ .general_ext = true, .validation_ext = true, .performance_ext = true },
