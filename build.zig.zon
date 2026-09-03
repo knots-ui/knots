@@ -1,7 +1,7 @@
 .{
     .name = .knots,
     .version = "0.1.0",
-    .minimum_zig_version = "0.17.0-dev.1267+300116b02",
+    .minimum_zig_version = "0.17.0-dev.1978+c961124d9",
     .dependencies = .{
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-zig.git#b61e7d3ab52001cb4a596532973bd0755bdbe0a3",
