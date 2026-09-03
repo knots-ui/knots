@@ -90,7 +90,7 @@ pub fn create(surface: *Surface) !Frame {
         in_flight = try device.vkd.createFence(device.device, &.{ .flags = .{ .signaled = true } }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_commands", .{frame_index})) |label|
-            device.setDebugName(.command_buffer, @intFromEnum(cmd[0]), label)
+            device.setDebugName(.command_buffer, @intFromPtr(cmd[0]), label)
         else |_| {}
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_image_available", .{frame_index})) |label|
             device.setDebugName(.semaphore, @intFromEnum(image_available), label)

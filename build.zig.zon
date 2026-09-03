@@ -8,8 +8,8 @@
             .hash = "wgpu-0.0.3-Z1CB1nh2AQCkwNLkZ6DWaoFvK6imy-TmN_-GsMXQfHV0",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#cea0568d1a5bab102ad0b538d11f2fc734949a1e",
-            .hash = "vulkan-0.0.0-r7Ytx-eDAwBGr8v_cNfrpVWcH1em2lMFbhpzQDAVbVK9",
+            .url = "git+https://github.com/Snektron/vulkan-zig#f9688c6f4ebcb930f67044698ddd1322442e714b",
+            .hash = "vulkan-0.0.0-r7Ytx4yGAwDZf0XsT6_L1ol_XUAkyOgOyBqamf8begA0",
         },
         .vulkan_headers = .{
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#8d6039a455a7ecc7d2a592ff97f62db4e59b70bf",
