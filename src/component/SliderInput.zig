@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Element = @import("layout").Element;
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 const ui_mod = @import("ui");
 const Color = ui_mod.Color;
 const Key = ui_mod.Key;

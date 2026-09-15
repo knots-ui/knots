@@ -65,7 +65,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
-    const collapsible = knots.animation.Collapsible{
+    const collapsible = knots.component.Collapsible{
         .key = .str("control_flow.details"),
         .open = self.demo_state.show_details,
     };

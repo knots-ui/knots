@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 const Element = @import("layout").Element;
 const Decoration = @import("ui").Decoration;
 const Style = @import("ui").Style;

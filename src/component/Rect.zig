@@ -1,4 +1,4 @@
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 const Style = @import("ui").Style;
 const Key = @import("ui").Key;
 const Decoration = @import("ui").Decoration;

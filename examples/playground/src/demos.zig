@@ -95,7 +95,7 @@ pub const all = [_]Demo{
     demo("demos/buttons.zig", "\u{e913}", "Buttons", "Button variants, click handlers, disabled state and a menu button.", @import("demos/buttons.zig").render),
     demo("demos/context_menu.zig", "\u{e5d2}", "Context menu", "Right-click wrapper component with custom user-defined actions.", @import("demos/context_menu.zig").render),
     demo("demos/layout.zig", "\u{e8f1}", "Layout", "Sizing, nesting, cross-axis alignment and main-axis distribution.", @import("demos/layout.zig").render),
-    demo("demos/control_flow.zig", "\u{e8d5}", "Control flow", "For, VirtualList and animation.Collapsible composed together.", @import("demos/control_flow.zig").render),
+    demo("demos/control_flow.zig", "\u{e8d5}", "Control flow", "For, VirtualList and component.Collapsible composed together.", @import("demos/control_flow.zig").render),
     demo("demos/form.zig", "\u{e890}", "Form", "Text inputs, radio buttons, tooltip, dropdown and slider wired into a single form.", @import("demos/form.zig").render),
     demo("demos/layer.zig", "\u{e53b}", "Layer", "dir=.layer stacks children on the z-axis.", @import("demos/layer.zig").render),
     demo("demos/overflow.zig", "\u{e5d7}", "Overflow", "visible, hidden, scroll_x and scroll_y side by side.", @import("demos/overflow.zig").render),

@@ -20,3 +20,4 @@ pub const Graph = @import("Graph.zig");
 pub const Dialog = @import("Dialog.zig");
 pub const FloatingWindow = @import("FloatingWindow.zig");
 pub const ContextMenu = @import("ContextMenu.zig").ContextMenu;
+pub const Collapsible = @import("Collapsible.zig");

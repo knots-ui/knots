@@ -1,9 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const knots = @import("knots");
 const gpu = @import("gpu");
 const Perf = @import("Perf.zig");
+const Frame = @import("../Frame.zig");
+const View = @import("../View.zig");
+const component = @import("../component/root.zig");
+const ui = @import("ui");
 
 const Element = @import("layout").Element;
 
@@ -11,12 +14,12 @@ pub const PresentMode = gpu.Context.PresentMode;
 
 const config = @import("debug_config");
 
-const Button = knots.component.Button;
-const Graph = knots.component.Graph;
-const Rect = knots.component.Rect;
-const SelectInput = knots.component.SelectInput;
-const Text = knots.component.Text;
-const Layer = knots.ui.Layer;
+const Button = component.Button;
+const Graph = component.Graph;
+const Rect = component.Rect;
+const SelectInput = component.SelectInput;
+const Text = component.Text;
+const Layer = ui.Layer;
 
 /// Enables the Renderer tab, null hides it. `reconfigure_error` is `anyerror` so
 /// `debug` needs no dependency on a concrete renderer.
@@ -102,23 +105,23 @@ pub fn takePresentModeRequest(self: *const DevTools) ?PresentMode {
     return request;
 }
 
-const trigger_key: knots.ui.Key = .str("debug_devtools_trigger");
-const trigger_button_key: knots.ui.Key = .str("debug_devtools_trigger_button");
-const panel_key: knots.ui.Key = .str("debug_devtools_panel");
-const metrics_tab_key: knots.ui.Key = .str("debug_devtools_metrics_tab");
-const runtime_tab_key: knots.ui.Key = .str("debug_devtools_runtime_tab");
-const renderer_tab_key: knots.ui.Key = .str("debug_devtools_renderer_tab");
-const close_key: knots.ui.Key = .str("debug_devtools_close");
-const apply_key: knots.ui.Key = .str("debug_devtools_apply");
-const present_mode_key: knots.ui.Key = .str("debug_devtools_present_mode");
-const spark_key: knots.ui.Key = .str("debug_devtools_spark");
+const trigger_key: ui.Key = .str("debug_devtools_trigger");
+const trigger_button_key: ui.Key = .str("debug_devtools_trigger_button");
+const panel_key: ui.Key = .str("debug_devtools_panel");
+const metrics_tab_key: ui.Key = .str("debug_devtools_metrics_tab");
+const runtime_tab_key: ui.Key = .str("debug_devtools_runtime_tab");
+const renderer_tab_key: ui.Key = .str("debug_devtools_renderer_tab");
+const close_key: ui.Key = .str("debug_devtools_close");
+const apply_key: ui.Key = .str("debug_devtools_apply");
+const present_mode_key: ui.Key = .str("debug_devtools_present_mode");
+const spark_key: ui.Key = .str("debug_devtools_spark");
 
-fn selectedIdx(app: *knots.Frame, key: knots.ui.Key, fallback: u32) u32 {
+fn selectedIdx(app: *Frame, key: ui.Key, fallback: u32) u32 {
     const s = app.ui().state.get(.select_input, key.hash()) orelse return fallback;
     return s.selected orelse fallback;
 }
 
-pub fn render(self: *const DevTools, app: *knots.Frame, info: HostInfo) anyerror!void {
+pub fn render(self: *const DevTools, app: *Frame, info: HostInfo) anyerror!void {
     self.state.perf.update(.fromNanoseconds(@intCast(info.frame_delta_ns)));
     self.state.runtime.update(app.arenaCapacity());
 
@@ -134,7 +137,7 @@ pub fn render(self: *const DevTools, app: *knots.Frame, info: HostInfo) anyerror
     if (app.ui().leftClicked(close_key.hash(), .within)) self.state.panel_open = false;
 }
 
-fn renderTrigger(_: *const DevTools, app: *knots.Frame, x: f32, y: f32) !void {
+fn renderTrigger(_: *const DevTools, app: *Frame, x: f32, y: f32) !void {
     _ = try app.ui().openRoot(trigger_key, x, y, .{
         .width = .fixed(trigger_size),
         .height = .fixed(trigger_size),
@@ -156,7 +159,7 @@ fn renderTrigger(_: *const DevTools, app: *knots.Frame, x: f32, y: f32) !void {
     app.ui().close();
 }
 
-fn renderPanel(self: *const DevTools, app: *knots.Frame, info: HostInfo, window_w: f32, trigger_y: f32) !void {
+fn renderPanel(self: *const DevTools, app: *Frame, info: HostInfo, window_w: f32, trigger_y: f32) !void {
     const width = @min(panel_w, @max(trigger_size, window_w - margin * 2.0));
     const x = centeredOverlayX(window_w, width);
     const is_landscape = width >= 560.0;
@@ -226,7 +229,7 @@ fn centeredOverlayX(window_w: f32, width: f32) f32 {
     return std.math.clamp((window_w - width) / 2.0, margin, window_w - width - margin);
 }
 
-fn renderTabs(self: *const DevTools, app: *knots.Frame, show_renderer_tab: bool) !void {
+fn renderTabs(self: *const DevTools, app: *Frame, show_renderer_tab: bool) !void {
     _ = try app.ui().open(panel_key.indexed(4), .{
         .width = .grow(),
         .height = .fixed(30),
@@ -275,7 +278,7 @@ fn renderTabs(self: *const DevTools, app: *knots.Frame, show_renderer_tab: bool)
     app.ui().close();
 }
 
-fn renderMetricsTab(self: *const DevTools, app: *knots.Frame, content_w: f32) !void {
+fn renderMetricsTab(self: *const DevTools, app: *Frame, content_w: f32) !void {
     _ = try app.ui().open(panel_key.indexed(40), .{
         .width = .grow(),
         .direction = .column,
@@ -288,7 +291,7 @@ fn renderMetricsTab(self: *const DevTools, app: *knots.Frame, content_w: f32) !v
     app.ui().close();
 }
 
-fn renderRuntimeTab(self: *const DevTools, app: *knots.Frame, info: HostInfo, content_w: f32) !void {
+fn renderRuntimeTab(self: *const DevTools, app: *Frame, info: HostInfo, content_w: f32) !void {
     _ = try app.ui().open(panel_key.indexed(50), .{
         .width = .grow(),
         .direction = .column,
@@ -301,7 +304,7 @@ fn renderRuntimeTab(self: *const DevTools, app: *knots.Frame, info: HostInfo, co
     app.ui().close();
 }
 
-fn renderRuntimeGrid(self: *const DevTools, app: *knots.Frame, info: HostInfo, columns: usize) !void {
+fn renderRuntimeGrid(self: *const DevTools, app: *Frame, info: HostInfo, columns: usize) !void {
     const arena = app.arena();
     const runtime = &self.state.runtime;
 
@@ -319,12 +322,12 @@ fn renderRuntimeGrid(self: *const DevTools, app: *knots.Frame, info: HostInfo, c
     }
 }
 
-fn renderPerformance(self: *const DevTools, app: *knots.Frame, width: f32) !void {
+fn renderPerformance(self: *const DevTools, app: *Frame, width: f32) !void {
     try self.renderPerformanceMetrics(app);
     try self.renderSparkline(app, width);
 }
 
-fn renderPerformanceMetrics(self: *const DevTools, app: *knots.Frame) !void {
+fn renderPerformanceMetrics(self: *const DevTools, app: *Frame) !void {
     const arena = app.arena();
     const mm = self.state.perf.minMaxMs();
 
@@ -336,7 +339,7 @@ fn renderPerformanceMetrics(self: *const DevTools, app: *knots.Frame) !void {
     });
 }
 
-fn renderMetricsGrid(self: *const DevTools, app: *knots.Frame) !void {
+fn renderMetricsGrid(self: *const DevTools, app: *Frame) !void {
     const arena = app.arena();
     const mm = self.state.perf.minMaxMs();
     const stats = app.ui().last_stats;
@@ -355,7 +358,7 @@ fn renderMetricsGrid(self: *const DevTools, app: *knots.Frame) !void {
     });
 }
 
-fn renderSparkline(self: *const DevTools, app: *knots.Frame, width: f32) !void {
+fn renderSparkline(self: *const DevTools, app: *Frame, width: f32) !void {
     _ = width;
     const arena = app.arena();
     const samples = try arena.alloc(f32, self.state.perf.count);
@@ -397,7 +400,7 @@ fn renderSparkline(self: *const DevTools, app: *knots.Frame, width: f32) !void {
     app.ui().close();
 }
 
-fn renderRenderer(self: *const DevTools, app: *knots.Frame, renderer_info: RendererInfo) !void {
+fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInfo) !void {
     if (renderer_info.reconfigure_error != null) self.state.present_mode = renderer_info.present_mode;
 
     var supported_modes = renderer_info.supported_present_modes;
@@ -516,7 +519,7 @@ fn renderRenderer(self: *const DevTools, app: *knots.Frame, renderer_info: Rende
     }
 }
 
-fn renderDiagnostics(_: *const DevTools, app: *knots.Frame) !void {
+fn renderDiagnostics(_: *const DevTools, app: *Frame) !void {
     const arena = app.arena();
     const stats = app.ui().last_stats;
 
@@ -530,7 +533,7 @@ fn renderDiagnostics(_: *const DevTools, app: *knots.Frame) !void {
     });
 }
 
-fn label(app: *knots.Frame, key: knots.ui.Key, content: []const u8) !void {
+fn label(app: *Frame, key: ui.Key, content: []const u8) !void {
     try app.e(Text{
         .key = key,
         .content = content,
@@ -540,11 +543,11 @@ fn label(app: *knots.Frame, key: knots.ui.Key, content: []const u8) !void {
     });
 }
 
-fn metricGrid(app: *knots.Frame, key: knots.ui.Key, items: []const struct { []const u8, []const u8 }) !void {
+fn metricGrid(app: *Frame, key: ui.Key, items: []const struct { []const u8, []const u8 }) !void {
     try metricGridColumns(app, key, 2, items);
 }
 
-fn metricGridColumns(app: *knots.Frame, key: knots.ui.Key, columns: usize, items: []const struct { []const u8, []const u8 }) !void {
+fn metricGridColumns(app: *Frame, key: ui.Key, columns: usize, items: []const struct { []const u8, []const u8 }) !void {
     _ = try app.ui().open(key, .{
         .width = .grow(),
         .direction = .column,
@@ -582,13 +585,13 @@ fn metricGridColumns(app: *knots.Frame, key: knots.ui.Key, columns: usize, items
 }
 
 const MetricCard = struct {
-    key: knots.ui.Key,
-    name_key: knots.ui.Key,
-    value_key: knots.ui.Key,
+    key: ui.Key,
+    name_key: ui.Key,
+    value_key: ui.Key,
     name: []const u8,
     value: []const u8,
 
-    pub fn render(self: *const MetricCard, app: *knots.Frame) anyerror!void {
+    pub fn render(self: *const MetricCard, app: *Frame) anyerror!void {
         try app.e(.{
             Rect{
                 .key = self.key,
@@ -630,7 +633,7 @@ fn testFrameInput() @import("input").FrameInput {
 }
 
 test "render is host-neutral: works with no renderer attached" {
-    var view = try knots.View.init(std.testing.allocator, .{});
+    var view = try View.init(std.testing.allocator, .{});
     defer view.deinit();
 
     var dev_tools = try DevTools.init(std.testing.allocator, .fifo);
@@ -647,7 +650,7 @@ test "render is host-neutral: works with no renderer attached" {
 }
 
 test "render accepts plain renderer state without callbacks" {
-    var view = try knots.View.init(std.testing.allocator, .{});
+    var view = try View.init(std.testing.allocator, .{});
     defer view.deinit();
 
     var dev_tools = try DevTools.init(std.testing.allocator, .fifo);

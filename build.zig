@@ -328,57 +328,8 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const component_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/component/root.zig"),
-        .imports = &.{
-            .{ .name = "layout", .module = layout_mod },
-            .{ .name = "ui", .module = ui_mod },
-            .{ .name = "text", .module = text_mod },
-            .{ .name = "math", .module = math_mod },
-            .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "input", .module = input_mod },
-            .{ .name = "render", .module = render_mod },
-            .{ .name = "renderer", .module = renderer_mod },
-        },
-    });
-
-    const control_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/control/root.zig"),
-        .imports = &.{
-            .{ .name = "ui", .module = ui_mod },
-            .{ .name = "layout", .module = layout_mod },
-        },
-    });
-
-    const animation_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/animation/root.zig"),
-        .imports = &.{
-            .{ .name = "layout", .module = layout_mod },
-            .{ .name = "math", .module = math_mod },
-        },
-    });
-
     var debug_opts = b.addOptions();
     debug_opts.addOption([]const u8, "version", build_zon.version);
-    const debug_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/debug/root.zig"),
-        .imports = &.{
-            .{ .name = "component", .module = component_mod },
-            .{ .name = "ui", .module = ui_mod },
-            .{ .name = "layout", .module = layout_mod },
-            .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "input", .module = input_mod },
-        },
-    });
-    debug_mod.addOptions("debug_config", debug_opts);
 
     const mod = b.addModule("knots", .{
         .target = target,
@@ -388,22 +339,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "render", .module = render_mod },
             .{ .name = "renderer", .module = renderer_mod },
             .{ .name = "ui", .module = ui_mod },
-            .{ .name = "component", .module = component_mod },
-            .{ .name = "control", .module = control_mod },
-            .{ .name = "animation", .module = animation_mod },
             .{ .name = "window", .module = window_mod },
             .{ .name = "input", .module = input_mod },
-            .{ .name = "debug", .module = debug_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "layout", .module = layout_mod },
+            .{ .name = "math", .module = math_mod },
         },
     });
+    mod.addOptions("debug_config", debug_opts);
     if (browser_wasm) mod.addImport("browser_exports", browser_exports_mod.?);
-
-    component_mod.addImport("knots", mod);
-    control_mod.addImport("knots", mod);
-    animation_mod.addImport("knots", mod);
-    debug_mod.addImport("knots", mod);
 
     const mod_tests = b.addTest(.{ .root_module = mod });
     const layout_tests = b.addTest(.{ .root_module = layout_mod });
@@ -544,9 +489,9 @@ fn configureWebTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
     if (!isBrowserWasmTarget(target.result)) return;
     if (!threads) {
         const feature = std.Target.wasm.Feature.atomics;
-        target.query.cpu_features_add.removeFeature(@intFromEnum(feature));
-        target.query.cpu_features_sub.addFeature(@intFromEnum(feature));
-        target.result.cpu.features.removeFeature(@intFromEnum(feature));
+        target.query.cpu_features_add.removeFeature(@backingInt(feature));
+        target.query.cpu_features_sub.addFeature(@backingInt(feature));
+        target.result.cpu.features.removeFeature(@backingInt(feature));
         return;
     }
     inline for (.{
@@ -554,9 +499,9 @@ fn configureWebTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
         std.Target.wasm.Feature.bulk_memory,
         std.Target.wasm.Feature.bulk_memory_opt,
     }) |feature| {
-        target.query.cpu_features_sub.removeFeature(@intFromEnum(feature));
-        target.query.cpu_features_add.addFeature(@intFromEnum(feature));
-        target.result.cpu.features.addFeature(@intFromEnum(feature));
+        target.query.cpu_features_sub.removeFeature(@backingInt(feature));
+        target.query.cpu_features_add.addFeature(@backingInt(feature));
+        target.result.cpu.features.addFeature(@backingInt(feature));
     }
 }
 

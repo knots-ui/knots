@@ -10,7 +10,7 @@ const Size = ui_mod.Size;
 const Key = ui_mod.Key;
 const Decoration = ui_mod.Decoration;
 
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 
 const Element = @import("layout").Element;
 

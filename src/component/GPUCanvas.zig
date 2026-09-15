@@ -1,4 +1,4 @@
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 const gpu = @import("renderer").gpu;
 const Element = @import("layout").Element;
 const Key = @import("ui").Key;

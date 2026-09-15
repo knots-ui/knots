@@ -12,7 +12,7 @@ const UI = ui_mod.UI;
 const Style = ui_mod.Style;
 const animation = ui_mod.animation;
 const Element = @import("layout").Element;
-const Frame = @import("knots").Frame;
+const Frame = @import("../Frame.zig");
 
 const Text = @import("Text.zig");
 
