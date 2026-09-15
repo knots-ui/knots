@@ -1,19 +1,19 @@
 .{
     .name = .knots,
-    .version = "0.1.0",
-    .minimum_zig_version = "0.17.0-dev.1267+300116b02",
+    .version = "0.1.1",
+    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
     .dependencies = .{
         .wgpu = .{
-            .url = "git+https://codeberg.org/shahwali/wgpu-zig.git#b61e7d3ab52001cb4a596532973bd0755bdbe0a3",
-            .hash = "wgpu-0.0.3-Z1CB1nh2AQCkwNLkZ6DWaoFvK6imy-TmN_-GsMXQfHV0",
+            .url = "git+https://codeberg.org/shahwali/wgpu-zig#0cb8b016b5116a7dc801d86c9158fc2242e448a8",
+            .hash = "wgpu-0.0.3-Z1CB1kx3AQDJUVuUSck6cILT-Z8qUvTE_ce5v-s8Elg7",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#cea0568d1a5bab102ad0b538d11f2fc734949a1e",
-            .hash = "vulkan-0.0.0-r7Ytx-eDAwBGr8v_cNfrpVWcH1em2lMFbhpzQDAVbVK9",
+            .url = "git+https://github.com/Snektron/vulkan-zig.git#f9688c6f4ebcb930f67044698ddd1322442e714b",
+            .hash = "vulkan-0.0.0-r7Ytx4yGAwDZf0XsT6_L1ol_XUAkyOgOyBqamf8begA0",
         },
         .vulkan_headers = .{
-            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#8d6039a455a7ecc7d2a592ff97f62db4e59b70bf",
-            .hash = "N-V-__8AAPdJewI-Ti5p45KnTAAngGBG3aURyXJXXTKmPvKW",
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#ee2ec5fd83dafce291024683b50dc89219333076",
+            .hash = "N-V-__8AAHhDhwIquH2tnZwoD6C1Lje5OG4Uvm0CHdU-VGy1",
         },
         .zig_objc = .{
             .url = "git+https://github.com/ali-shahwali/zig-objc.git#ca3bf1015c8afc57267dcdb4dc4b7bdd65b6849b",
@@ -28,8 +28,8 @@
             .hash = "TrueType-1.0.0-Ne-mWFx1AQAk8u43nEzx-W3oPUGaXnuLNFa2jTStHFjj",
         },
         .wayland = .{
-            .url = "git+https://codeberg.org/ifreund/zig-wayland.git?ref=next-zig#25c9b18fad89b26ffdf2ee84ca53cc4358acd6ee",
-            .hash = "wayland-0.7.0-dev-lQa1ku38AQAmWVFZnu2lBo01EM1CE9DyNysqBk5qtqBt",
+            .url = "git+https://codeberg.org/ifreund/zig-wayland?ref=next-zig#5c01e66af4bd2b3672250c31f1a8036a720eb078",
+            .hash = "wayland-0.7.0-dev-lQa1krf8AQDEncPPkLgIo8fq4kXqSRsGdG1haA2hPj_w",
         },
         .js_bridge = .{ .path = "lib/js-bridge" },
     },

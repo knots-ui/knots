@@ -90,16 +90,16 @@ pub fn create(surface: *Surface) !Frame {
         in_flight = try device.vkd.createFence(device.device, &.{ .flags = .{ .signaled = true } }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_commands", .{frame_index})) |label|
-            device.setDebugName(.command_buffer, @intFromEnum(cmd[0]), label)
+            device.setDebugName(.command_buffer, @intFromPtr(cmd[0]), label)
         else |_| {}
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_image_available", .{frame_index})) |label|
-            device.setDebugName(.semaphore, @intFromEnum(image_available), label)
+            device.setDebugName(.semaphore, @backingInt(image_available), label)
         else |_| {}
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_render_finished", .{frame_index})) |label|
-            device.setDebugName(.semaphore, @intFromEnum(render_finished), label)
+            device.setDebugName(.semaphore, @backingInt(render_finished), label)
         else |_| {}
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_in_flight", .{frame_index})) |label|
-            device.setDebugName(.fence, @intFromEnum(in_flight), label)
+            device.setDebugName(.fence, @backingInt(in_flight), label)
         else |_| {}
 
         f.* = .{
@@ -386,7 +386,7 @@ fn createCommandPools(allocator: std.mem.Allocator, device: *Device, count: usiz
         }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_command_pool", .{i})) |label|
-            device.setDebugName(.command_pool, @intFromEnum(pool.*), label)
+            device.setDebugName(.command_pool, @backingInt(pool.*), label)
         else |_| {}
         pools_created += 1;
     }

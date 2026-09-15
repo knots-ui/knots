@@ -90,7 +90,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(allocator);
     defer allocator.free(available_layers);
-    const validation = builtin.mode == .Debug and hasLayer(available_layers, validation_layers[0]);
+    const validation = builtin.mode == .debug and hasLayer(available_layers, validation_layers[0]);
     const instance = try vkb.createInstance(&.{
         .p_application_info = &.{
             .p_application_name = "knots",
@@ -108,7 +108,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
 
     const vki = vk.InstanceWrapper.load(instance, vkb.dispatch.vkGetInstanceProcAddr.?);
     errdefer vki.destroyInstance(instance, null);
-    const debug_messenger = if (debug_utils and builtin.mode == .Debug)
+    const debug_messenger = if (debug_utils and builtin.mode == .debug)
         try vki.createDebugUtilsMessengerEXT(instance, &.{
             .message_severity = .{ .warning_ext = true, .error_ext = true },
             .message_type = .{ .general_ext = true, .validation_ext = true, .performance_ext = true },
@@ -198,8 +198,8 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .upload_barriers_before = .empty,
         .upload_barriers_after = .empty,
     };
-    result.setDebugName(.pipeline_cache, @intFromEnum(pipeline_cache), "pipeline_cache");
-    for (result.descriptor_pools.items) |entry| result.setDebugName(.descriptor_pool, @intFromEnum(entry.pool), "descriptor_pool");
+    result.setDebugName(.pipeline_cache, @backingInt(pipeline_cache), "pipeline_cache");
+    for (result.descriptor_pools.items) |entry| result.setDebugName(.descriptor_pool, @backingInt(entry.pool), "descriptor_pool");
     return result;
 }
 
@@ -405,7 +405,7 @@ pub fn allocateDescriptorSetWithPool(self: *Device, layout: vk.DescriptorSetLayo
     }
 
     const new_pool = try createDescriptorPool(self.vkd, self.device);
-    self.setDebugName(.descriptor_pool, @intFromEnum(new_pool), "descriptor_pool");
+    self.setDebugName(.descriptor_pool, @backingInt(new_pool), "descriptor_pool");
     try self.descriptor_pools.append(self.allocator, .{ .pool = new_pool });
     var set: [1]vk.DescriptorSet = undefined;
     try self.vkd.allocateDescriptorSets(self.device, &.{
