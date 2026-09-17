@@ -1,24 +1,25 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Canvas = knots.component.Canvas;
-const SelectInput = knots.component.SelectInput;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Canvas = ui.component.Canvas;
+const SelectInput = ui.component.SelectInput;
+const Spacer = ui.component.Spacer;
 
 const Effect = enum { gradient, clock, bars, polygon };
 
 const canvas_width = 720;
 const canvas_height = 480;
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Canvas", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
 
     const controls = Rect{ .width = .fixed(220), .key = .src(@src()) };
@@ -37,7 +38,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
         .cmds = &commands,
         .allocator = app.arena(),
     };
-    const effect: Effect = @enumFromInt(self.demo_state.canvas_effect);
+    const effect: Effect = @fromBackingInt(@intCast(self.demo_state.canvas_effect));
     switch (effect) {
         .gradient => try drawGradient(app, &painter),
         .clock => try drawClock(app, &painter),
@@ -61,7 +62,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     });
 }
 
-fn drawGradient(app: *knots.Frame, painter: *Canvas.Painter) !void {
+fn drawGradient(app: *ui.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
     const t = @as(f32, @floatFromInt(@mod(app.input().now_ms, 10000))) / 10000.0;
@@ -100,7 +101,7 @@ fn drawGradient(app: *knots.Frame, painter: *Canvas.Painter) !void {
     app.requestRedraw();
 }
 
-fn drawClock(app: *knots.Frame, painter: *Canvas.Painter) !void {
+fn drawClock(app: *ui.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
     const cx = w / 2;

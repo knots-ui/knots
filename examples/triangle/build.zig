@@ -11,7 +11,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/root.zig"),
-        .imports = &.{.{ .name = "knots", .module = knots.module("knots") }},
+        .imports = &.{
+            .{ .name = "knots", .module = knots.module("knots") },
+            .{ .name = "knots-ui", .module = knots.module("ui") },
+        },
     });
 
     const exe = b.addExecutable(.{

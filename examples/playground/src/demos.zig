@@ -1,5 +1,6 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const renderer = @import("renderer");
 
 pub const Demo = struct {
@@ -7,7 +8,7 @@ pub const Demo = struct {
     description: []const u8,
     source_path: []const u8,
     source: [:0]const u8,
-    render: *const fn (*knots.App, *knots.Frame) anyerror!void,
+    render: *const fn (*knots.App, *ui.Frame) anyerror!void,
 
     pub const State = struct {
         pub const GpuResources = struct {
@@ -35,7 +36,7 @@ pub const Demo = struct {
         form_notifications_enabled: bool = true,
         form_delivery_cadence: u32 = 1,
         form_volume: f32 = 0.7,
-        form_color: knots.ui.Color = knots.ui.Color.hex("#4F8CFFFF") catch unreachable,
+        form_color: ui.Color = ui.Color.hex("#4F8CFFFF") catch unreachable,
         form_confirm_open: bool = false,
         canvas_effect: u32 = 0,
         gpu_resources: ?GpuResources = null,
@@ -80,7 +81,7 @@ fn demo(
     comptime icon: []const u8,
     comptime name: []const u8,
     comptime description: []const u8,
-    comptime render: *const fn (*knots.App, *knots.Frame) anyerror!void,
+    comptime render: *const fn (*knots.App, *ui.Frame) anyerror!void,
 ) Demo {
     return .{
         .name = icon ++ " " ++ name,
@@ -104,7 +105,7 @@ pub const all = [_]Demo{
     demo("demos/gpu_shader.zig", "\u{e1b1}", "GPU geometry", "Knot Laboratory: thousands of indexed, instanced facets forming an interactive torus knot.", @import("demos/gpu_shader.zig").render),
     demo("demos/async_dispatch.zig", "\u{e627}", "Async dispatch", "Schedule background work via app.dispatch and react to wakeups.", @import("demos/async_dispatch.zig").render),
     demo("demos/windows.zig", "\u{e30c}", "Windows", "Floating windows in the current viewport and secondary native windows.", @import("demos/windows.zig").render),
-    demo("demos/drops.zig", "\u{e2c6}", "Drops", "Drag files onto the window and consume them via app.viewport.window.consumeDrops.", @import("demos/drops.zig").render),
+    demo("demos/drops.zig", "\u{e2c6}", "Drops", "Drag files onto the window and consume the paths from the frame input.", @import("demos/drops.zig").render),
     demo("demos/text_wrap.zig", "\u{e25b}", "Text wrap", "Text and TextInput with wrap=true.", @import("demos/text_wrap.zig").render),
     demo("demos/theme.zig", "\u{e40a}", "Theme", "Switch UI theme at runtime between dark, light and the playground's custom theme.", @import("demos/theme.zig").render),
 };

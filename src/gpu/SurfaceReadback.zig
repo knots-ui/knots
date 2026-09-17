@@ -1,5 +1,5 @@
 const std = @import("std");
-const Texture = @import("Texture.zig");
+const Texture = @import("render_types").Texture;
 
 const SurfaceReadback = @This();
 

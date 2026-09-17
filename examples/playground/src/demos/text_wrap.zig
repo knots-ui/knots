@@ -1,11 +1,12 @@
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const TextArea = knots.component.TextArea;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const TextArea = ui.component.TextArea;
+const Spacer = ui.component.Spacer;
 
 const lorem =
     "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. " ++
@@ -19,11 +20,11 @@ const with_newlines =
     "Empty line above. The greedy wrapper breaks on spaces and hard newlines, " ++
     "and falls back to mid-word breaks for runs longer than the wrap width.";
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Text wrap", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const root = Rect{ .width = .grow(), .dir = .column, .gap = 16, .key = .src(@src()) };
     _ = try root.open(app);
@@ -34,7 +35,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     try root.close(app);
 }
 
-fn caption(app: *knots.Frame, comptime label: []const u8, key: knots.ui.Key) !void {
+fn caption(app: *ui.Frame, comptime label: []const u8, key: ui.Key) !void {
     try app.e(Text{
         .content = label,
         .size = .xs,
@@ -43,7 +44,7 @@ fn caption(app: *knots.Frame, comptime label: []const u8, key: knots.ui.Key) !vo
     });
 }
 
-fn fixedWidthSection(app: *knots.Frame) !void {
+fn fixedWidthSection(app: *ui.Frame) !void {
     try caption(app, "fixed(220) container, text wraps inside a narrow column", .src(@src()));
     try app.e(.{
         Rect{
@@ -61,7 +62,7 @@ fn fixedWidthSection(app: *knots.Frame) !void {
     });
 }
 
-fn growWidthSection(app: *knots.Frame) !void {
+fn growWidthSection(app: *ui.Frame) !void {
     try caption(app, "grow() in a row, text reflows when the window resizes", .src(@src()));
     try app.e(.{
         Rect{ .width = .grow(), .gap = 12, .key = .src(@src()) },
@@ -95,7 +96,7 @@ fn growWidthSection(app: *knots.Frame) !void {
     });
 }
 
-fn growParagraph(app: *knots.Frame) !void {
+fn growParagraph(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -112,7 +113,7 @@ fn growParagraph(app: *knots.Frame) !void {
     });
 }
 
-fn newlinesSection(app: *knots.Frame) !void {
+fn newlinesSection(app: *ui.Frame) !void {
     try caption(app, "hard \\n breaks combined with soft wrap", .src(@src()));
     try app.e(.{
         Rect{
@@ -130,7 +131,7 @@ fn newlinesSection(app: *knots.Frame) !void {
     });
 }
 
-fn multiLineInputSection(self: *Self, app: *knots.Frame) !void {
+fn multiLineInputSection(self: *Self, app: *ui.Frame) !void {
     try caption(app, "TextArea: multi-line, enter inserts a newline, arrow up/down navigate lines; drag the bottom edge to resize height (persists)", .src(@src()));
     try app.e(TextArea{
         .key = .src(@src()),

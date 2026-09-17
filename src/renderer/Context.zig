@@ -8,7 +8,8 @@ const Texture = @import("Texture.zig");
 const Context = @This();
 
 allocator: std.mem.Allocator,
-device: gpu_impl.Device,
+device: *gpu_impl.Device,
+owns_device: bool,
 depth_buffer: bool,
 pipeline: gpu_impl.Pipeline,
 instance_pipeline: gpu_impl.Pipeline,
@@ -21,11 +22,22 @@ atlas: *Texture,
 unit_index_buf: gpu_impl.Buffer,
 
 pub fn create(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandle, depth_buffer: bool) !*Context {
+    const device = try allocator.create(gpu_impl.Device);
+    errdefer allocator.destroy(device);
+    device.* = try .init(allocator, window_handle);
+    errdefer device.deinit();
+    const self = try createForDevice(allocator, device, depth_buffer);
+    self.owns_device = true;
+    return self;
+}
+
+/// The host retains device ownership. It must outlive this context and painters.
+/// Pipelines use the device's configured color format and the requested depth mode.
+pub fn createForDevice(allocator: std.mem.Allocator, device: *gpu_impl.Device, depth_buffer: bool) !*Context {
     const self = try allocator.create(Context);
     errdefer allocator.destroy(self);
-
-    self.device = try .init(allocator, window_handle);
-    errdefer self.device.deinit();
+    self.device = device;
+    self.owns_device = false;
     self.depth_buffer = depth_buffer;
 
     const srgb_surface = self.device.surfaceIsSrgb();
@@ -60,7 +72,7 @@ pub fn create(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHan
         null;
     errdefer if (self.linear_sampler) |*s| s.deinit();
 
-    self.atlas = try Texture.create(allocator, &self.device, &self.pipeline, 1, 1, .r8, .nearest, "atlas_texture");
+    self.atlas = try Texture.create(allocator, self.device, &self.pipeline, 1, 1, .r8, .nearest, "atlas_texture");
     errdefer self.atlas.destroyAfterWait();
     const pixel = [_]u8{0};
     try self.atlas.write(&pixel, 1, 1, null);
@@ -104,10 +116,13 @@ pub fn destroy(self: *Context) void {
     self.text_pipeline.deinit();
     self.instance_pipeline.deinit();
     self.pipeline.deinit();
-    self.device.deinit();
+    if (self.owns_device) {
+        self.device.deinit();
+        self.allocator.destroy(self.device);
+    }
     self.allocator.destroy(self);
 }
 
 pub fn createTexture(self: *Context, width: u32, height: u32, format: gpu.Texture.Format) !*Texture {
-    return Texture.create(self.allocator, &self.device, &self.pipeline, width, height, format, .linear, "user_texture");
+    return Texture.create(self.allocator, self.device, &self.pipeline, width, height, format, .linear, "user_texture");
 }

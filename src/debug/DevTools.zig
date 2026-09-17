@@ -3,10 +3,10 @@ const builtin = @import("builtin");
 
 const gpu = @import("gpu");
 const Perf = @import("Perf.zig");
-const Frame = @import("../Frame.zig");
-const View = @import("../View.zig");
-const component = @import("../component/root.zig");
 const ui = @import("ui");
+const Frame = ui.Frame;
+const Context = ui.Context;
+const component = @import("ui").component;
 
 const Element = @import("layout").Element;
 
@@ -633,7 +633,7 @@ fn testFrameInput() @import("input").FrameInput {
 }
 
 test "render is host-neutral: works with no renderer attached" {
-    var view = try View.init(std.testing.allocator, .{});
+    var view = try Context.init(std.testing.allocator, .{});
     defer view.deinit();
 
     var dev_tools = try DevTools.init(std.testing.allocator, .fifo);
@@ -650,7 +650,7 @@ test "render is host-neutral: works with no renderer attached" {
 }
 
 test "render accepts plain renderer state without callbacks" {
-    var view = try View.init(std.testing.allocator, .{});
+    var view = try Context.init(std.testing.allocator, .{});
     defer view.deinit();
 
     var dev_tools = try DevTools.init(std.testing.allocator, .fifo);

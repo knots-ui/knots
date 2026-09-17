@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "knots", .module = knots.module("knots") },
+            .{ .name = "knots-ui", .module = knots.module("ui") },
             .{ .name = "renderer", .module = knots.module("renderer") },
         },
     });

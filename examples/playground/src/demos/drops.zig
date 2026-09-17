@@ -1,19 +1,20 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
-const For = knots.control.For;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
+const For = ui.control.For;
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Drops", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const arena = app.arena();
 
@@ -79,25 +80,25 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     });
 }
 
-fn renderItem(app: *knots.Frame, path: []const u8, i: usize) !void {
+fn renderItem(app: *ui.Frame, path: []const u8, i: usize) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
             .height = .fixed(24),
             .padding = .init(0, 8, 0, 8),
             .@"align" = .center,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
             .style = .{ .color = .elevated, .corner_radius = .sm },
         },
         .{Text{
             .content = path,
             .size = .sm,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
         }},
     });
 }
 
-fn clear(self: *Self, app: *knots.Frame) void {
+fn clear(self: *Self, app: *ui.Frame) void {
     for (self.demo_state.dropped_paths.items) |p| self.allocator.free(p);
     self.demo_state.dropped_paths.clearRetainingCapacity();
     app.requestRedraw();

@@ -110,3 +110,10 @@ fn requiredBytes(width: u32, height: u32, bpp: usize, bytes_per_row: ?u32) !usiz
     }
     return std.math.mul(usize, row_bytes, @as(usize, height));
 }
+
+/// Borrowed handle; the texture must outlive submitted GPU work.
+pub fn handle(self: *const Texture) @import("render").TextureHandle {
+    std.debug.assert(self.width > 0);
+    std.debug.assert(self.height > 0);
+    return .{ .extension = .knots, .pointer = self };
+}

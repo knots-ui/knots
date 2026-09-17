@@ -1,13 +1,14 @@
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Theme = knots.ui.Theme;
+const Theme = ui.Theme;
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
 
 const Entry = struct {
     name: []const u8,
@@ -30,11 +31,11 @@ const entries = blk: {
     };
 };
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Theme", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const root = Rect{
         .width = .grow(),
@@ -52,7 +53,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
 
 fn Slot(comptime idx: u32) type {
     return struct {
-        pub fn render(self: *Self, app: *knots.Frame) !void {
+        pub fn render(self: *Self, app: *ui.Frame) !void {
             const entry = entries[idx];
             const is_active = self.demo_state.theme_idx == idx;
 
@@ -123,7 +124,7 @@ fn Slot(comptime idx: u32) type {
     };
 }
 
-fn chip(color: knots.ui.Color, comptime tag: []const u8, comptime theme_name: []const u8) Rect {
+fn chip(color: ui.Color, comptime tag: []const u8, comptime theme_name: []const u8) Rect {
     return Rect{
         .width = .fixed(20),
         .height = .fixed(20),

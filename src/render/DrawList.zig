@@ -1,81 +1,18 @@
-//! Draw stream UI tessellation writes into. `Packet` is its portable projection.
+//! Mutable tessellation storage. `Packet` is its immutable, ordered projection.
 
 const std = @import("std");
-const gpu = @import("gpu");
+const types = @import("render_types");
 const math = @import("math");
 const Clip = @import("Clip.zig");
 const Packet = @import("Packet.zig");
+const GlyphAtlas = @import("GlyphAtlas.zig");
 
 pub const MAX_LAYERS = 256;
 
-/// Erased so `ui` builds draw lists without a GPU backend; the renderer casts back.
-pub const TextureHandle = opaque {};
-
-/// `draw_context` is the renderer's own context (`renderer.gpu.DrawContext` for
-/// Knots'), erased like `TextureHandle` and restored before the call.
-pub const CustomDrawCallback = *const fn (
-    user_data: ?*anyopaque,
-    draw_context: *anyopaque,
-) anyerror!void;
-
-pub const TextureSource = union(enum) {
-    atlas,
-    texture: *const TextureHandle,
-    pixels: Pixels,
-
-    pub const Pixels = struct {
-        key: u64,
-        data: []const u8,
-        width: u32,
-        height: u32,
-        format: gpu.Texture.Format,
-        bytes_per_row: ?u32,
-        version: u64,
-        force_upload: bool,
-    };
-};
-
-pub const Command = struct {
-    clip: Clip.State,
-    payload: Payload,
-
-    pub const Kind = enum {
-        vertex,
-        instance,
-        text,
-        custom_draw,
-    };
-
-    pub const Payload = union(Kind) {
-        vertex: Indexed,
-        instance: Instanced,
-        text: Text,
-        custom_draw: CustomDraw,
-    };
-
-    pub const Indexed = struct {
-        texture: TextureSource,
-        offset: u32,
-        count: u32,
-    };
-
-    pub const Instanced = struct {
-        texture: TextureSource,
-        offset: u32,
-        count: u32,
-    };
-
-    pub const Text = struct {
-        offset: u32,
-        count: u32,
-    };
-
-    pub const CustomDraw = struct {
-        callback: CustomDrawCallback,
-        user_data: ?*anyopaque,
-        bounds: math.Rect,
-    };
-};
+pub const Command = @import("Command.zig").Command;
+pub const TextureHandle = @import("Command.zig").TextureHandle;
+pub const TextureSource = @import("Command.zig").TextureSource;
+pub const CustomDrawCallback = @import("Command.zig").CustomDrawCallback;
 
 const LayerRange = struct { start: u32 = 0, len: u32 = 0 };
 
@@ -84,10 +21,10 @@ pub const TextBatch = struct {
 };
 
 allocator: std.mem.Allocator,
-vertices: std.ArrayList(gpu.Vertex),
+vertices: std.ArrayList(types.Vertex),
 indices: std.ArrayList(u32),
-instances: std.ArrayList(gpu.Instance),
-text_instances: std.ArrayList(gpu.SlugInstance),
+instances: std.ArrayList(types.Instance),
+text_instances: std.ArrayList(types.SlugInstance),
 clip_nodes: std.ArrayList(Clip.Node),
 layer_cmds: std.ArrayList(Command),
 layer_ranges: [MAX_LAYERS]LayerRange,
@@ -139,19 +76,18 @@ pub fn isEmpty(self: *const DrawList) bool {
     return self.layer_cmds.items.len == 0;
 }
 
-/// Project the finalized desktop draw stream into the portable packet subset.
-///
-/// Pixel images and custom GPU draws intentionally remain desktop-only. The
-/// caller retains `portable_commands` so every returned slice is borrowed.
+/// Flatten bounded layers into draw order without dropping backend capabilities.
+/// The caller retains `portable_commands`; all returned slices are borrowed.
 pub fn buildPacket(
     self: *const DrawList,
-    portable_commands: *std.ArrayList(Packet.Command),
-    glyph_update: ?Packet.GlyphUpdate,
+    portable_commands: *std.ArrayList(Command),
+    glyph_atlas: ?GlyphAtlas,
 ) !Packet {
+    if (self.layer_cmds.items.len > Packet.commands_max) return error.TooManyDrawCommands;
     portable_commands.clearRetainingCapacity();
     try portable_commands.ensureTotalCapacity(self.allocator, self.layer_cmds.items.len);
 
-    var layer: usize = 0;
+    var layer: u32 = 0;
     while (layer < MAX_LAYERS) : (layer += 1) {
         if (!self.layers_dirty.isSet(layer)) continue;
         const range = self.layer_ranges[layer];
@@ -160,36 +96,13 @@ pub fn buildPacket(
         if (end > self.layer_cmds.items.len) return error.CorruptDrawStream;
 
         for (self.layer_cmds.items[start..end]) |command| {
-            const payload: Packet.Command.Payload = switch (command.payload) {
-                .vertex => |draw| blk: {
-                    if (draw.texture != .atlas) return error.ImageUnsupported;
-                    try validateRange(draw.offset, draw.count, self.indices.items.len);
-                    break :blk .{ .primitive = .{
-                        .offset = draw.offset,
-                        .count = draw.count,
-                    } };
-                },
-                .instance => |draw| blk: {
-                    if (draw.texture != .atlas) return error.ImageUnsupported;
-                    try validateRange(draw.offset, draw.count, self.instances.items.len);
-                    break :blk .{ .instances = .{
-                        .offset = draw.offset,
-                        .count = draw.count,
-                    } };
-                },
-                .text => |draw| blk: {
-                    try validateRange(draw.offset, draw.count, self.text_instances.items.len);
-                    break :blk .{ .text = .{
-                        .offset = draw.offset,
-                        .count = draw.count,
-                    } };
-                },
-                .custom_draw => return error.GPUCanvasUnsupported,
-            };
-            portable_commands.appendAssumeCapacity(.{
-                .clip = command.clip,
-                .payload = payload,
-            });
+            switch (command.payload) {
+                .vertex => |draw| try validateRange(draw.offset, draw.count, self.indices.items.len),
+                .instance => |draw| try validateRange(draw.offset, draw.count, self.instances.items.len),
+                .text => |draw| try validateRange(draw.offset, draw.count, self.text_instances.items.len),
+                .custom_draw => {},
+            }
+            portable_commands.appendAssumeCapacity(command);
         }
     }
 
@@ -200,7 +113,7 @@ pub fn buildPacket(
         self.instances.items,
         self.text_instances.items,
         self.clip_nodes.items,
-        glyph_update,
+        glyph_atlas,
     );
 }
 
@@ -232,13 +145,14 @@ fn textureSourceEql(a: TextureSource, b: TextureSource) bool {
     if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
     return switch (a) {
         .atlas => true,
-        .texture => |texture| texture == b.texture,
+        .texture => |texture| std.meta.eql(texture, b.texture),
         // Pixel commands stay separate so each command retains its exact update metadata.
         .pixels => false,
     };
 }
 
 fn beginCommand(self: *DrawList, payload: Command.Payload, clip: Clip.State) !void {
+    if (self.layer_cmds.items.len == Packet.commands_max) return error.TooManyDrawCommands;
     const range = &self.layer_ranges[self.current_layer];
     if (!self.layers_dirty.isSet(self.current_layer)) {
         range.start = @intCast(self.layer_cmds.items.len);
@@ -256,7 +170,7 @@ fn lastCommand(self: *DrawList) *Command {
 
 pub fn push(
     self: *DrawList,
-    vertices: []const gpu.Vertex,
+    vertices: []const types.Vertex,
     indices: []const u32,
     texture: TextureSource,
     clip: Clip.State,
@@ -285,7 +199,7 @@ pub fn push(
 
 pub fn pushInstances(
     self: *DrawList,
-    insts: []const gpu.Instance,
+    insts: []const types.Instance,
     texture: TextureSource,
     clip: Clip.State,
 ) !void {
@@ -310,14 +224,13 @@ pub fn pushInstances(
 
 pub fn pushCustomDraw(
     self: *DrawList,
-    callback: CustomDrawCallback,
-    user_data: ?*anyopaque,
+    paint: *const @import("Command.zig").PaintCallback,
     bounds: math.Rect,
     clip: Clip.State,
 ) !void {
+    paint.validate();
     try self.beginCommand(.{ .custom_draw = .{
-        .callback = callback,
-        .user_data = user_data,
+        .paint = paint.*,
         .bounds = bounds,
     } }, clip);
 }
@@ -328,7 +241,7 @@ pub fn beginTextBatch(self: *DrawList, glyph_count_max: usize, clip: Clip.State)
     return .{ .clip = clip };
 }
 
-pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: gpu.SlugInstance) !void {
+pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: types.SlugInstance) !void {
     std.debug.assert(self.text_instances.items.len < self.text_instances.capacity);
     std.debug.assert(instance.origin_size[2] > 0);
     if (!self.lastCmdMatches(.text, .atlas, batch.clip)) {
@@ -344,13 +257,13 @@ pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: gpu.SlugIns
     self.lastCommand().payload.text.count += 1;
 }
 
-test "packet preserves layer order and rejects desktop-only commands" {
+test "packet preserves layer order, images, and custom callbacks" {
     var draw_list = DrawList.init(std.testing.allocator);
     defer draw_list.deinit();
-    var packet_commands: std.ArrayList(Packet.Command) = .empty;
+    var packet_commands: std.ArrayList(Command) = .empty;
     defer packet_commands.deinit(std.testing.allocator);
 
-    const vertex: gpu.Vertex = std.mem.zeroes(gpu.Vertex);
+    const vertex: types.Vertex = std.mem.zeroes(types.Vertex);
     draw_list.setLayer(2);
     try draw_list.push(&.{vertex}, &.{0}, .atlas, .{ .node = 2 });
     draw_list.setLayer(0);
@@ -370,12 +283,10 @@ test "packet preserves layer order and rejects desktop-only commands" {
     );
 
     draw_list.reset();
-    const texture: *const TextureHandle = @ptrFromInt(0x1000);
+    const texture: TextureHandle = .{ .extension = .knots, .pointer = @ptrFromInt(0x1000) };
     try draw_list.push(&.{vertex}, &.{0}, .{ .texture = texture }, .{});
-    try std.testing.expectError(
-        error.ImageUnsupported,
-        draw_list.buildPacket(&packet_commands, null),
-    );
+    const image_packet = try draw_list.buildPacket(&packet_commands, null);
+    try std.testing.expectEqualDeep(draw_list.layer_cmds.items[0], image_packet.commands()[0]);
 
     draw_list.reset();
     try draw_list.push(&.{vertex}, &.{0}, .{ .pixels = .{
@@ -388,17 +299,13 @@ test "packet preserves layer order and rejects desktop-only commands" {
         .version = 0,
         .force_upload = true,
     } }, .{});
-    try std.testing.expectError(
-        error.ImageUnsupported,
-        draw_list.buildPacket(&packet_commands, null),
-    );
+    const pixels_packet = try draw_list.buildPacket(&packet_commands, null);
+    try std.testing.expectEqualDeep(draw_list.layer_cmds.items[0], pixels_packet.commands()[0]);
 
     draw_list.reset();
-    try draw_list.pushCustomDraw(testDrawCallback, null, .zero, .{});
-    try std.testing.expectError(
-        error.GPUCanvasUnsupported,
-        draw_list.buildPacket(&packet_commands, null),
-    );
+    try draw_list.pushCustomDraw(&.{ .extension = .knots, .callback = testDrawCallback, .user_data = null }, .zero, .{});
+    const custom_packet = try draw_list.buildPacket(&packet_commands, null);
+    try std.testing.expectEqual(testDrawCallback, custom_packet.commands()[0].payload.custom_draw.paint.callback);
 }
 
 fn testDrawCallback(_: ?*anyopaque, _: *anyopaque) !void {}

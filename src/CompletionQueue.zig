@@ -1,5 +1,5 @@
 const std = @import("std");
-const Frame = @import("Frame.zig");
+const Frame = @import("ui").Frame;
 const ReturnType = @import("util.zig").ReturnType;
 const Viewport = @import("Viewport.zig");
 
@@ -331,7 +331,7 @@ test "callback error still destroys every received completion" {
             .destroy = TestContext.destroy,
         },
         .{
-            .viewport_id = @enumFromInt(1),
+            .viewport_id = @fromBackingInt(@intCast(1)),
             .ptr = &contexts[1],
             .callback = callback,
             .destroy = TestContext.destroy,
@@ -391,7 +391,7 @@ test "dispatch wakes after enqueue and preserves the origin viewport" {
     var queue = try CompletionQueue.init(std.testing.allocator, 1);
     defer queue.deinit(std.testing.allocator, std.testing.io);
     var wake_context: WakeContext = .{};
-    const origin: Viewport.Id = @enumFromInt(7);
+    const origin: Viewport.Id = @fromBackingInt(@intCast(7));
     try queue.dispatch(
         Work,
         std.testing.io,
@@ -437,7 +437,7 @@ test "dropping a closed viewport's completions releases them" {
         .{ .destroyed_count = &destroyed_count },
     };
 
-    const closing: Viewport.Id = @enumFromInt(3);
+    const closing: Viewport.Id = @fromBackingInt(@intCast(3));
     var queue: CompletionQueue = undefined;
     queue.allocator = std.testing.allocator;
     queue.pending = .empty;

@@ -1,14 +1,15 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const code_viewer = @import("code_viewer.zig");
 const demos = @import("demos.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
-const Canvas = knots.component.Canvas;
-const Color = knots.ui.Color;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
+const Canvas = ui.component.Canvas;
+const Color = ui.Color;
 
 io: std.Io,
 allocator: std.mem.Allocator,
@@ -37,12 +38,12 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
     });
     errdefer app.deinit();
 
-    try app.mainView().ui().font.addFace(
+    try app.main_viewport.ui_ctx.ui.font.addFace(
         "jetbrains-mono",
         @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"),
     );
 
-    var debug_devtools = try knots.debug.DevTools.init(allocator, app.presentMode());
+    var debug_devtools = try knots.debug.DevTools.init(allocator, app.main_viewport.renderer.cfg.present_mode);
     errdefer debug_devtools.deinit(allocator);
 
     return Self{
@@ -68,9 +69,9 @@ pub fn start(self: *Self) !void {
     try self.app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
-    const self = of(app);
-    const size = app.logicalExtent();
+fn frameCb(view: *knots.View, frame: *ui.Frame) !void {
+    const self = of(view.app);
+    const size = frame.input().logical_extent;
 
     const root = Rect{
         .width = .fixed(@floatFromInt(size.width)),
@@ -81,8 +82,13 @@ fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
         .style = .{ .color = .bg, .corner_radius = .none },
     };
     _ = try root.open(frame);
+
     try renderHeader(frame);
-    try frame.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    try frame.e(Spacer{
+        .height = .fixed(12),
+        .key = .src(@src()),
+    });
+
     const body = Rect{
         .width = .grow(),
         .height = .grow(),
@@ -90,34 +96,41 @@ fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
         .key = .src(@src()),
     };
     _ = try body.open(frame);
+
     try self.renderNav(frame);
-    try frame.e(Spacer{ .width = .fixed(12), .key = .src(@src()) });
-    try self.renderActiveDemo(app, frame);
+    try frame.e(Spacer{
+        .width = .fixed(12),
+        .key = .src(@src()),
+    });
+
+    try self.renderActiveDemo(view, frame);
+
     try body.close(frame);
     try root.close(frame);
 
     const w: f32 = @floatFromInt(size.width);
     const h: f32 = @floatFromInt(size.height);
+
     try self.debug_devtools.render(frame, .{
         .frame_delta_ns = frame.input().delta_ns,
         .window_width = w,
         .window_height = h,
-        .concurrency_in_flight = app.concurrencyInFlight(),
+        .concurrency_in_flight = view.app.concurrencyInFlight(),
         .renderer = .{
-            .present_mode = app.presentMode(),
-            .supported_present_modes = app.supportedPresentModes(),
-            .reconfigure_error = app.rendererReconfigureError(),
+            .present_mode = view.renderer.config.present_mode,
+            .supported_present_modes = view.renderer.supported_present_modes,
+            .reconfigure_error = view.renderer.reconfigure_error,
         },
     });
 
     if (self.debug_devtools.takePresentModeRequest()) |present_mode| {
-        var cfg = app.rendererConfig();
+        var cfg = view.renderer.config;
         cfg.present_mode = present_mode;
-        app.reconfigureRenderer(cfg);
+        try view.app.reconfigureRenderer(view.id, cfg);
     }
 }
 
-fn renderActiveDemo(self: *Self, app: *knots.App, frame: *knots.Frame) !void {
+fn renderActiveDemo(self: *Self, view: *knots.View, frame: *ui.Frame) !void {
     const root = Rect{
         .width = .grow(),
         .height = .grow(),
@@ -135,13 +148,13 @@ fn renderActiveDemo(self: *Self, app: *knots.App, frame: *knots.Frame) !void {
         .key = .src(@src()),
     };
     _ = try body.open(frame);
-    try demos.all[self.active_demo].render(app, frame);
+    try demos.all[self.active_demo].render(view.app, frame);
     try self.renderSourcePane(frame);
     try body.close(frame);
     try root.close(frame);
 }
 
-fn renderDemoSummary(self: *Self, frame: *knots.Frame) !void {
+fn renderDemoSummary(self: *Self, frame: *ui.Frame) !void {
     const demo = demos.all[self.active_demo];
 
     try frame.e(.{
@@ -186,7 +199,7 @@ fn renderDemoSummary(self: *Self, frame: *knots.Frame) !void {
     });
 }
 
-fn renderSourcePane(self: *Self, frame: *knots.Frame) !void {
+fn renderSourcePane(self: *Self, frame: *ui.Frame) !void {
     const demo = demos.all[self.active_demo];
     if (self.demo_state.show_source and self.source_cache[self.active_demo] == null) {
         self.source_cache[self.active_demo] = try code_viewer.highlight(self.allocator, demo.source);
@@ -202,7 +215,7 @@ fn renderSourcePane(self: *Self, frame: *knots.Frame) !void {
     }
 }
 
-fn renderHeader(app: *knots.Frame) !void {
+fn renderHeader(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -224,7 +237,7 @@ fn renderHeader(app: *knots.Frame) !void {
     });
 }
 
-fn renderNav(self: *Self, frame: *knots.Frame) !void {
+fn renderNav(self: *Self, frame: *ui.Frame) !void {
     @setEvalBranchQuota(50000);
     const nav = Rect{
         .width = .fixed(220),

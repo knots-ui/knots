@@ -1,11 +1,12 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
-const Color = knots.ui.Color;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
+const Color = ui.Color;
 const ColorInput = Color.Input;
 
 const line_height: f32 = 17;
@@ -163,12 +164,12 @@ pub fn highlight(allocator: std.mem.Allocator, source: [:0]const u8) !Highlighte
 }
 
 pub fn render(
-    app: *knots.Frame,
+    app: *ui.Frame,
     source_path: []const u8,
     highlighted: ?Highlighted,
     expanded: bool,
 ) !bool {
-    const panel_key = knots.ui.Key.str("code.viewer");
+    const panel_key = ui.Key.str("code.viewer");
     const panel_w = app.ui().anim(panel_key.hash(), "w", if (expanded) expanded_width else 0, .{
         .duration_ms = 180,
         .ease = .ease_out_cubic,
@@ -225,7 +226,7 @@ pub fn render(
         .height = .grow(),
         .dir = .column,
         .overflow = .scroll,
-        .key = knots.ui.Key.str(source_path).indexed(0),
+        .key = ui.Key.str(source_path).indexed(0),
         .style = .{
             .corner_radius = .md,
             .border_color = .toned,
@@ -239,9 +240,9 @@ pub fn render(
     return toggle.clicked;
 }
 
-fn renderLines(app: *knots.Frame, highlighted: Highlighted, source_path: []const u8) !void {
-    try app.e(knots.control.VirtualList(Row){
-        .key = knots.ui.Key.str(source_path).indexed(1),
+fn renderLines(app: *ui.Frame, highlighted: Highlighted, source_path: []const u8) !void {
+    try app.e(ui.control.VirtualList(Row){
+        .key = ui.Key.str(source_path).indexed(1),
         .items = highlighted.rows,
         .row_height = line_height,
         .overscan = row_overscan,
@@ -249,12 +250,12 @@ fn renderLines(app: *knots.Frame, highlighted: Highlighted, source_path: []const
     });
 }
 
-fn renderLine(app: *knots.Frame, row_item: Row, line_idx: usize) !void {
+fn renderLine(app: *ui.Frame, row_item: Row, line_idx: usize) !void {
     const row = Rect{
         .width = .fit(),
         .height = .fixed(line_height),
         .dir = .row,
-        .key = knots.ui.Key.str("code.line").indexed(line_idx),
+        .key = ui.Key.str("code.line").indexed(line_idx),
         .style = .{ .corner_radius = .none },
     };
     _ = try row.open(app);
@@ -265,7 +266,7 @@ fn renderLine(app: *knots.Frame, row_item: Row, line_idx: usize) !void {
             .height = .fixed(line_height),
             .justify = .end,
             .padding = .init(0, 0, 0, 0),
-            .key = knots.ui.Key.str("code.gutter").indexed(line_idx),
+            .key = ui.Key.str("code.gutter").indexed(line_idx),
         },
         .{
             Text{
@@ -274,10 +275,10 @@ fn renderLine(app: *knots.Frame, row_item: Row, line_idx: usize) !void {
                 .color = .dimmed,
                 .selectable = false,
                 .font = "jetbrains-mono",
-                .key = knots.ui.Key.str("code.gutter.text").indexed(line_idx),
+                .key = ui.Key.str("code.gutter.text").indexed(line_idx),
             },
         },
-        Spacer{ .width = .fixed(12), .key = knots.ui.Key.str("code.gutter.space").indexed(line_idx) },
+        Spacer{ .width = .fixed(12), .key = ui.Key.str("code.gutter.space").indexed(line_idx) },
     });
 
     for (row_item.spans, 0..) |span, span_idx| {
@@ -289,7 +290,7 @@ fn renderLine(app: *knots.Frame, row_item: Row, line_idx: usize) !void {
             .size = .xs,
             .color = span.color,
             .selectable = false,
-            .key = knots.ui.Key.str("code.span").indexed(line_idx).indexed(span_idx),
+            .key = ui.Key.str("code.span").indexed(line_idx).indexed(span_idx),
             .font = "jetbrains-mono",
         });
     }

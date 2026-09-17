@@ -14,6 +14,8 @@ vkd: vk.DeviceWrapper,
 image: vk.Image,
 current_pipeline_layout: vk.PipelineLayout,
 debug_label: bool,
+target: ?*Texture,
+store_op: StoreOp,
 
 pub const LoadOp = enum { clear, load };
 pub const StoreOp = enum { store, discard };
@@ -48,7 +50,15 @@ pub fn create(
     if (desc.depth_attachment != null) return error.UnsupportedDepthAttachment;
     const ca = desc.color_attachment;
 
-    const image = surface.swapchain_images[image_index];
+    const image = if (ca.target) |target| target.image else surface.swapchain_images[image_index];
+    const image_view = if (ca.target) |target| target.image_view else surface.swapchain_views[image_index];
+    const extent: vk.Extent2D = if (ca.target) |target|
+        .{ .width = target.width, .height = target.height }
+    else
+        surface.swapchain_extent;
+    std.debug.assert(extent.width > 0);
+    std.debug.assert(extent.height > 0);
+    const old_layout: vk.ImageLayout = if (ca.target) |target| target.layout else if (ca.load_op == .load) .present_src_khr else .undefined;
     var debug_label = false;
     if (device.debug_utils and desc.label.len != 0) {
         var label_buffer: [256]u8 = undefined;
@@ -60,10 +70,11 @@ pub fn create(
     device.vkd.cmdPipelineBarrier2(command_buffer, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
-            .src_stage_mask = .{ .color_attachment_output = true },
+            .src_stage_mask = .{ .all_commands = true },
+            .src_access_mask = .{ .memory_read = true, .memory_write = true },
             .dst_stage_mask = .{ .color_attachment_output = true },
-            .dst_access_mask = .{ .color_attachment_write = true },
-            .old_layout = .undefined,
+            .dst_access_mask = .{ .color_attachment_write = true, .color_attachment_read = true },
+            .old_layout = old_layout,
             .new_layout = .color_attachment_optimal,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
@@ -73,17 +84,23 @@ pub fn create(
     });
 
     device.vkd.cmdBeginRendering(command_buffer, &.{
-        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = surface.swapchain_extent },
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = extent },
         .layer_count = 1,
         .view_mask = 0,
         .color_attachment_count = 1,
         .p_color_attachments = &[_]vk.RenderingAttachmentInfo{.{
-            .image_view = surface.swapchain_views[image_index],
+            .image_view = image_view,
             .image_layout = .color_attachment_optimal,
             .resolve_mode = .{},
             .resolve_image_layout = .undefined,
-            .load_op = .clear,
-            .store_op = .store,
+            .load_op = switch (ca.load_op) {
+                .clear => .clear,
+                .load => .load,
+            },
+            .store_op = switch (ca.store_op) {
+                .store => .store,
+                .discard => .dont_care,
+            },
             .clear_value = .{ .color = .{ .float_32 = .{
                 ca.clear_color[0], ca.clear_color[1], ca.clear_color[2], ca.clear_color[3],
             } } },
@@ -92,14 +109,14 @@ pub fn create(
     device.vkd.cmdSetViewport(command_buffer, 0, &.{.{
         .x = 0,
         .y = 0,
-        .width = @floatFromInt(surface.swapchain_extent.width),
-        .height = @floatFromInt(surface.swapchain_extent.height),
+        .width = @floatFromInt(extent.width),
+        .height = @floatFromInt(extent.height),
         .min_depth = 0,
         .max_depth = 1,
     }});
     device.vkd.cmdSetScissor(command_buffer, 0, &.{.{
         .offset = .{ .x = 0, .y = 0 },
-        .extent = surface.swapchain_extent,
+        .extent = extent,
     }});
 
     return .{
@@ -108,10 +125,13 @@ pub fn create(
         .image = image,
         .current_pipeline_layout = .null_handle,
         .debug_label = debug_label,
+        .target = ca.target,
+        .store_op = ca.store_op,
     };
 }
 
 pub fn end(self: *RenderPass) void {
+    const final_layout: vk.ImageLayout = if (self.target != null) .shader_read_only_optimal else .present_src_khr;
     self.vkd.cmdEndRendering(self.command_buffer);
     self.vkd.cmdPipelineBarrier2(self.command_buffer, &.{
         .image_memory_barrier_count = 1,
@@ -119,13 +139,19 @@ pub fn end(self: *RenderPass) void {
             .src_stage_mask = .{ .color_attachment_output = true },
             .src_access_mask = .{ .color_attachment_write = true },
             .old_layout = .color_attachment_optimal,
-            .new_layout = .present_src_khr,
+            .new_layout = final_layout,
+            .dst_stage_mask = .{ .all_commands = true },
+            .dst_access_mask = .{ .memory_read = true },
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
             .image = self.image,
             .subresource_range = .{ .aspect_mask = .{ .color = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
         }},
     });
+    if (self.target) |target| {
+        target.layout = final_layout;
+        target.ready = self.store_op == .store;
+    }
     if (self.debug_label) self.vkd.cmdEndDebugUtilsLabelEXT(self.command_buffer);
 }
 

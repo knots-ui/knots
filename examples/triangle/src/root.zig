@@ -1,8 +1,9 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 
-const Rect = knots.component.Rect;
-const Canvas = knots.component.Canvas;
+const Rect = ui.component.Rect;
+const Canvas = ui.component.Canvas;
 
 const triangle_width = 480;
 const triangle_height = 320;
@@ -24,7 +25,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator) !Self {
 
     return .{
         .app = app,
-        .devtools = try .init(allocator, app.presentMode()),
+        .devtools = try .init(allocator, app.main_viewport.renderer.cfg.present_mode),
     };
 }
 
@@ -37,9 +38,9 @@ pub fn start(self: *Self) !void {
     try self.app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
-    const ctx: *Self = @fieldParentPtr("app", app);
-    const size = app.logicalExtent();
+fn frameCb(view: *knots.View, frame: *ui.Frame) !void {
+    const ctx: *Self = @fieldParentPtr("app", view.app);
+    const size = frame.input().logical_extent;
     const w: f32 = @floatFromInt(size.width);
     const h: f32 = @floatFromInt(size.height);
 

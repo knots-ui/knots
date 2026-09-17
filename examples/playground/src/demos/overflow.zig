@@ -1,16 +1,17 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Spacer = ui.component.Spacer;
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Overflow", body);
 }
 
-fn body(_: *knots.App, app: *knots.Frame) !void {
+fn body(_: *knots.App, app: *ui.Frame) !void {
     try caption(app, "hidden", .src(@src()));
     try app.e(.{
         Rect{
@@ -83,36 +84,36 @@ fn body(_: *knots.App, app: *knots.Frame) !void {
     });
 }
 
-fn caption(app: *knots.Frame, content: []const u8, key: knots.ui.Key) !void {
+fn caption(app: *ui.Frame, content: []const u8, key: ui.Key) !void {
     try app.e(Text{ .content = content, .size = .xs, .color = .dimmed, .key = key.indexed(1) });
     try app.e(Spacer{ .height = .fixed(4), .key = key.indexed(2) });
 }
 
-fn scrollYRows(app: *knots.Frame) !void {
-    try scrollRows(app, knots.ui.Key.src(@src()), null, "row");
+fn scrollYRows(app: *ui.Frame) !void {
+    try scrollRows(app, ui.Key.src(@src()), null, "row");
 }
 
-fn scrollXBoxes(app: *knots.Frame) !void {
+fn scrollXBoxes(app: *ui.Frame) !void {
     var i: usize = 0;
     while (i < 12) : (i += 1) {
         try app.e(Rect{
             .width = .fixed(40),
             .height = .fixed(40),
             .style = .{ .color = if (i % 2 == 0) .primary else .secondary, .corner_radius = .sm },
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
         });
     }
 }
 
-fn scrollOnlyYRows(app: *knots.Frame) !void {
-    try scrollRows(app, knots.ui.Key.src(@src()), null, "row");
+fn scrollOnlyYRows(app: *ui.Frame) !void {
+    try scrollRows(app, ui.Key.src(@src()), null, "row");
 }
 
-fn scrollBothRows(app: *knots.Frame) !void {
-    try scrollRows(app, knots.ui.Key.src(@src()), 360, "wide row");
+fn scrollBothRows(app: *ui.Frame) !void {
+    try scrollRows(app, ui.Key.src(@src()), 360, "wide row");
 }
 
-fn scrollRows(app: *knots.Frame, key: knots.ui.Key, fixed_width: ?f32, label: []const u8) !void {
+fn scrollRows(app: *ui.Frame, key: ui.Key, fixed_width: ?f32, label: []const u8) !void {
     const arena = app.arena();
     var i: usize = 0;
     while (i < 16) : (i += 1) {

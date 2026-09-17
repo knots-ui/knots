@@ -1,20 +1,21 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Spacer = knots.component.Spacer;
-const ContextMenu = knots.component.ContextMenu;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Spacer = ui.component.Spacer;
+const ContextMenu = ui.component.ContextMenu;
 
 const Menu = ContextMenu(ContextActions);
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Context menu", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const arena = app.arena();
 
@@ -53,7 +54,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
 
 fn card(
     state: *Self,
-    app: *knots.Frame,
+    app: *ui.Frame,
     comptime target: []const u8,
     comptime title: []const u8,
     comptime key_prefix: []const u8,
@@ -101,11 +102,11 @@ fn card(
 const ContextActions = struct {
     state: *Self,
     target: []const u8,
-    inspect_key: knots.ui.Key,
-    duplicate_key: knots.ui.Key,
-    archive_key: knots.ui.Key,
+    inspect_key: ui.Key,
+    duplicate_key: ui.Key,
+    archive_key: ui.Key,
 
-    pub fn render(self: *const ContextActions, app: *knots.Frame) anyerror!void {
+    pub fn render(self: *const ContextActions, app: *ui.Frame) anyerror!void {
         try app.e(.{
             ActionRow{ .state = self.state, .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
             ActionRow{ .state = self.state, .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
@@ -119,22 +120,21 @@ const ActionRow = struct {
     target: []const u8,
     action: []const u8,
     label: []const u8,
-    key: knots.ui.Key,
+    key: ui.Key,
 
-    pub fn open(self: *const ActionRow, app: *knots.Frame) !u64 {
-        const ui = app.ui();
+    pub fn open(self: *const ActionRow, app: *ui.Frame) !u64 {
         const id = self.key.hash();
-        const hovered = ui.hovering(id);
+        const hovered = app.ui().hovering(id);
 
-        _ = try ui.open(self.key, .{
+        _ = try app.ui().open(self.key, .{
             .width = .grow(),
             .height = .fixed(30),
             .padding = .init(0, 10, 0, 10),
             .alignment = .center,
             .interactive = true,
         }, .{ .rect = .{
-            .color = (if (hovered) ui.theme.muted else ui.theme.elevated).value,
-            .corner_radius = ui.theme.radius.scale(0.5),
+            .color = (if (hovered) app.ui().theme.muted else app.ui().theme.elevated).value,
+            .corner_radius = app.ui().theme.radius.scale(0.5),
         } });
 
         try app.e(Text{
@@ -147,12 +147,11 @@ const ActionRow = struct {
         return id;
     }
 
-    pub fn close(self: *const ActionRow, app: *knots.Frame) !void {
-        const ui = app.ui();
+    pub fn close(self: *const ActionRow, app: *ui.Frame) !void {
         const id = self.key.hash();
-        ui.close();
+        app.ui().close();
 
-        if (ui.leftClicked(id, .within)) {
+        if (app.ui().leftClicked(id, .within)) {
             self.state.demo_state.context_menu_last_action = self.action;
             self.state.demo_state.context_menu_last_target = self.target;
             app.requestRedraw();

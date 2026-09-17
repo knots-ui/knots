@@ -1,4 +1,6 @@
 pub const UI = @import("UI.zig");
+pub const Context = @import("Context.zig");
+pub const Frame = @import("Frame.zig");
 pub const Decoration = @import("decoration.zig").Decoration;
 pub const Style = @import("Style.zig");
 pub const Input = @import("Input.zig");
@@ -18,4 +20,10 @@ test {
     _ = State;
     _ = UI;
     _ = scrollbar;
+    _ = Context;
 }
+
+pub const component = @import("component/root.zig");
+pub const control = @import("control/root.zig");
+pub const layout = @import("layout");
+pub const input = @import("input");

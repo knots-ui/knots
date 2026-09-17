@@ -136,11 +136,17 @@ pub fn build(b: *std.Build) void {
         },
     };
 
+    const render_types_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/render/types/root.zig"),
+    });
     const gpu_mod = b.addModule("gpu", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/gpu/root.zig"),
     });
+    gpu_mod.addImport("render_types", render_types_mod);
     gpu_impl_mod.addImport("gpu", gpu_mod);
 
     const input_mod = b.addModule("input", .{
@@ -242,7 +248,7 @@ pub fn build(b: *std.Build) void {
         }
     };
 
-    const window_mod = b.createModule(.{
+    const window_mod = b.addModule("window", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/window/root.zig"),
@@ -274,7 +280,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .root_source_file = b.path("src/render/root.zig"),
         .imports = &.{
-            .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "render_types", .module = render_types_mod },
             .{ .name = "math", .module = math_mod },
         },
     });
@@ -286,7 +292,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "gpu", .module = gpu_mod },
             .{ .name = "gpu_impl", .module = gpu_impl_mod },
-            .{ .name = "text", .module = text_mod },
             .{ .name = "math", .module = math_mod },
             .{ .name = "render", .module = render_mod },
         },
@@ -314,7 +319,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "math", .module = math_mod }},
     });
 
-    const ui_mod = b.createModule(.{
+    const ui_mod = b.addModule("ui", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/ui/root.zig"),
@@ -322,7 +327,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "input", .module = input_mod },
-            .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "render_types", .module = render_types_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
         },
@@ -363,53 +368,37 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("tests/public_render_consumer.zig"),
             .imports = &.{
                 .{ .name = "render", .module = render_mod },
-                .{ .name = "gpu", .module = gpu_mod },
             },
         }),
     });
 
-    const embedded_view_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/View.zig"),
-        .imports = &.{
-            .{ .name = "input", .module = input_mod },
-            .{ .name = "render", .module = render_mod },
-            .{ .name = "text", .module = text_mod },
-            .{ .name = "ui", .module = ui_mod },
-        },
-    });
     const embedded_view_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
             .root_source_file = b.path("tests/embedded_view_consumer.zig"),
             .imports = &.{
-                .{ .name = "view", .module = embedded_view_mod },
-                .{ .name = "input", .module = input_mod },
-                .{ .name = "render", .module = render_mod },
+                .{ .name = "knots-ui", .module = ui_mod },
+                .{ .name = "knots-input", .module = input_mod },
+                .{ .name = "knots-render", .module = render_mod },
+                .{ .name = "knots-renderer", .module = renderer_mod },
             },
         }),
     });
-    const run_embedded_view_consumer_tests = b.addRunArtifact(embedded_view_consumer_tests);
-
-    const run_mod_tests = b.addRunArtifact(mod_tests);
-    const run_layout_tests = b.addRunArtifact(layout_tests);
-    const run_ui_tests = b.addRunArtifact(ui_tests);
-    const run_text_tests = b.addRunArtifact(text_tests);
-    const run_math_tests = b.addRunArtifact(math_tests);
-    const run_input_tests = b.addRunArtifact(input_tests);
-    const run_public_render_consumer_tests = b.addRunArtifact(public_render_consumer_tests);
+    const render_tests = b.addTest(.{ .root_module = render_mod });
+    const renderer_tests = b.addTest(.{ .root_module = renderer_mod });
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_layout_tests.step);
-    test_step.dependOn(&run_ui_tests.step);
-    test_step.dependOn(&run_text_tests.step);
-    test_step.dependOn(&run_math_tests.step);
-    test_step.dependOn(&run_input_tests.step);
-    test_step.dependOn(&run_public_render_consumer_tests.step);
-    test_step.dependOn(&run_embedded_view_consumer_tests.step);
+    test_step.dependOn(&b.addRunArtifact(render_tests).step);
+    test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
+    test_step.dependOn(&b.addRunArtifact(mod_tests).step);
+    test_step.dependOn(&b.addRunArtifact(layout_tests).step);
+    test_step.dependOn(&b.addRunArtifact(ui_tests).step);
+    test_step.dependOn(&b.addRunArtifact(text_tests).step);
+    test_step.dependOn(&b.addRunArtifact(math_tests).step);
+    test_step.dependOn(&b.addRunArtifact(input_tests).step);
+    test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
+    test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
 
     if (!isBrowserWasmTarget(target.result)) {
         const snapshot_exe = b.addExecutable(.{
@@ -421,6 +410,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "knots", .module = mod },
                     .{ .name = "gpu", .module = gpu_mod },
+                    .{ .name = "ui", .module = ui_mod },
                 },
             }),
         });

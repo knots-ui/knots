@@ -1,34 +1,23 @@
 # Knots
 
-Knots is a high performance cross-platform immediate-mode GUI library written in Zig.
-
-## Goals
-
-Below goals are listed in order of importance.
-
-1. Provide a way to build highly performant cross-platform desktop applications.
-2. UI code should get out of the way, letting the developer spend more time on actual problems.
-3. Minimal lean builds, fast compile times.
-4. Highly configurable, with sane defaults.
-
-## Known limitations
-
-- Linux windowing is Wayland-only.
-- Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.
-
-## Requirements
-
-- Zig compiler, minimum version can be found in [build.zig.zon](build.zig.zon). I try to keep up with the master branch.
-- On Linux, Wayland development packages are required: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, pkg-config, and xkbcommon.
+Knots is a cross-platform immediate-mode GUI library written in Zig. The UI
+engine is independent of windows and graphics APIs. `App` is the bundled window
+and renderer integration; `ui.Context` and `render.Packet` are the embedding
+boundary.
 
 ## Supported platforms
 
-| Platform            | Supported GPU APIs           |
-| ------------------- | ---------------------------- |
-| macOS               | WebGPU and Vulkan (MoltenVK) |
-| Linux               | WebGPU and Vulkan            |
-| Windows             | WebGPU and Vulkan            |
-| WASM (freestanding) | WebGPU                       |
+| Platform            | GPU APIs                    |
+| ------------------- | --------------------------- |
+| macOS               | WebGPU, Vulkan (MoltenVK)   |
+| Linux               | WebGPU, Vulkan              |
+| Windows             | WebGPU, Vulkan              |
+| WASM (freestanding) | WebGPU                      |
+
+
+## Known limitations
+- Linux windowing is Wayland-only.
+- Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.
 
 ## Install
 
@@ -36,244 +25,156 @@ Below goals are listed in order of importance.
 zig fetch --save git+https://codeberg.org/shahwali/knots.git
 ```
 
+## Requirements
+
+- Zig compiler, minimum version can be found in [build.zig.zon](build.zig.zon). I try to keep up with the master branch.
+- On Linux, Wayland development packages are required: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, pkg-config, and xkbcommon.
+
 ## Minimal app
 
+Add the `knots` and `ui` modules to your executable:
+
 ```zig
-// build.zig
 const knots = b.dependency("knots", .{ .target = target, .optimize = optimize });
 
-exe.root_module.addImport(knots.module("knots"));
-// or
-mod.addImport(knots.module("knots"));
+exe.root_module.addImport("knots", knots.module("knots"));
+exe.root_module.addImport("ui", knots.module("ui"));
 ```
+
+Build the UI in a frame callback:
 
 ```zig
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("ui");
 
 pub fn main(init: std.process.Init) !void {
     var app = try knots.App.init(init.io, init.gpa, .{
-        .window = .{
-            .width = 1280,
-            .height = 720,
-            .title = "Playground",
-        },
+        .window = .{ .width = 1280, .height = 720, .title = "Knots" },
     });
     defer app.deinit();
-
-    try app.start(frameCb);
+    try app.start(frame);
 }
 
-fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
-    const size = app.logicalExtent();
-    return frame.e(.{
-        knots.component.Rect{
-            .width = .fixed(@floatFromInt(size.width)),
-            .height = .fixed(@floatFromInt(size.height)),
-            .padding = .init(16, 16, 16, 16),
-            .dir = .column,
-            .key = .src(@src()),
-        },
+fn frame(_: *knots.View, frame_context: *ui.Frame) !void {
+    const size = frame_context.input().logical_extent;
+    try frame_context.e(ui.component.Rect{
+        .width = .fixed(@floatFromInt(size.width)),
+        .height = .fixed(@floatFromInt(size.height)),
+        .padding = .init(16, 16, 16, 16),
+        .key = .src(@src()),
     });
 }
 ```
 
-Application state can embed `knots.App` and recover itself without frame user
-data:
-
-```zig
-const State = struct {
-    app: knots.App,
-    count: u32 = 0,
-
-    fn frame(app: *knots.App, frame_context: *knots.Frame) !void {
-        const self: *State = @fieldParentPtr("app", app);
-        const response = try frame_context.interact(knots.component.Button{
-            .key = .str("increment"),
-            .text = .{ .content = "increment" },
-        });
-        if (response.clicked) self.count += 1;
-    }
-};
-```
+`View` is callback data containing the owning `app`, the viewport `id`, and a
+renderer status snapshot. Use `view.app` for viewport actions. Application state
+can embed `knots.App` and recover itself with `@fieldParentPtr("app", view.app)`;
+keep the `App` at a stable address until `start` returns.
 
 ## Embedding in an existing renderer
 
-Import the host-neutral modules directly; they are intentionally not aliases
-under `knots`:
+Import `ui`, `input`, and `render`. Add `renderer` when using Knots' bundled GPU
+backend:
 
 ```zig
-app_module.addImport("knots", knots_dependency.module("knots"));
+app_module.addImport("ui", knots_dependency.module("ui"));
 app_module.addImport("input", knots_dependency.module("input"));
 app_module.addImport("render", knots_dependency.module("render"));
-app_module.addImport("gpu", knots_dependency.module("gpu"));
-```
-
-`render` contains only the portable packet contract. The separate `renderer`
-module contains Knots' App-owned renderer, draw list, textures, and custom GPU
-draw API. Applications normally need `renderer` directly only when declaring a
-`GPUCanvas` callback:
-
-```zig
 app_module.addImport("renderer", knots_dependency.module("renderer"));
 ```
 
-One `knots.View` owns the persistent UI state for one host viewport:
+`ui.Context` owns UI state for one viewport and `endFrame` returns one
+`Frame.Output`: platform effects plus an ordered `render.Packet`.
 
 ```zig
-const input = @import("input");
+var context = try ui.Context.init(allocator, .{});
+defer context.deinit();
 
-var frame = try view.beginFrame(input.FrameInput{
-    .input = host_input,
-    .now_ms = now_ms,
-    .delta_ns = delta_ns,
-    .logical_extent = logical_extent,
-    .physical_extent = physical_extent,
-    .content_scale = content_scale,
-});
-errdefer view.abortFrame(&frame);
-
+var frame = try context.beginFrame(host_input);
+defer frame.deinit();
 try buildUi(&frame);
-const output = try view.endFrame(&frame);
-if (output.packet.glyphUpdate()) |update| {
-    try host_renderer.uploadGlyphs(update);
-    _ = view.acknowledgeGlyphUpload(update.generation);
+
+const output = try context.endFrame(&frame);
+window.setCursorShape(output.cursor_shape);
+if (output.clipboard_write) |value| {
+    _ = try window.setClipboardText(allocator, value);
 }
-try host_renderer.encode(&output.packet);
+
+const prepared = try painter.prepare(&output.packet, &.{
+    .width = target_width,
+    .height = target_height,
+    .content_scale = host_input.content_scale,
+    .upload_slot = submission.upload_slot,
+    .frame_context = submission,
+    .linear_target = false,
+});
+try painter.encode(&prepared, host_pass);
 ```
 
-Packet and effect slices are borrowed until the same view begins its next
-frame. Embedded packets support primitives, text, and clipping.
+Use `Renderer.render` when Knots owns the surface. Use `Painter.prepare` and
+`Painter.encode` when the host owns render passes, submission, or presentation.
+`render.Packet` is graphics-API independent, but its geometry, glyph, clipping,
+and shader conventions are Knots' protocol. A renderer for another API consumes
+the packet directly; `Painter` uses the bundled backend types.
+
+## Ownership and lifetime
+
+- Packet data, input slices, image bytes, and callback data are borrowed. Consume
+  them before the next frame or copy them for asynchronous work.
+- The host must keep textures and callback resources alive until GPU completion.
+- Complete the previous work for an upload slot before reusing it in
+  `Painter.prepare`. Call `Painter.destroyAfterWait` only after all GPU work is
+  complete.
+- `Frame.deinit` aborts unfinished frames and is safe across copied handles.
+- Apply cursor and clipboard effects once; the host decides when to redraw or
+  close a window.
+- Custom backends must validate packet extensions and reject unsupported commands.
+
+The bundled renderer synchronizes glyph atlas uploads and retires replaced
+resources by upload slot. Its cache and packet data are bounded; no glyph
+acknowledgement API is required.
 
 ## Browser WASM
 
-The following is a complete web-only application.
+The browser build uses the same `App` and frame callback. Install the web host
+with `Knots.installWeb`:
 
 ```zig
-// build.zig
-const std = @import("std");
 const Knots = @import("knots");
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+const knots = b.dependency("knots", .{
+    .target = target,
+    .optimize = optimize,
+    .web_threads = true,
+});
 
-    const knots = b.dependency("knots", .{
-        .target = target,
-        .optimize = optimize,
-        .web_threads = true,
-    });
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "knots", .module = knots.module("knots") }},
-    });
-    const exe = b.addExecutable(.{ .name = "app", .root_module = exe_mod });
-    exe.entry = .disabled;
-
-    Knots.installWeb(b, knots, exe_mod, exe, .{
-        .index_html = b.path("src/index.html"),
-    });
-}
+const exe_mod = b.createModule(.{
+    .root_source_file = b.path("src/main.zig"),
+    .target = target,
+    .optimize = optimize,
+    .imports = &.{
+        .{ .name = "knots", .module = knots.module("knots") },
+        .{ .name = "ui", .module = knots.module("ui") },
+    },
+});
+const exe = b.addExecutable(.{ .name = "app", .root_module = exe_mod });
+exe.entry = .disabled;
+Knots.installWeb(b, knots, exe_mod, exe, .{});
 ```
 
-```zig
-// src/main.zig
-const std = @import("std");
-const knots = @import("knots");
-
-pub const std_options: std.Options = .{ .logFn = knots.web.logFn };
-
-fn frame(app: *knots.App, frame_context: *knots.Frame) !void {
-    const size = app.logicalExtent();
-    try frame_context.e(.{
-        knots.component.Rect{
-            .width = .fixed(@floatFromInt(size.width)),
-            .height = .fixed(@floatFromInt(size.height)),
-            .padding = .init(16, 16, 16, 16),
-            .key = .src(@src()),
-        },
-        .{
-            knots.component.Text{
-                .content = "Hello from Knots",
-                .key = .src(@src()),
-            },
-        },
-    });
-}
-
-export fn main() callconv(.{ .wasm_mvp = .{} }) i32 {
-    const allocator = knots.web.allocator; // synchronizes Zig's single-threaded WASM allocator across workers.
-    const io = knots.web.io; // provides worker dispatch, atomic waits, cancellation, clocks, randomness, and non-UI-blocking sleep.
-    const app = allocator.create(knots.App) catch |err| return knots.web.fail(err);
-    app.* = knots.App.init(io, allocator, .{
-        .window = .{
-            .width = 1280,
-            .height = 720,
-            .title = "Knots Web App",
-            .canvas_selector = "#canvas",
-        },
-    }) catch |err| {
-        allocator.destroy(app);
-        return knots.web.fail(err);
-    };
-    app.start(frame) catch |err| {
-        app.deinit();
-        allocator.destroy(app);
-        return knots.web.fail(err);
-    };
-    return 0;
-}
-```
-
-```html
-<!-- src/index.html -->
-<!doctype html>
-<html>
-  <body>
-    <canvas id="canvas"></canvas>
-    <script type="module">
-      import { startKnots } from "./knots.js";
-      startKnots({ wasmUrl: "./app.wasm", canvas: "#canvas" }).catch(
-        console.error,
-      );
-    </script>
-  </body>
-</html>
-```
+Build with:
 
 ```sh
 zig build -Dtarget=wasm32-freestanding
 ```
 
-Web threads remain enabled by default when `web_threads` is omitted. Threaded builds configure shared memory and install the WASM and worker files. They must be served over HTTP with:
+Threaded builds need a cross-origin isolated page:
 
 ```text
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-These headers isolate the page so browsers can safely expose `SharedArrayBuffer`, which shared WebAssembly memory requires. Cross-origin resources must allow CORS or embedding via `Cross-Origin-Resource-Policy`.
-
-`wasm64-freestanding` also works in browsers with memory64 support. With `.web_threads = false`, `installWeb` emits an ordinary, non-shared WebAssembly module and does not install worker files. It can be served by a normal static server:
-
-```sh
-python3 -m http.server 8000 --directory zig-out/web
-```
-
-### Distributing Vulkan applications on macOS
-
-Knots checks for a bundled Vulkan loader before falling back to the system loader. A standalone application bundle using the Vulkan backend must include the loader, MoltenVK, and its ICD manifest:
-
-```text
-MyApp.app/Contents/Frameworks/libvulkan.1.dylib
-MyApp.app/Contents/Frameworks/libMoltenVK.dylib
-MyApp.app/Contents/Resources/vulkan/icd.d/MoltenVK_icd.json
-```
-
-The manifest's `library_path` must resolve to the bundled `libMoltenVK.dylib`.
-
-## Examples
-
-See [examples](examples), you can also try the web version of the playground [here](https://shahwali.codeberg.page/knots/).
+Set `.web_threads = false` for a non-shared build. See `examples` for complete
+desktop and embedding programs, and the [web playground](https://shahwali.codeberg.page/knots/).

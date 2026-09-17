@@ -32,10 +32,7 @@ pub const Decoration = union(enum) {
         cmds: []const DrawCmd,
     };
 
-    pub const GPUCanvas = struct {
-        on_draw: DrawList.CustomDrawCallback,
-        user_data: ?*anyopaque,
-    };
+    pub const GPUCanvas = @import("render").PaintCallback;
 
     pub const Image = struct {
         source: DrawList.TextureSource,

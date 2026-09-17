@@ -1,24 +1,25 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const FloatingWindow = knots.component.FloatingWindow;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const FloatingWindow = ui.component.FloatingWindow;
+const Spacer = ui.component.Spacer;
 
 const DEMO_TITLE = "Windows";
-const PANEL_KEY = knots.ui.Key.str("panel:" ++ DEMO_TITLE);
-const PanelBounds = @FieldType(knots.ui.State.Measured, "box");
+const PANEL_KEY = ui.Key.str("panel:" ++ DEMO_TITLE);
+const PanelBounds = @FieldType(ui.State.Measured, "box");
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, DEMO_TITLE, body);
     try renderFloatingWindows(desktop, app);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     try app.e(.{
         Text{
@@ -68,10 +69,9 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     try actions.close(app);
 }
 
-fn renderFloatingWindows(desktop: *knots.App, app: *knots.Frame) !void {
+fn renderFloatingWindows(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
-    const ui = app.ui();
-    const measured = try ui.state.getOrCreate(.measured, ui.allocator, PANEL_KEY.hash());
+    const measured = try app.ui().state.getOrCreate(.measured, app.ui().allocator, PANEL_KEY.hash());
     const bounds: ?PanelBounds = if (measured.width > 0 and measured.height > 0) measured.box else null;
     const first = FloatingWindow{
         .is_open = &self.demo_state.floating_window_open,
@@ -82,7 +82,7 @@ fn renderFloatingWindows(desktop: *knots.App, app: *knots.Frame) !void {
         .bounds = bounds,
         .content_gap = 12,
     };
-    if ((try first.openResponse(app)).id != knots.ui.UI.INVALID_ID) {
+    if ((try first.openResponse(app)).id != ui.UI.INVALID_ID) {
         try app.e(Text{
             .content = "Floating windows are UI components inside this viewport. Drag the title bar, resize from the lower-right corner, maximize, close, or click another window to raise it.",
             .width = .grow(),
@@ -114,7 +114,7 @@ fn renderFloatingWindows(desktop: *knots.App, app: *knots.Frame) !void {
         .height = 220,
         .bounds = bounds,
     };
-    if ((try second.openResponse(app)).id != knots.ui.UI.INVALID_ID) {
+    if ((try second.openResponse(app)).id != ui.UI.INVALID_ID) {
         try app.e(Text{
             .content = "This second component window uses the same viewport and UI state; clicking it raises it above the first.",
             .width = .grow(),
@@ -126,7 +126,7 @@ fn renderFloatingWindows(desktop: *knots.App, app: *knots.Frame) !void {
 }
 
 fn openNativeWindow(self: *Self) !void {
-    _ = try self.app.openWindow(.{
+    _ = try self.app.openWindow(self.app.main_viewport.id, .{
         .window = .{
             .width = 520,
             .height = 320,
@@ -135,10 +135,10 @@ fn openNativeWindow(self: *Self) !void {
     }, nativeWindowFrame);
 }
 
-fn nativeWindowFrame(desktop: *knots.App, app: *knots.Frame) !void {
-    const self = Self.of(desktop);
-    const size = app.input().logical_extent;
-    const size_label = try std.fmt.allocPrint(app.arena(), "Current size: {d} x {d}", .{ size.width, size.height });
+fn nativeWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
+    const self = Self.of(view.app);
+    const size = frame.input().logical_extent;
+    const size_label = try std.fmt.allocPrint(frame.arena(), "Current size: {d} x {d}", .{ size.width, size.height });
 
     const root = Rect{
         .width = .fixed(@floatFromInt(size.width)),
@@ -149,8 +149,8 @@ fn nativeWindowFrame(desktop: *knots.App, app: *knots.Frame) !void {
         .key = .str("windows.native_window.root"),
         .style = .{ .color = .bg, .corner_radius = .none },
     };
-    _ = try root.open(app);
-    try app.e(.{
+    _ = try root.open(frame);
+    try frame.e(.{
         Text{
             .content = "Secondary native window",
             .size = .lg,
@@ -169,7 +169,7 @@ fn nativeWindowFrame(desktop: *knots.App, app: *knots.Frame) !void {
         },
         Spacer{ .height = .fixed(4), .key = .str("windows.native_window.spacer") },
     });
-    if ((try app.interact(Button{
+    if ((try frame.interact(Button{
         .height = .fixed(32),
         .width = .fixed(176),
         .style = .{ .color = .primary, .corner_radius = .sm },
@@ -179,7 +179,7 @@ fn nativeWindowFrame(desktop: *knots.App, app: *knots.Frame) !void {
         .@"align" = .center,
         .text = .{ .content = "open another window" },
     })).clicked) try openNativeWindow(self);
-    if ((try app.interact(Button{
+    if ((try frame.interact(Button{
         .height = .fixed(32),
         .width = .fixed(176),
         .style = .{ .color = .@"error", .corner_radius = .sm },
@@ -188,6 +188,6 @@ fn nativeWindowFrame(desktop: *knots.App, app: *knots.Frame) !void {
         .justify = .center,
         .@"align" = .center,
         .text = .{ .content = "close this window" },
-    })).clicked) app.requestClose();
-    try root.close(app);
+    })).clicked) frame.requestClose();
+    try root.close(frame);
 }

@@ -60,6 +60,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .imports = &.{
                 .{ .name = "knots", .module = knots.module("knots") },
+                .{ .name = "knots-ui", .module = knots.module("ui") },
                 .{ .name = "tracy", .module = tracy_mod },
             },
         }),

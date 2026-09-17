@@ -1,12 +1,13 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const tracy = @import("tracy.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
-const Canvas = knots.component.Canvas;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
+const Canvas = ui.component.Canvas;
 const For = knots.control.For;
 
 const grid_cols = 80;
@@ -38,7 +39,7 @@ pub fn main(init: std.process.Init) !void {
 
     var ctx = Context{
         .app = app,
-        .dev_tools = try .init(init.gpa, app.presentMode()),
+        .dev_tools = try .init(init.gpa, app.main_viewport.renderer.cfg.present_mode),
     };
     defer {
         ctx.dev_tools.deinit(init.gpa);
@@ -48,12 +49,12 @@ pub fn main(init: std.process.Init) !void {
     try ctx.app.start(frameCb);
 }
 
-fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
+fn frameCb(view: *knots.View, frame: *ui.Frame) !void {
     const zone = tracy.zoneBegin("frameCb", @src());
     defer tracy.zoneEnd(zone);
 
-    const self: *Context = @fieldParentPtr("app", app);
-    const size = self.app.logicalExtent();
+    const self: *Context = @fieldParentPtr("app", view.app);
+    const size = frame.input().logical_extent;
     const w: f32 = @floatFromInt(size.width);
     const h: f32 = @floatFromInt(size.height);
 
@@ -81,7 +82,7 @@ fn frameCb(app: *knots.App, frame: *knots.Frame) !void {
     tracy.frameMark();
 }
 
-fn renderHeader(app: *knots.Frame) !void {
+fn renderHeader(app: *ui.Frame) !void {
     const zone = tracy.zoneBegin("renderHeader", @src());
     defer tracy.zoneEnd(zone);
 
@@ -101,7 +102,7 @@ fn renderHeader(app: *knots.Frame) !void {
     });
 }
 
-fn renderBody(app: *knots.Frame) !void {
+fn renderBody(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
@@ -117,7 +118,7 @@ fn renderBody(app: *knots.Frame) !void {
     });
 }
 
-fn renderSidebar(app: *knots.Frame) !void {
+fn renderSidebar(app: *ui.Frame) !void {
     const zone = tracy.zoneBegin("renderSidebarItems", @src());
     defer tracy.zoneEnd(zone);
     try app.e(.{
@@ -135,14 +136,14 @@ fn renderSidebar(app: *knots.Frame) !void {
     });
 }
 
-fn renderSidebarItems(app: *knots.Frame) !void {
+fn renderSidebarItems(app: *ui.Frame) !void {
     const arena = app.arena();
     var i: usize = 0;
     while (i < sidebar_items) : (i += 1) {
         const label = try std.fmt.allocPrint(arena, "row {d}", .{i});
         try app.e(.{
             Button{
-                .key = knots.ui.Key.src(@src()).indexed(i),
+                .key = ui.Key.src(@src()).indexed(i),
                 .width = .grow(),
                 .height = .fixed(22),
                 .padding = .init(2, 8, 2, 8),
@@ -156,7 +157,7 @@ fn renderSidebarItems(app: *knots.Frame) !void {
     }
 }
 
-fn renderGrid(app: *knots.Frame) !void {
+fn renderGrid(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
@@ -172,7 +173,7 @@ fn renderGrid(app: *knots.Frame) !void {
     });
 }
 
-fn renderGridRows(app: *knots.Frame) !void {
+fn renderGridRows(app: *ui.Frame) !void {
     const zone = tracy.zoneBegin("renderGridRows", @src());
     defer tracy.zoneEnd(zone);
 
@@ -182,8 +183,8 @@ fn renderGridRows(app: *knots.Frame) !void {
     }
 }
 
-fn renderGridRow(app: *knots.Frame, r: usize) !void {
-    const row_key = knots.ui.Key.src(@src()).indexed(r);
+fn renderGridRow(app: *ui.Frame, r: usize) !void {
+    const row_key = ui.Key.src(@src()).indexed(r);
 
     try app.e(.{
         Rect{
@@ -193,23 +194,21 @@ fn renderGridRow(app: *knots.Frame, r: usize) !void {
             .dir = .row,
             .gap = 2,
         },
-        .{
-            GridCells{ .row = r },
-        },
+        .{GridCells{ .row = r }},
     });
 }
 
 const GridCells = struct {
     row: usize,
 
-    pub fn render(self: *const GridCells, app: *knots.Frame) anyerror!void {
+    pub fn render(self: *const GridCells, app: *ui.Frame) anyerror!void {
         const zone = tracy.zoneBegin("GridCells.render", @src());
         defer tracy.zoneEnd(zone);
 
         var c: usize = 0;
         while (c < grid_cols) : (c += 1) {
             const idx = self.row * grid_cols + c;
-            const k = knots.ui.Key.src(@src()).indexed(idx);
+            const k = ui.Key.src(@src()).indexed(idx);
             const hue: f32 = @floatFromInt((idx * 13) % 360);
             const color = hsvToRgb(hue / 360.0, 0.55, 0.85);
             const label = try std.fmt.allocPrint(app.arena(), "{d}", .{(idx % 100)});
@@ -232,7 +231,7 @@ const GridCells = struct {
     }
 };
 
-fn renderCanvasStrip(app: *knots.Frame) !void {
+fn renderCanvasStrip(app: *ui.Frame) !void {
     const zone = tracy.zoneBegin("drawCanvas", @src());
     defer tracy.zoneEnd(zone);
 
@@ -260,7 +259,7 @@ fn renderCanvasStrip(app: *knots.Frame) !void {
     });
 }
 
-fn drawCanvas(app: *knots.Frame, painter: *Canvas.Painter) !void {
+fn drawCanvas(app: *ui.Frame, painter: *Canvas.Painter) !void {
     const zone = tracy.zoneBegin("drawCanvas", @src());
     defer tracy.zoneEnd(zone);
 

@@ -1,7 +1,8 @@
 const std = @import("std");
-const input = @import("input");
-const render = @import("render");
-const View = @import("view");
+const ui = @import("knots-ui");
+const input = @import("knots-input");
+const render = @import("knots-render");
+const renderer = @import("knots-renderer");
 
 fn frameInput(now_ms: i64) input.FrameInput {
     return .{
@@ -14,77 +15,84 @@ fn frameInput(now_ms: i64) input.FrameInput {
     };
 }
 
-const HostEncoder = struct {
-    primitive_indices: u64 = 0,
-    instances: u64 = 0,
-    text_instances: u64 = 0,
-    uploaded_generation: ?u64 = null,
-
-    fn encode(self: *HostEncoder, packet: *const render.Packet) !void {
-        for (packet.commands()) |command| {
-            if (command.clip.node >= packet.clipNodes().len) return error.InvalidClipNode;
-            switch (command.payload) {
-                .primitive => |range| self.primitive_indices += range.count,
-                .instances => |range| self.instances += range.count,
-                .text => |range| self.text_instances += range.count,
-            }
+test "independent renderer caches consume the same output without acknowledgements" {
+    const Uploader = struct {
+        calls: u32 = 0,
+        pub fn uploadGlyphAtlas(self: *@This(), atlas: *const render.GlyphAtlas) !void {
+            atlas.validate();
+            std.debug.assert(self.calls < 4);
+            self.calls += 1;
         }
-        if (packet.glyphUpdate()) |update| {
-            if (update.curve) |plane| {
-                const rows = plane.row_end - plane.row_start;
-                if (plane.bytes.len > rows * plane.row_bytes) return error.GlyphPlaneOverrun;
-            }
-            self.uploaded_generation = update.generation;
-        }
-    }
-};
-
-test "a renderer-free host can drive a view and acknowledge glyph uploads" {
-    var view = try View.init(std.testing.allocator, .{});
+    };
+    var view = try ui.Context.init(std.testing.allocator, .{});
     defer view.deinit();
-
-    var host: HostEncoder = .{};
-
+    var first_cache: renderer.GlyphAtlasCache = .{};
+    var second_cache: renderer.GlyphAtlasCache = .{};
+    var uploader: Uploader = .{};
     var frame = try view.beginFrame(frameInput(0));
-    errdefer view.abortFrame(&frame) catch {};
-    const first = try view.endFrame(&frame);
-    try host.encode(&first.packet);
-
-    const generation = host.uploaded_generation orelse return error.ExpectedGlyphUpload;
-    try std.testing.expect(view.acknowledgeGlyphUpload(generation));
-    try std.testing.expect(!view.acknowledgeGlyphUpload(generation));
-
-    host.uploaded_generation = null;
-    var second_frame = try view.beginFrame(frameInput(16));
-    const second = try view.endFrame(&second_frame);
-    try host.encode(&second.packet);
-    try std.testing.expectEqual(@as(?u64, null), host.uploaded_generation);
-}
-
-test "an acknowledgement that arrives after new glyph work is rejected" {
-    var view = try View.init(std.testing.allocator, .{});
-    defer view.deinit();
-
-    var frame = try view.beginFrame(frameInput(0));
-    const first = try view.endFrame(&frame);
-    const generation = (first.packet.glyphUpdate() orelse
-        return error.ExpectedGlyphUpload).generation;
-
-    view.markGlyphsDirty();
-
-    try std.testing.expect(!view.acknowledgeGlyphUpload(generation));
-
+    defer frame.deinit();
+    const output = try view.endFrame(&frame);
+    try first_cache.sync(&output.packet.glyphAtlas().?, &uploader, Uploader.uploadGlyphAtlas);
+    try second_cache.sync(&output.packet.glyphAtlas().?, &uploader, Uploader.uploadGlyphAtlas);
+    try std.testing.expectEqual(@as(u32, 2), uploader.calls);
     var next = try view.beginFrame(frameInput(16));
-    const second = try view.endFrame(&next);
-    try std.testing.expect(second.packet.glyphUpdate() != null);
+    defer next.deinit();
+    const next_output = try view.endFrame(&next);
+    try first_cache.sync(&next_output.packet.glyphAtlas().?, &uploader, Uploader.uploadGlyphAtlas);
+    try std.testing.expectEqual(@as(u32, 2), uploader.calls);
+    var other = try ui.Context.init(std.testing.allocator, .{});
+    defer other.deinit();
+    var other_frame = try other.beginFrame(frameInput(16));
+    defer other_frame.deinit();
+    const other_output = try other.endFrame(&other_frame);
+    try std.testing.expect(other_output.packet.glyphAtlas().?.id != first_cache.id);
+    try first_cache.sync(&other_output.packet.glyphAtlas().?, &uploader, Uploader.uploadGlyphAtlas);
+    try std.testing.expectEqual(@as(u32, 3), uploader.calls);
 }
 
-test "frame lifecycle errors are reported rather than trapped" {
-    var view = try View.init(std.testing.allocator, .{});
+test "copied frame cleanup cannot abort a reused backing state" {
+    var view = try ui.Context.init(std.testing.allocator, .{});
     defer view.deinit();
-
     var frame = try view.beginFrame(frameInput(0));
+    var copy = frame;
+    frame.deinit();
+    copy.deinit();
+    var next = try view.beginFrame(frameInput(16));
+    defer next.deinit();
+    copy.deinit();
+    try std.testing.expectError(error.InvalidFrame, view.endFrame(&copy));
+    try std.testing.expectError(error.InvalidFrame, view.abortFrame(&copy));
+    _ = try view.endFrame(&next);
+    next.deinit();
+}
+
+test "frame lifecycle errors and foreign handles preserve the active frame" {
+    var view = try ui.Context.init(std.testing.allocator, .{});
+    defer view.deinit();
+    var other = try ui.Context.init(std.testing.allocator, .{});
+    defer other.deinit();
+    var foreign = try other.beginFrame(frameInput(0));
+    defer foreign.deinit();
+    var frame = try view.beginFrame(frameInput(0));
+    defer frame.deinit();
     try std.testing.expectError(error.FrameAlreadyActive, view.beginFrame(frameInput(0)));
+    try std.testing.expectError(error.InvalidFrame, view.endFrame(&foreign));
     _ = try view.endFrame(&frame);
     try std.testing.expectError(error.FrameNotActive, view.endFrame(&frame));
+}
+
+test "a failed UI build is aborted by deferred frame cleanup" {
+    const Host = struct {
+        fn build(view: *ui.Context) !void {
+            var frame = try view.beginFrame(frameInput(0));
+            defer frame.deinit();
+            return error.BuildFailed;
+        }
+    };
+    var view = try ui.Context.init(std.testing.allocator, .{});
+    defer view.deinit();
+    try std.testing.expectError(error.BuildFailed, Host.build(&view));
+    var next = try view.beginFrame(frameInput(16));
+    defer next.deinit();
+    _ = try view.endFrame(&next);
 }

@@ -24,6 +24,11 @@ frames: []FrameData,
 command_pools: []vk.CommandPool,
 current: u32,
 image_index: u32,
+recording: bool = false,
+pass_count: u32 = 0,
+surface_initialized: bool = false,
+
+pub const passes_max: u32 = 32;
 
 pub const ContextHandle = struct {
     frame: *Frame,
@@ -138,6 +143,9 @@ pub fn deinit(self: *Frame) void {
 }
 
 pub fn begin(self: *Frame) !ContextHandle {
+    if (self.recording) return error.FrameAlreadyActive;
+    self.pass_count = 0;
+    self.surface_initialized = false;
     const f = &self.frames[self.current];
     const device = self.surface.device;
     std.debug.assert(f.in_flight != .null_handle);
@@ -160,31 +168,37 @@ fn acquireImage(device: *Device, surface: *Surface, semaphore: vk.Semaphore) !u3
 }
 
 fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
-    const color_attachment = desc.color_attachment;
-    if (color_attachment.target != null) return error.UnsupportedRenderTarget;
-    if (color_attachment.load_op != .clear or color_attachment.store_op != .store) {
-        return error.UnsupportedRenderPassOperation;
+    if (self.pass_count == passes_max) return error.TooManyRenderPasses;
+    if (desc.depth_attachment != null) return error.UnsupportedDepthAttachment;
+    if (desc.color_attachment.load_op == .load) {
+        if (desc.color_attachment.target) |target| {
+            if (!target.ready) return error.UninitializedRenderTarget;
+        } else {
+            if (!self.surface_initialized) return error.UninitializedRenderTarget;
+        }
     }
     const surface = self.surface;
     const device = surface.device;
-    const f = &self.frames[self.current];
-
-    try device.preparePendingUploads(&f.upload_buffer);
-
-    const image_index = acquireImage(device, surface, f.image_available) catch |err| blk: {
-        if (err != error.OutOfDateKHR) return err;
-        try waitForPresentQueue(device);
-        try surface.recreateSwapchain(surface.swapchain_extent.width, surface.swapchain_extent.height);
-        break :blk try acquireImage(device, surface, f.image_available);
-    };
-
-    self.image_index = image_index;
-
-    try device.vkd.resetCommandPool(device.device, self.command_pools[self.current], .{});
-    try device.vkd.beginCommandBuffer(f.command_buffer, &.{ .flags = .{ .one_time_submit = true } });
-    if (f.upload_buffer) |*buffer| device.recordPendingUploads(f.command_buffer, buffer);
-
-    return RenderPass.create(f.command_buffer, device, surface, image_index, desc);
+    const frame = &self.frames[self.current];
+    if (!self.recording) {
+        try device.preparePendingUploads(&frame.upload_buffer);
+        self.image_index = acquireImage(device, surface, frame.image_available) catch |err| blk: {
+            if (err != error.OutOfDateKHR) return err;
+            try waitForPresentQueue(device);
+            try surface.recreateSwapchain(surface.swapchain_extent.width, surface.swapchain_extent.height);
+            break :blk try acquireImage(device, surface, frame.image_available);
+        };
+        try device.vkd.resetCommandPool(device.device, self.command_pools[self.current], .{});
+        try device.vkd.beginCommandBuffer(frame.command_buffer, &.{ .flags = .{ .one_time_submit = true } });
+        if (frame.upload_buffer) |*buffer| device.recordPendingUploads(frame.command_buffer, buffer);
+        self.recording = true;
+    }
+    const pass = try RenderPass.create(frame.command_buffer, device, surface, self.image_index, desc);
+    self.pass_count += 1;
+    if (desc.color_attachment.target == null) self.surface_initialized = desc.color_attachment.store_op == .store;
+    std.debug.assert(self.pass_count <= passes_max);
+    std.debug.assert(self.recording);
+    return pass;
 }
 
 fn submit(self: *Frame) !void {
@@ -193,6 +207,8 @@ fn submit(self: *Frame) !void {
 }
 
 fn submitCommands(self: *Frame) !void {
+    std.debug.assert(self.recording);
+    std.debug.assert(self.pass_count > 0);
     const device = self.surface.device;
     const f = &self.frames[self.current];
 
@@ -226,6 +242,7 @@ fn submitCommands(self: *Frame) !void {
         }},
     }}, f.in_flight);
     device.clearPendingUploads();
+    self.recording = false;
 }
 
 fn present(self: *Frame) !void {

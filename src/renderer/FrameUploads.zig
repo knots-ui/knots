@@ -92,11 +92,11 @@ pub fn init(ctx: *Context) !FrameUploads {
     });
     errdefer text_uniform_bg.deinit();
 
-    var vertex_clip_bg = try createClipBindGroup(&ctx.device, &ctx.pipeline, &clip_node_buf, "vertex_clip_bg");
+    var vertex_clip_bg = try createClipBindGroup(ctx.device, &ctx.pipeline, &clip_node_buf, "vertex_clip_bg");
     errdefer vertex_clip_bg.deinit();
-    var instance_clip_bg = try createClipBindGroup(&ctx.device, &ctx.instance_pipeline, &clip_node_buf, "instance_clip_bg");
+    var instance_clip_bg = try createClipBindGroup(ctx.device, &ctx.instance_pipeline, &clip_node_buf, "instance_clip_bg");
     errdefer instance_clip_bg.deinit();
-    var text_clip_bg = try createClipBindGroup(&ctx.device, &ctx.text_pipeline, &clip_node_buf, "text_clip_bg");
+    var text_clip_bg = try createClipBindGroup(ctx.device, &ctx.text_pipeline, &clip_node_buf, "text_clip_bg");
     errdefer text_clip_bg.deinit();
 
     var vertex_buf = try ctx.device.createBuffer(.{ .size = INIT_VERTEX_BYTES, .usage = .{ .vertex = true, .copy_dst = true }, .label = "ui_vertices" });
@@ -232,7 +232,7 @@ pub fn ensureClipNodeCapacity(self: *FrameUploads, context: *Context, required: 
     const current_size = self.clip_node_buf.getSize();
     const new_size = @max(required, current_size + current_size / 2);
 
-    const device = &context.device;
+    const device = context.device;
     var clip_node_buf = try device.createBuffer(.{ .size = new_size, .usage = .{ .storage = true, .copy_dst = true }, .label = "clip_nodes" });
     errdefer clip_node_buf.deinit();
     clip_node_buf.load(Clip.Node, &.{Clip.Node.empty});

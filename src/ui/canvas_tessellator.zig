@@ -1,5 +1,5 @@
 const std = @import("std");
-const gpu = @import("gpu");
+const types = @import("render_types");
 const render = @import("render");
 const DrawList = render.DrawList;
 const Clip = render.Clip;
@@ -19,7 +19,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
     for (cmds) |cmd| {
         switch (cmd) {
             .fill_rect => |fr| {
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ ox + fr.x, oy + fr.y },
                     .size = .{ fr.w, fr.h },
                     .uv0 = .{ 0, 0 },
@@ -30,7 +30,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.zero.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
             .fill_rect_gradient => |fr| {
                 const hw = fr.w / 2.0;
@@ -38,7 +38,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                 const fcx = ox + fr.x + hw;
                 const fcy = oy + fr.y + hh;
                 const prim_type: f32 = if (fr.corner_radius.isZero()) 3.0 else 0.0;
-                const vertices = [4]gpu.Vertex{
+                const vertices = [4]types.Vertex{
                     vertex(fcx - hw, fcy - hh, .{ -hw, -hh }, fr.colors[0], fr.corner_radius, .{ hw, hh }, prim_type),
                     vertex(fcx + hw, fcy - hh, .{ hw, -hh }, fr.colors[1], fr.corner_radius, .{ hw, hh }, prim_type),
                     vertex(fcx + hw, fcy + hh, .{ hw, hh }, fr.colors[2], fr.corner_radius, .{ hw, hh }, prim_type),
@@ -47,7 +47,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                 try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, .atlas, clip);
             },
             .stroke_rect => |sr| {
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ ox + sr.x, oy + sr.y },
                     .size = .{ sr.w, sr.h },
                     .uv0 = .{ 0, 0 },
@@ -58,11 +58,11 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = (sr.edge_widths orelse BorderWidth.all(sr.thickness)).value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
             .fill_circle => |fc| {
                 const cr = fc.radius;
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ ox + fc.cx - cr, oy + fc.cy - cr },
                     .size = .{ cr * 2, cr * 2 },
                     .uv0 = .{ 0, 0 },
@@ -73,11 +73,11 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.zero.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
             .stroke_circle => |sc| {
                 const cr = sc.radius;
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ ox + sc.cx - cr, oy + sc.cy - cr },
                     .size = .{ cr * 2, cr * 2 },
                     .uv0 = .{ 0, 0 },
@@ -88,7 +88,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                     .border_width = BorderWidth.all(sc.thickness).value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
             .line => |l| {
                 const dx = l.to[0] - l.from[0];
@@ -101,7 +101,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                 const y0 = oy + l.from[1];
                 const x1 = ox + l.to[0];
                 const y1 = oy + l.to[1];
-                const vertices = [4]gpu.Vertex{
+                const vertices = [4]types.Vertex{
                     vertex(x0 + nx, y0 + ny, zero2, l.color, .zero, flat_hs, 0.0),
                     vertex(x1 + nx, y1 + ny, zero2, l.color, .zero, flat_hs, 0.0),
                     vertex(x1 - nx, y1 - ny, zero2, l.color, .zero, flat_hs, 0.0),
@@ -110,7 +110,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
                 try draw_list.push(&vertices, &.{ 0, 1, 2, 0, 2, 3 }, .atlas, clip);
             },
             .fill_triangle => |t| {
-                const vertices = [3]gpu.Vertex{
+                const vertices = [3]types.Vertex{
                     vertex(ox + t.points[0][0], oy + t.points[0][1], zero2, t.color, .zero, flat_hs, 0.0),
                     vertex(ox + t.points[1][0], oy + t.points[1][1], zero2, t.color, .zero, flat_hs, 0.0),
                     vertex(ox + t.points[2][0], oy + t.points[2][1], zero2, t.color, .zero, flat_hs, 0.0),
@@ -119,7 +119,7 @@ pub fn tessellate(allocator: std.mem.Allocator, draw_list: *DrawList, cmds: []co
             },
             .fill_convex_polygon => |p| {
                 if (p.points.len < 3) continue;
-                const verts = try allocator.alloc(gpu.Vertex, p.points.len);
+                const verts = try allocator.alloc(types.Vertex, p.points.len);
                 defer allocator.free(verts);
                 for (p.points, 0..) |pt, vi| {
                     verts[vi] = vertex(ox + pt[0], oy + pt[1], zero2, p.color, .zero, flat_hs, 0.0);
@@ -147,7 +147,7 @@ fn vertex(
     corner_radius: Radius,
     half_size: [2]f32,
     prim_type: f32,
-) gpu.Vertex {
+) types.Vertex {
     return .{
         .pos = .{ x, y },
         .uv = uv,

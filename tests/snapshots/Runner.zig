@@ -1,18 +1,19 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("ui");
 const capture_utils = @import("Capture.zig");
 const qoi = @import("qoi.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Checkbox = knots.component.Checkbox;
-const SliderInput = knots.component.SliderInput;
-const ProgressBar = knots.component.ProgressBar;
-const Canvas = knots.component.Canvas;
-const Image = knots.component.Image;
-const Spacer = knots.component.Spacer;
-const Dialog = knots.component.Dialog;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Checkbox = ui.component.Checkbox;
+const SliderInput = ui.component.SliderInput;
+const ProgressBar = ui.component.ProgressBar;
+const Canvas = ui.component.Canvas;
+const Image = ui.component.Image;
+const Spacer = ui.component.Spacer;
+const Dialog = ui.component.Dialog;
 
 const WIDTH = 800;
 const HEIGHT = 600;
@@ -58,9 +59,11 @@ pub fn start(self: *Runner) !void {
     }
 }
 
-fn frame(desktop: *knots.App, app: *knots.Frame) !void {
+fn frame(view: *knots.View, app: *ui.Frame) !void {
+    const desktop = view.app;
+    std.debug.assert(view.id == .main);
     const self: *Runner = @fieldParentPtr("app", desktop);
-    if (desktop.takeReadback()) |completed| {
+    if (try view.app.takeReadback(view.id)) |completed| {
         var readback = completed;
         defer readback.deinit();
         var capture = try capture_utils.fromReadback(self.allocator, readback);
@@ -81,7 +84,7 @@ fn frame(desktop: *knots.App, app: *knots.Frame) !void {
         3 => try self.renderOverlay(app),
         else => unreachable,
     }
-    try desktop.requestReadback(self.allocator);
+    try view.app.requestReadback(view.id, self.allocator);
     app.requestRedraw();
 }
 
@@ -161,11 +164,11 @@ fn check(self: *Runner, name: []const u8, capture: capture_utils.Frame) !bool {
     return false;
 }
 
-fn renderComponents(self: *Runner, app: *knots.Frame) !void {
-    const hovered = knots.ui.Key.str("component-primary").hash();
+fn renderComponents(self: *Runner, app: *ui.Frame) !void {
+    const hovered = ui.Key.str("component-primary").hash();
     app.ui().state.hovered = hovered;
-    app.ui().state.focused = knots.ui.Key.str("component-checkbox").hash();
-    const scroll = try app.ui().state.getOrCreate(.scroll, app.ui().allocator, knots.ui.Key.str("component-scroll").hash());
+    app.ui().state.focused = ui.Key.str("component-checkbox").hash();
+    const scroll = try app.ui().state.getOrCreate(.scroll, app.ui().allocator, ui.Key.str("component-scroll").hash());
     scroll.offset[1] = 30;
     try app.e(.{
         page(),
@@ -197,7 +200,7 @@ fn renderComponents(self: *Runner, app: *knots.Frame) !void {
     });
 }
 
-fn renderOverlay(self: *Runner, app: *knots.Frame) !void {
+fn renderOverlay(self: *Runner, app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{
@@ -225,7 +228,7 @@ fn page() Rect {
     };
 }
 
-fn swatch(key: []const u8, color: knots.ui.Color.Input, radius: knots.ui.Radius.Input, width: f32) Rect {
+fn swatch(key: []const u8, color: ui.Color.Input, radius: ui.Radius.Input, width: f32) Rect {
     return .{ .width = .fixed(width), .height = .fixed(72), .style = .{ .color = color, .corner_radius = radius }, .key = .str(key) };
 }
 
@@ -241,7 +244,7 @@ fn makeChecker() [16 * 16 * 4]u8 {
     return pixels;
 }
 
-fn renderGraphics(app: *knots.Frame) !void {
+fn renderGraphics(app: *ui.Frame) !void {
     const canvas_commands = [_]Canvas.DrawCmd{
         .{ .fill_rect_gradient = .{ .x = 18, .y = 18, .w = 304, .h = 70, .corner_radius = .all(14), .colors = .{ .{ 0.28, 0.36, 0.95, 1 }, .{ 0.70, 0.28, 0.92, 1 }, .{ 0.95, 0.35, 0.48, 1 }, .{ 0.25, 0.75, 0.90, 1 } } } },
         .{ .fill_circle = .{ .cx = 82, .cy = 155, .radius = 42, .color = .{ 0.2, 0.75, 0.52, 1 } } },
@@ -296,7 +299,7 @@ fn ensureBaselineDirs(io: std.Io, allocator: std.mem.Allocator, backend: []const
     try makeDir(io, path);
 }
 
-fn renderLayout(app: *knots.Frame) !void {
+fn renderLayout(app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{

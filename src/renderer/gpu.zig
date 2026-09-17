@@ -6,12 +6,14 @@ const FrameUploads = @import("FrameUploads.zig");
 
 pub const Context = struct {
     inner: *RenderContext,
+    draw_format: ?common.Texture.Format = null,
 
     pub fn waitIdle(self: Context) !void {
         try self.inner.device.waitIdle();
     }
 
     pub fn drawFormat(self: Context) common.Texture.Format {
+        if (self.draw_format) |format| return format;
         const context = self.inner;
         return if (context.linear_pipeline != null) .rgba8 else context.device.surfaceFormat();
     }
@@ -248,12 +250,32 @@ pub const DrawContext = struct {
     content_scale: f32,
 };
 
-/// Typed form of `render.DrawList.CustomDrawCallback`. `draw_context` is scoped
+/// Typed form of `render.CustomDrawCallback`. `draw_context` is scoped
 /// to the canvas bounds and valid only for the call.
 pub const DrawCallback = *const fn (
     user_data: ?*anyopaque,
     draw_context: *DrawContext,
 ) anyerror!void;
+
+/// Wrap a typed renderer callback without coupling UI components to this module.
+/// The callback is selected at compile time; user_data remains borrowed.
+pub fn paintCallback(user_data: ?*anyopaque, comptime callback: DrawCallback) @import("render").PaintCallback {
+    const descriptor: @import("render").PaintCallback = .{
+        .extension = .knots,
+        .callback = struct {
+            fn invoke(data: ?*anyopaque, erased_context: *anyopaque) !void {
+                const std = @import("std");
+                const context: *DrawContext = @ptrCast(@alignCast(erased_context));
+                std.debug.assert(std.math.isFinite(context.content_scale));
+                std.debug.assert(context.content_scale > 0);
+                try callback(data, context);
+            }
+        }.invoke,
+        .user_data = user_data,
+    };
+    descriptor.validate();
+    return descriptor;
+}
 
 fn bindGroupDesc(desc: BindGroup.Desc, entries: *[16]gpu_impl.BindGroup.BindingEntry, frame_uploads: ?*FrameUploads) !gpu_impl.BindGroup.Desc {
     if (desc.entries.len > entries.len) return error.TooManyBindGroupEntries;
@@ -293,4 +315,31 @@ fn bindGroupBuffer(view: BufferView, frame_uploads: ?*FrameUploads) !*const gpu_
         },
     }
     return view.checkedImpl();
+}
+
+test "paint adapter forwards context and user data and propagates callback errors" {
+    const std = @import("std");
+    const State = struct {
+        calls: u32 = 0,
+        fail: bool = false,
+
+        fn draw(user_data: ?*anyopaque, context: *DrawContext) !void {
+            const self: *@This() = @ptrCast(@alignCast(user_data.?));
+            std.debug.assert(self.calls < 2);
+            try std.testing.expectEqual(@as(f32, 2), context.content_scale);
+            self.calls += 1;
+            if (self.fail) return error.CallbackFailed;
+        }
+    };
+    var state: State = .{};
+    // The callback only accesses scale; no GPU resource is needed for this test.
+    var context: DrawContext = undefined;
+    context.content_scale = 2;
+    const paint = paintCallback(&state, State.draw);
+    try std.testing.expectEqual(@import("render").Extension.knots, paint.extension);
+    try paint.callback(paint.user_data, &context);
+    try std.testing.expectEqual(@as(u32, 1), state.calls);
+    state.fail = true;
+    try std.testing.expectError(error.CallbackFailed, paint.callback(paint.user_data, &context));
+    try std.testing.expectEqual(@as(u32, 2), state.calls);
 }

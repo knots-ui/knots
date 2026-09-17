@@ -5,7 +5,7 @@ const math = @import("math");
 
 const Element = layout.Element;
 const std = @import("std");
-const gpu = @import("gpu");
+const types = @import("render_types");
 const render = @import("render");
 const DrawList = render.DrawList;
 const Clip = render.Clip;
@@ -907,7 +907,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
         switch (self.decorations.items[slot]) {
             .none => {},
             .rect => |r| {
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ el.box.x(), el.box.y() },
                     .size = .{ el.box.w(), el.box.h() },
                     .uv0 = .{ 0, 0 },
@@ -918,7 +918,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = r.border_width.value,
                     .prim_type = 0.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, .atlas, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
             .text => |t| if (t.content.len > 0) {
                 const face = try self.font.getFace(t.font);
@@ -981,11 +981,11 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
             },
             .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
             .gpu_canvas => |canvas| {
-                try draw_list.pushCustomDraw(canvas.on_draw, canvas.user_data, el.box, clip);
+                try draw_list.pushCustomDraw(&canvas, el.box, clip);
             },
             .image => |img| {
                 const zero4 = [4]f32{ 0, 0, 0, 0 };
-                const inst = gpu.Instance{
+                const inst = types.Instance{
                     .pos = .{ el.box.x(), el.box.y() },
                     .size = .{ el.box.w(), el.box.h() },
                     .uv0 = .{ 0, 0 },
@@ -996,7 +996,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     .border_width = BorderWidth.zero.value,
                     .prim_type = if (img.@"opaque") 4.0 else 2.0,
                 };
-                try draw_list.pushInstances(&[_]gpu.Instance{inst}, img.source, clip);
+                try draw_list.pushInstances(&[_]types.Instance{inst}, img.source, clip);
             },
             .range => |r| try renderRange(draw_list, el.box, r, clip),
         }
@@ -1015,11 +1015,11 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
     const progress = std.math.clamp(r.progress, 0.0, 1.0);
 
     const track = solidRectInstance(bx, ty, bw, th, r.track_color, r.corner_radius);
-    try draw_list.pushInstances(&[_]gpu.Instance{track}, .atlas, clip);
+    try draw_list.pushInstances(&[_]types.Instance{track}, .atlas, clip);
 
     if (progress > 0) {
         const fill = solidRectInstance(bx, ty, bw * progress, th, r.fill_color, r.corner_radius);
-        try draw_list.pushInstances(&[_]gpu.Instance{fill}, .atlas, clip);
+        try draw_list.pushInstances(&[_]types.Instance{fill}, .atlas, clip);
     }
 
     if (r.halo_radius > 0 and r.halo_color[3] > 0) {
@@ -1027,7 +1027,7 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
         const cx = bx + bw * progress;
         const cy = by + bh * 0.5;
         const halo = solidRectInstance(cx - hr, cy - hr, hr * 2, hr * 2, r.halo_color, Radius.all(hr));
-        try draw_list.pushInstances(&[_]gpu.Instance{halo}, .atlas, clip);
+        try draw_list.pushInstances(&[_]types.Instance{halo}, .atlas, clip);
     }
 
     if (r.knob_radius > 0) {
@@ -1035,11 +1035,11 @@ fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: 
         const cx = bx + bw * progress;
         const cy = by + bh * 0.5;
         const knob = solidRectInstance(cx - kr, cy - kr, kr * 2, kr * 2, r.knob_color, Radius.all(kr));
-        try draw_list.pushInstances(&[_]gpu.Instance{knob}, .atlas, clip);
+        try draw_list.pushInstances(&[_]types.Instance{knob}, .atlas, clip);
     }
 }
 
-inline fn solidRectInstance(x: f32, y: f32, w: f32, h: f32, color: [4]f32, corner_radius: Radius) gpu.Instance {
+inline fn solidRectInstance(x: f32, y: f32, w: f32, h: f32, color: [4]f32, corner_radius: Radius) types.Instance {
     return .{
         .pos = .{ x, y },
         .size = .{ w, h },

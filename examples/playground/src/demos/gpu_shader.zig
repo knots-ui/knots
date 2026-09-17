@@ -1,21 +1,22 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const renderer = @import("renderer");
 const shader_config = @import("gpu_shader_config");
 
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const GPUCanvas = knots.component.GPUCanvas;
-const Rect = knots.component.Rect;
-const SliderInput = knots.component.SliderInput;
-const Spacer = knots.component.Spacer;
-const Text = knots.component.Text;
+const GPUCanvas = ui.component.GPUCanvas;
+const Rect = ui.component.Rect;
+const SliderInput = ui.component.SliderInput;
+const Spacer = ui.component.Spacer;
+const Text = ui.component.Text;
 
 const max_particles = 8192;
 const index_count = 60;
 
-const canvas_background = knots.ui.Color.rgba(4, 7, 16, 255);
+const canvas_background = ui.Color.rgba(4, 7, 16, 255);
 
 const wgsl: []const u8 = if (shader_config.has_wgsl) @embedFile("gpu_shader_wgsl") else "";
 const vertex_spirv_bytes align(@alignOf(u32)) = if (shader_config.has_spirv) @embedFile("gpu_shader_vert_spv").* else [_]u8{};
@@ -76,11 +77,11 @@ comptime {
     std.debug.assert(@offsetOf(Uniforms, "clip_transform") == 48);
 }
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Knot Laboratory", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const state = &self.demo_state;
     if (state.gpu_resources == null) {
@@ -143,16 +144,14 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
         .width = .grow(),
         .height = .grow(),
         .interactive = true,
-        .onDraw = drawKnot,
-        .user_data = self,
+        .paint = renderer.gpu.paintCallback(self, drawKnot),
         .key = .src(@src()),
     };
     const canvas_id = try canvas.open(app);
-    const ui = app.ui();
-    const raw_mouse = ui.mousePosition();
+    const raw_mouse = app.ui().mousePosition();
     const mouse = [2]f32{ @floatCast(raw_mouse[0]), @floatCast(raw_mouse[1]) };
-    const left = ui.input.mouseButton(.left);
-    if (ui.leftPressed(canvas_id, .exact)) {
+    const left = app.ui().input.mouseButton(.left);
+    if (app.ui().leftPressed(canvas_id, .exact)) {
         state.gpu_dragging = true;
         state.gpu_drag_position = mouse;
     }
@@ -175,7 +174,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     app.requestRedraw();
 }
 
-fn control(app: *knots.Frame, comptime label: []const u8, value: anytype) !void {
+fn control(app: *ui.Frame, comptime label: []const u8, value: anytype) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -190,7 +189,7 @@ fn control(app: *knots.Frame, comptime label: []const u8, value: anytype) !void 
     });
 }
 
-fn slider(app: *knots.Frame, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
+fn slider(app: *ui.Frame, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
     try control(app, label, SliderInput{
         .value = value,
         .min = min,

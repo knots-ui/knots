@@ -1,11 +1,12 @@
 const knots = @import("knots");
-const Rect = knots.component.Rect;
+const ui = @import("knots-ui");
+const Rect = ui.component.Rect;
 
 pub fn panel(
     desktop: *knots.App,
-    frame: *knots.Frame,
+    frame: *ui.Frame,
     comptime title: []const u8,
-    body: *const fn (*knots.App, *knots.Frame) anyerror!void,
+    body: *const fn (*knots.App, *ui.Frame) anyerror!void,
 ) !void {
     const wrap = Rect{
         .width = .grow(),

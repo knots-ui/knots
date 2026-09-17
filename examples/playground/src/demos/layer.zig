@@ -1,15 +1,16 @@
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Spacer = ui.component.Spacer;
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Layer", body);
 }
 
-fn body(_: *knots.App, app: *knots.Frame) !void {
+fn body(_: *knots.App, app: *ui.Frame) !void {
     try app.e(.{
         Rect{ .dir = .layer, .key = .src(@src()) },
         .{

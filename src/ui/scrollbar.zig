@@ -2,7 +2,7 @@ const input_types = @import("input");
 const std = @import("std");
 const math = @import("math");
 const layout = @import("layout");
-const gpu = @import("gpu");
+const types = @import("render_types");
 const DrawList = @import("render").DrawList;
 const Clip = @import("render").Clip;
 
@@ -279,7 +279,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
         for (sg.geom.bars) |maybe_bar| {
             const bar = maybe_bar orelse continue;
 
-            const track_inst = gpu.Instance{
+            const track_inst = types.Instance{
                 .pos = .{ bar.track.x(), bar.track.y() },
                 .size = .{ bar.track.w(), bar.track.h() },
                 .uv0 = .{ 0, 0 },
@@ -290,14 +290,14 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{track_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]types.Instance{track_inst}, .atlas, sg.parent_clip);
 
             const dragging = if (ui.state.get(.scroll, el.id)) |s| s.drag_axis == bar.axis else false;
             const hovered = ui.state.hovered == sb_id or dragging;
             const hover_t = ui.anim(sb_id, "sb_hover", if (hovered) 1.0 else 0.0, .{ .duration_ms = 100 });
             const thumb_color: [4]f32 = math.lerp(base, hi, hover_t);
 
-            const thumb_inst = gpu.Instance{
+            const thumb_inst = types.Instance{
                 .pos = .{ bar.thumb.x(), bar.thumb.y() },
                 .size = .{ bar.thumb.w(), bar.thumb.h() },
                 .uv0 = .{ 0, 0 },
@@ -308,7 +308,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{thumb_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]types.Instance{thumb_inst}, .atlas, sg.parent_clip);
 
             try ui.appendHitWithScope(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
         }
@@ -316,7 +316,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
         // Corner fill when both bars are present.
         if (sg.geom.bars[0] != null and sg.geom.bars[1] != null) {
             const thickness = ui.theme.scrollbar_thickness;
-            const corner_inst = gpu.Instance{
+            const corner_inst = types.Instance{
                 .pos = .{ el.box.x() + el.box.w() - thickness, el.box.y() + el.box.h() - thickness },
                 .size = .{ thickness, thickness },
                 .uv0 = .{ 0, 0 },
@@ -327,7 +327,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]gpu.Instance{corner_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]types.Instance{corner_inst}, .atlas, sg.parent_clip);
         }
     }
 }
@@ -513,7 +513,7 @@ test "scrollbar drag moves scroll offset proportionally" {
         .pos = .{ bar.thumb.x() + 1, thumb_top_y + 4 },
         .mouse = blk: {
             var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
-            buttons[@intFromEnum(input_types.MouseButton.left)].down = true;
+            buttons[@backingInt(input_types.MouseButton.left)].down = true;
             break :blk buttons;
         },
         .scroll = .{},
@@ -535,7 +535,7 @@ test "scrollbar drag moves scroll offset proportionally" {
         .pos = .{ bar.thumb.x() + 1, drag_target_y },
         .mouse = blk: {
             var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
-            buttons[@intFromEnum(input_types.MouseButton.left)].down = true;
+            buttons[@backingInt(input_types.MouseButton.left)].down = true;
             break :blk buttons;
         },
         .scroll = .{},

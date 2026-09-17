@@ -1,22 +1,23 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const MenuButton = knots.component.MenuButton;
-const Spacer = knots.component.Spacer;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const MenuButton = ui.component.MenuButton;
+const Spacer = ui.component.Spacer;
 
 const Menu = MenuButton(ButtonMenu);
 const DEMO_TITLE = "Buttons";
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, DEMO_TITLE, body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const arena = app.arena();
 
@@ -114,24 +115,24 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
 const ButtonMenu = struct {
     state: *Self,
 
-    pub fn render(self: *const ButtonMenu, app: *knots.Frame) anyerror!void {
+    pub fn render(self: *const ButtonMenu, app: *ui.Frame) anyerror!void {
         if ((try app.interact(menuAction(
             "Copy",
-            knots.ui.Key.str("buttons.menu.copy"),
+            ui.Key.str("buttons.menu.copy"),
         ))).clicked) {
             self.state.demo_state.menu_button_last_action = "copy";
             app.requestRedraw();
         }
         if ((try app.interact(menuAction(
             "Rename",
-            knots.ui.Key.str("buttons.menu.rename"),
+            ui.Key.str("buttons.menu.rename"),
         ))).clicked) {
             self.state.demo_state.menu_button_last_action = "rename";
             app.requestRedraw();
         }
         if ((try app.interact(menuAction(
             "Archive",
-            knots.ui.Key.str("buttons.menu.archive"),
+            ui.Key.str("buttons.menu.archive"),
         ))).clicked) {
             self.state.demo_state.menu_button_last_action = "archive";
             app.requestRedraw();
@@ -139,7 +140,7 @@ const ButtonMenu = struct {
     }
 };
 
-fn menuAction(comptime label: []const u8, key: knots.ui.Key) Button {
+fn menuAction(comptime label: []const u8, key: ui.Key) Button {
     return Button{
         .key = key,
         .width = .grow(),
@@ -153,19 +154,19 @@ fn menuAction(comptime label: []const u8, key: knots.ui.Key) Button {
     };
 }
 
-fn increment(self: *Self, app: *knots.Frame) !void {
+fn increment(self: *Self, app: *ui.Frame) !void {
     self.demo_state.counter += 1;
     try self.demo_state.counter_items.append(self.allocator, self.demo_state.counter);
     app.requestRedraw();
 }
 
-fn decrement(self: *Self, app: *knots.Frame) void {
+fn decrement(self: *Self, app: *ui.Frame) void {
     self.demo_state.counter -= 1;
     _ = self.demo_state.counter_items.pop();
     app.requestRedraw();
 }
 
-fn reset(self: *Self, app: *knots.Frame) void {
+fn reset(self: *Self, app: *ui.Frame) void {
     self.demo_state.counter = 0;
     self.demo_state.counter_items.clearRetainingCapacity();
     app.requestRedraw();

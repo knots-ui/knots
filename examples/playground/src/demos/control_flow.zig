@@ -1,23 +1,24 @@
 const std = @import("std");
 const knots = @import("knots");
+const ui = @import("knots-ui");
 const Self = @import("../root.zig");
 const ui_helpers = @import("../ui_helpers.zig");
 
-const Rect = knots.component.Rect;
-const Text = knots.component.Text;
-const Button = knots.component.Button;
-const Spacer = knots.component.Spacer;
-const For = knots.control.For;
-const VirtualList = knots.control.VirtualList;
+const Rect = ui.component.Rect;
+const Text = ui.component.Text;
+const Button = ui.component.Button;
+const Spacer = ui.component.Spacer;
+const For = ui.control.For;
+const VirtualList = ui.control.VirtualList;
 
 const virtual_items_count: usize = 100_000;
 const virtual_row_height: f32 = 22;
 
-pub fn render(desktop: *knots.App, app: *knots.Frame) !void {
+pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
     try ui_helpers.panel(desktop, app, "Control flow", body);
 }
 
-fn body(desktop: *knots.App, app: *knots.Frame) !void {
+fn body(desktop: *knots.App, app: *ui.Frame) !void {
     const self = Self.of(desktop);
     const arena = app.arena();
 
@@ -65,7 +66,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
-    const collapsible = knots.component.Collapsible{
+    const collapsible = ui.component.Collapsible{
         .key = .str("control_flow.details"),
         .open = self.demo_state.show_details,
     };
@@ -107,7 +108,7 @@ fn body(desktop: *knots.App, app: *knots.Frame) !void {
     });
 }
 
-fn dynamicList(self: *Self, app: *knots.Frame) !void {
+fn dynamicList(self: *Self, app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -138,7 +139,7 @@ fn virtualItems() []const usize {
     return &State.items;
 }
 
-fn renderVirtualItem(app: *knots.Frame, item: usize, i: usize) !void {
+fn renderVirtualItem(app: *ui.Frame, item: usize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
@@ -146,17 +147,17 @@ fn renderVirtualItem(app: *knots.Frame, item: usize, i: usize) !void {
             .height = .fixed(virtual_row_height),
             .padding = .init(2, 12, 2, 12),
             .@"align" = .center,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
         },
         .{Text{
             .content = try std.fmt.allocPrint(arena, "row #{d}", .{item}),
             .size = .sm,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
         }},
     });
 }
 
-fn renderItem(app: *knots.Frame, item: isize, i: usize) !void {
+fn renderItem(app: *ui.Frame, item: isize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
@@ -164,29 +165,29 @@ fn renderItem(app: *knots.Frame, item: isize, i: usize) !void {
             .height = .fixed(24),
             .padding = .init(0, 8, 0, 8),
             .@"align" = .center,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
             .style = .{ .color = .elevated, .corner_radius = .sm },
         },
         .{Text{
             .content = try std.fmt.allocPrint(arena, "item #{d}", .{item}),
             .size = .sm,
-            .key = knots.ui.Key.src(@src()).indexed(i),
+            .key = ui.Key.src(@src()).indexed(i),
         }},
     });
 }
 
-fn pushItem(self: *Self, app: *knots.Frame) !void {
+fn pushItem(self: *Self, app: *ui.Frame) !void {
     self.demo_state.counter += 1;
     try self.demo_state.counter_items.append(self.allocator, self.demo_state.counter);
     app.requestRedraw();
 }
 
-fn popItem(self: *Self, app: *knots.Frame) void {
+fn popItem(self: *Self, app: *ui.Frame) void {
     if (self.demo_state.counter_items.pop() != null) self.demo_state.counter -= 1;
     app.requestRedraw();
 }
 
-fn toggle(self: *Self, app: *knots.Frame) void {
+fn toggle(self: *Self, app: *ui.Frame) void {
     self.demo_state.show_details = !self.demo_state.show_details;
     app.requestRedraw();
 }
