@@ -103,7 +103,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .pp_enabled_extension_names = &instance_extensions,
         .enabled_layer_count = if (validation) 1 else 0,
         .pp_enabled_layer_names = if (validation) &validation_layers else null,
-        .flags = if (builtin.os.tag.isDarwin()) .{ .enumerate_portability_bit_khr = true } else .{},
+        .flags = if (builtin.os.tag.isDarwin()) .{ .enumerate_portability_khr = true } else .{},
     }, null);
 
     const vki = vk.InstanceWrapper.load(instance, vkb.dispatch.vkGetInstanceProcAddr.?);
