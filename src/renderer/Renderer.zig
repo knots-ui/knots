@@ -313,6 +313,7 @@ const RenderFailure = union(enum) {
 
 pub fn render(self: *Renderer, draw_list: *const DrawList, glyph_builder: *text.GlyphBuilder, content_scale: f32) RenderResult {
     const failure = self.draw(draw_list, glyph_builder, content_scale) orelse return .success;
+
     return switch (failure) {
         .callback => |err| .{ .callback_error = err },
         .renderer => |err| .{ .renderer_error = mapRenderError(err) },
@@ -374,8 +375,7 @@ const FrameSizes = struct {
     verts_bytes: usize,
     insts_bytes: usize,
     indices_bytes: usize,
-    tverts_bytes: usize,
-    tindices_bytes: usize,
+    text_instances_bytes: usize,
 };
 
 const DrawState = struct {
@@ -392,7 +392,7 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
     const upload_slot: usize = @intCast(frame_ctx.upload_slot);
     std.debug.assert(upload_slot < self.frame_uploads.len);
     const upload = &self.frame_uploads[upload_slot];
-    upload.resetCustom();
+    upload.resetCustom(frame_ctx);
 
     self.syncGlyphBuilder(device, context, glyph_builder) catch |err| return .{ .renderer = err };
     self.syncDepthTarget(device) catch |err| return .{ .renderer = err };
@@ -513,7 +513,7 @@ fn draw(self: *Renderer, dl: *const DrawList, glyph_builder: *text.GlyphBuilder,
             switch (cmd.payload) {
                 .vertex => |value| pass.drawIndexed(value.count, 1, value.offset, 0, 0),
                 .instance => |value| pass.drawIndexed(6, value.count, 0, 0, value.offset),
-                .text => |value| pass.drawIndexed(value.count, 1, value.offset, 0, 0),
+                .text => |value| pass.drawIndexed(6, value.count, 0, 0, value.offset),
                 .custom_draw => unreachable,
             }
         }
@@ -616,22 +616,20 @@ fn updateViewport(self: *Renderer, uploads: *FrameUploads, content_scale: f32) v
 fn uploadFrameData(context: *Context, uploads: *FrameUploads, dl: *const DrawList) !FrameSizes {
     const verts = dl.vertices.items;
     const insts = dl.instances.items;
-    const tverts = dl.text_vertices.items;
+    const text_instances = dl.text_instances.items;
     const empty_clip_nodes = [_]Clip.Node{Clip.Node.empty};
     const clip_nodes = if (dl.clip_nodes.items.len > 0) dl.clip_nodes.items else empty_clip_nodes[0..];
     try ensureAndLoad(&uploads.vertex_buf, gpu.Vertex, verts);
     try ensureAndLoad(&uploads.instance_buf, gpu.Instance, insts);
     try ensureAndLoad(&uploads.index_buf, u32, dl.indices.items);
-    try ensureAndLoad(&uploads.text_vertex_buf, gpu.SlugVertex, tverts);
-    try ensureAndLoad(&uploads.text_index_buf, u32, dl.text_indices.items);
+    try ensureAndLoad(&uploads.text_instance_buf, gpu.SlugInstance, text_instances);
     try uploads.ensureClipNodeCapacity(context, clip_nodes.len * @sizeOf(Clip.Node));
     uploads.clip_node_buf.load(Clip.Node, clip_nodes);
     return .{
         .verts_bytes = verts.len * @sizeOf(gpu.Vertex),
         .insts_bytes = insts.len * @sizeOf(gpu.Instance),
         .indices_bytes = dl.indices.items.len * @sizeOf(u32),
-        .tverts_bytes = tverts.len * @sizeOf(gpu.SlugVertex),
-        .tindices_bytes = dl.text_indices.items.len * @sizeOf(u32),
+        .text_instances_bytes = text_instances.len * @sizeOf(gpu.SlugInstance),
     };
 }
 
@@ -669,8 +667,8 @@ fn bindKind(
             pass.setBindGroup(0, &uploads.text_uniform_bg);
             pass.setBindGroup(1, text_curveband_bg);
             pass.setBindGroup(2, &uploads.text_clip_bg);
-            pass.setVertexBuffer(0, &uploads.text_vertex_buf, 0, sizes.tverts_bytes);
-            pass.setIndexBuffer(&uploads.text_index_buf, 0, sizes.tindices_bytes);
+            pass.setVertexBuffer(0, &uploads.text_instance_buf, 0, sizes.text_instances_bytes);
+            pass.setIndexBuffer(&context.unit_index_buf, 0, 6 * @sizeOf(u32));
         },
         .custom_draw => unreachable,
     }

@@ -17,7 +17,7 @@ fn frameInput(now_ms: i64) input.FrameInput {
 const HostEncoder = struct {
     primitive_indices: u64 = 0,
     instances: u64 = 0,
-    text_indices: u64 = 0,
+    text_instances: u64 = 0,
     uploaded_generation: ?u64 = null,
 
     fn encode(self: *HostEncoder, packet: *const render.Packet) !void {
@@ -26,7 +26,7 @@ const HostEncoder = struct {
             switch (command.payload) {
                 .primitive => |range| self.primitive_indices += range.count,
                 .instances => |range| self.instances += range.count,
-                .text => |range| self.text_indices += range.count,
+                .text => |range| self.text_instances += range.count,
             }
         }
         if (packet.glyphUpdate()) |update| {

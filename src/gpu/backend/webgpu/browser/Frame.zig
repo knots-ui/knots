@@ -2,6 +2,7 @@ const std = @import("std");
 const js = @import("js-bridge");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
+const BindGroup = @import("BindGroup.zig");
 const gpu = @import("gpu");
 const webgpu = @import("webgpu.zig");
 
@@ -15,6 +16,10 @@ surface: *Surface,
 pub const ContextHandle = struct {
     frame: *Frame,
     upload_slot: u32,
+
+    pub fn createBindGroup(self: *const ContextHandle, desc: BindGroup.Desc) !BindGroup {
+        return self.frame.surface.device.createBindGroup(desc);
+    }
 
     pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
         return self.frame.beginRenderPass(desc);

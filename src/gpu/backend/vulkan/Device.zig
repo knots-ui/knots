@@ -12,6 +12,7 @@ const MemoryAllocator = @import("MemoryAllocator.zig");
 
 const Device = @This();
 const required_api_version = vk.API_VERSION_1_3;
+const upload_batch_max = 64;
 
 pub const clip_space_y_down = true;
 
@@ -54,6 +55,7 @@ vkd: vk.DeviceWrapper,
 instance: vk.Instance,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 debug_utils: bool,
+validation_enabled: bool,
 physical_device: vk.PhysicalDevice,
 device: vk.Device,
 queue_family: u32,
@@ -182,6 +184,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
         .instance = instance,
         .debug_messenger = debug_messenger,
         .debug_utils = debug_utils,
+        .validation_enabled = validation,
         .physical_device = phys.device,
         .device = device,
         .queue_family = phys.queue_family,
@@ -322,7 +325,7 @@ pub fn preparePendingUploads(self: *Device, upload_buffer: *?Buffer) !void {
             .layer_count = 1,
         };
         self.upload_barriers_before.appendAssumeCapacity(.{
-            .src_stage_mask = if (pending.old_layout == .undefined) .{} else .{ .fragment_shader = true },
+            .src_stage_mask = if (pending.old_layout == .undefined) .{} else .{ .vertex_shader = true, .fragment_shader = true },
             .src_access_mask = if (pending.old_layout == .undefined) .{} else .{ .shader_sampled_read = true },
             .dst_stage_mask = .{ .all_transfer = true },
             .dst_access_mask = .{ .transfer_write = true },
@@ -336,7 +339,7 @@ pub fn preparePendingUploads(self: *Device, upload_buffer: *?Buffer) !void {
         self.upload_barriers_after.appendAssumeCapacity(.{
             .src_stage_mask = .{ .all_transfer = true },
             .src_access_mask = .{ .transfer_write = true },
-            .dst_stage_mask = .{ .fragment_shader = true },
+            .dst_stage_mask = .{ .vertex_shader = true, .fragment_shader = true },
             .dst_access_mask = .{ .shader_sampled_read = true },
             .old_layout = .transfer_dst_optimal,
             .new_layout = .shader_read_only_optimal,
@@ -354,18 +357,41 @@ pub fn recordPendingUploads(self: *Device, command_buffer: vk.CommandBuffer, upl
         .image_memory_barrier_count = @intCast(self.upload_barriers_before.items.len),
         .p_image_memory_barriers = self.upload_barriers_before.items.ptr,
     });
-    for (self.pending_upload_images.items) |pending_image| {
-        for (self.pending_uploads.items) |upload| {
-            if (upload.image != pending_image.image) continue;
-            self.vkd.cmdCopyBufferToImage(command_buffer, upload_buffer.buffer, upload.image, .transfer_dst_optimal, &.{.{
-                .buffer_offset = upload.buffer_offset,
-                .buffer_row_length = upload.buffer_row_length,
-                .buffer_image_height = 0,
-                .image_subresource = .{ .aspect_mask = .{ .color = true }, .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
-                .image_offset = upload.image_offset,
-                .image_extent = upload.image_extent,
-            }});
+    var batch_start: usize = 0;
+    for (self.pending_uploads.items, 0..) |upload, index| {
+        std.debug.assert(batch_start <= index);
+        std.debug.assert(index - batch_start <= upload_batch_max);
+        // Bound overlap detection to at most 64 comparisons per copy.
+        var needs_barrier = index - batch_start == upload_batch_max;
+        if (!needs_barrier) {
+            for (self.pending_uploads.items[batch_start..index]) |previous| {
+                if (previous.image != upload.image) continue;
+                if (uploadsOverlap(&previous, &upload)) {
+                    needs_barrier = true;
+                    break;
+                }
+            }
         }
+        if (needs_barrier) {
+            self.vkd.cmdPipelineBarrier2(command_buffer, &.{
+                .memory_barrier_count = 1,
+                .p_memory_barriers = &[_]vk.MemoryBarrier2{.{
+                    .src_stage_mask = .{ .copy = true },
+                    .src_access_mask = .{ .transfer_write = true },
+                    .dst_stage_mask = .{ .copy = true },
+                    .dst_access_mask = .{ .transfer_write = true },
+                }},
+            });
+            batch_start = index;
+        }
+        self.vkd.cmdCopyBufferToImage(command_buffer, upload_buffer.buffer, upload.image, .transfer_dst_optimal, &.{.{
+            .buffer_offset = upload.buffer_offset,
+            .buffer_row_length = upload.buffer_row_length,
+            .buffer_image_height = 0,
+            .image_subresource = .{ .aspect_mask = .{ .color = true }, .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
+            .image_offset = upload.image_offset,
+            .image_extent = upload.image_extent,
+        }});
     }
     self.vkd.cmdPipelineBarrier2(command_buffer, &.{
         .image_memory_barrier_count = @intCast(self.upload_barriers_after.items.len),
@@ -379,6 +405,20 @@ pub fn clearPendingUploads(self: *Device) void {
     self.pending_upload_images.clearRetainingCapacity();
     self.upload_barriers_before.clearRetainingCapacity();
     self.upload_barriers_after.clearRetainingCapacity();
+}
+
+fn uploadsOverlap(previous: *const PendingUpload, next: *const PendingUpload) bool {
+    std.debug.assert(previous.image_extent.width > 0);
+    std.debug.assert(next.image_extent.width > 0);
+    const previous_right = @as(i64, previous.image_offset.x) + previous.image_extent.width;
+    const next_right = @as(i64, next.image_offset.x) + next.image_extent.width;
+    if (previous.image_offset.x >= next_right) return false;
+    if (next.image_offset.x >= previous_right) return false;
+    const previous_bottom = @as(i64, previous.image_offset.y) + previous.image_extent.height;
+    const next_bottom = @as(i64, next.image_offset.y) + next.image_extent.height;
+    if (previous.image_offset.y >= next_bottom) return false;
+    if (next.image_offset.y >= previous_bottom) return false;
+    return true;
 }
 
 pub fn createSurfaceHandle(self: *const Device, window_handle: gpu.Context.WindowHandle) !vk.SurfaceKHR {
@@ -400,13 +440,19 @@ pub fn allocateDescriptorSetWithPool(self: *Device, layout: vk.DescriptorSetLayo
             .descriptor_pool = entry.pool,
             .descriptor_set_count = 1,
             .p_set_layouts = &[_]vk.DescriptorSetLayout{layout},
-        }, &set) catch continue;
+        }, &set) catch |err| switch (err) {
+            error.OutOfPoolMemory, error.FragmentedPool => continue,
+            else => return err,
+        };
         return .{ .set = set[0], .pool = entry.pool };
     }
 
-    const new_pool = try createDescriptorPool(self.vkd, self.device);
+    const new_pool = try createDescriptorPool(self.vkd, self.device, true);
     self.setDebugName(.descriptor_pool, @backingInt(new_pool), "descriptor_pool");
-    try self.descriptor_pools.append(self.allocator, .{ .pool = new_pool });
+    self.descriptor_pools.append(self.allocator, .{ .pool = new_pool }) catch |err| {
+        self.vkd.destroyDescriptorPool(self.device, new_pool, null);
+        return err;
+    };
     var set: [1]vk.DescriptorSet = undefined;
     try self.vkd.allocateDescriptorSets(self.device, &.{
         .descriptor_pool = new_pool,
@@ -463,9 +509,9 @@ fn loadVulkan() !VulkanLoader {
     }
 }
 
-fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device) !vk.DescriptorPool {
+pub fn createDescriptorPool(vkd: vk.DeviceWrapper, device: vk.Device, free_sets: bool) !vk.DescriptorPool {
     return vkd.createDescriptorPool(device, &.{
-        .flags = .{ .free_descriptor_set = true },
+        .flags = .{ .free_descriptor_set = free_sets },
         .max_sets = 64,
         .pool_size_count = 4,
         .p_pool_sizes = &[_]vk.DescriptorPoolSize{
@@ -523,7 +569,8 @@ fn createDescriptorPools(allocator: std.mem.Allocator, vkd: vk.DeviceWrapper, de
     var descriptor_pools: std.ArrayList(DescriptorPoolEntry) = .empty;
     errdefer destroyDescriptorPools(allocator, vkd, device, &descriptor_pools);
 
-    const initial_pool = try createDescriptorPool(vkd, device);
+    const initial_pool = try createDescriptorPool(vkd, device, true);
+    errdefer vkd.destroyDescriptorPool(device, initial_pool, null);
     try descriptor_pools.append(allocator, .{ .pool = initial_pool });
     return descriptor_pools;
 }
@@ -552,6 +599,7 @@ fn getMetalLayer(ns_window: *anyopaque) ?*anyopaque {
     const set_layer_sel = sel.sel_registerName("setLayer:") orelse return null;
     const backing_scale_sel = sel.sel_registerName("backingScaleFactor") orelse return null;
     const set_contents_scale_sel = sel.sel_registerName("setContentsScale:") orelse return null;
+    const set_delegate_sel = sel.sel_registerName("setDelegate:") orelse return null;
     const ca_metal_layer_class = sel.objc_getClass("CAMetalLayer") orelse return null;
 
     const view = msgSend(ns_window, content_view_sel) orelse return null;
@@ -569,6 +617,8 @@ fn getMetalLayer(ns_window: *anyopaque) ?*anyopaque {
         const raw = msgSend(ca_metal_layer_class, alloc_sel) orelse return null;
         const new_layer = msgSend(raw, init_sel) orelse return null;
         msgSendObj(view, set_layer_sel, new_layer);
+        // MoltenVK uses the view delegate to track the layer's display timing.
+        msgSendObj(new_layer, set_delegate_sel, view);
         break :blk new_layer;
     };
 

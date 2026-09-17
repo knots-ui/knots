@@ -86,6 +86,7 @@ pub const Block = struct {
     memory: vk.DeviceMemory,
     memory_type_index: u32,
     class: ResourceClass,
+    properties: vk.MemoryPropertyFlags,
     mapped: ?[*]u8,
     ranges: RangeAllocator,
 };
@@ -96,6 +97,7 @@ pub const Allocation = struct {
     size: vk.DeviceSize,
     mapped: ?[*]u8,
     block: ?*Block,
+    properties: vk.MemoryPropertyFlags,
 };
 
 allocator: std.mem.Allocator,
@@ -174,10 +176,51 @@ pub fn allocate(
 pub fn free(self: *MemoryAllocator, allocation: Allocation) void {
     if (allocation.block) |block| {
         block.ranges.free(allocation.offset, allocation.size);
+        if (block.ranges.allocation_count == 0) {
+            std.debug.assert(block.ranges.free_ranges.items.len == 1);
+            std.debug.assert(block.ranges.free_ranges.items[0].offset == 0);
+            // Keep at most one empty block per memory type and resource class.
+            for (self.blocks.items) |other| {
+                if (other == block) continue;
+                if (other.memory_type_index != block.memory_type_index) continue;
+                if (other.class != block.class) continue;
+                if (other.ranges.allocation_count == 0) {
+                    self.releaseBlock(block);
+                    break;
+                }
+            }
+        }
         return;
     }
     if (allocation.mapped != null) self.vkd.unmapMemory(self.device, allocation.memory);
     self.vkd.freeMemory(self.device, allocation.memory, null);
+}
+
+pub fn trim(self: *MemoryAllocator) void {
+    var index = self.blocks.items.len;
+    while (index > 0) {
+        index -= 1;
+        std.debug.assert(index < self.blocks.items.len);
+        const block = self.blocks.items[index];
+        std.debug.assert(block.memory != .null_handle);
+        if (block.ranges.allocation_count == 0) self.releaseBlock(block);
+    }
+}
+
+fn releaseBlock(self: *MemoryAllocator, block: *Block) void {
+    std.debug.assert(block.ranges.allocation_count == 0);
+    std.debug.assert(block.ranges.free_ranges.items.len == 1);
+    for (self.blocks.items, 0..) |entry, index| {
+        if (entry == block) {
+            _ = self.blocks.swapRemove(index);
+            if (block.mapped != null) self.vkd.unmapMemory(self.device, block.memory);
+            self.vkd.freeMemory(self.device, block.memory, null);
+            block.ranges.deinit(self.allocator);
+            self.allocator.destroy(block);
+            return;
+        }
+    }
+    unreachable;
 }
 
 fn findMemoryType(self: *const MemoryAllocator, type_filter: u32, required: vk.MemoryPropertyFlags, preferred: vk.MemoryPropertyFlags) !u32 {
@@ -203,17 +246,17 @@ fn allocateDedicated(
         .buffer => |buffer| vk.MemoryDedicatedAllocateInfo{ .buffer = buffer },
         .image => |image| vk.MemoryDedicatedAllocateInfo{ .image = image },
     };
-    const memory = try self.vkd.allocateMemory(self.device, &.{
+    const memory = try self.allocateMemory(&.{
         .p_next = &dedicated_info,
         .allocation_size = size,
         .memory_type_index = memory_type_index,
-    }, null);
+    });
     errdefer self.vkd.freeMemory(self.device, memory, null);
     const mapped: ?[*]u8 = if (properties.host_visible)
         @ptrCast(try self.vkd.mapMemory(self.device, memory, 0, size, .{}))
     else
         null;
-    return .{ .memory = memory, .offset = 0, .size = size, .mapped = mapped, .block = null };
+    return .{ .memory = memory, .offset = 0, .size = size, .mapped = mapped, .block = null, .properties = properties };
 }
 
 fn createBlock(
@@ -228,10 +271,10 @@ fn createBlock(
         const aligned_remaining = std.mem.alignBackward(vk.DeviceSize, remaining, 4096);
         if (aligned_remaining >= required_size and aligned_remaining < size) size = aligned_remaining;
     }
-    const memory = try self.vkd.allocateMemory(self.device, &.{
+    const memory = try self.allocateMemory(&.{
         .allocation_size = size,
         .memory_type_index = memory_type_index,
-    }, null);
+    });
     errdefer self.vkd.freeMemory(self.device, memory, null);
     const mapped: ?[*]u8 = if (properties.host_visible)
         @ptrCast(try self.vkd.mapMemory(self.device, memory, 0, size, .{}))
@@ -245,6 +288,7 @@ fn createBlock(
         .memory = memory,
         .memory_type_index = memory_type_index,
         .class = class,
+        .properties = properties,
         .mapped = mapped,
         .ranges = try .init(self.allocator, size),
     };
@@ -255,13 +299,24 @@ fn createBlock(
         if (std.fmt.bufPrintSentinel(&label_buffer, "memory_{s}_{d}", .{ @tagName(class), self.block_serial }, 0x00)) |label|
             self.vkd.setDebugUtilsObjectNameEXT(self.device, &.{
                 .object_type = .device_memory,
-                .object_handle = @intFromEnum(memory),
+                .object_handle = @backingInt(memory),
                 .p_object_name = label,
             }) catch {}
         else |_| {}
         self.block_serial += 1;
     }
     return block;
+}
+
+fn allocateMemory(self: *MemoryAllocator, info: *const vk.MemoryAllocateInfo) !vk.DeviceMemory {
+    std.debug.assert(info.allocation_size > 0);
+    std.debug.assert(info.memory_type_index < self.memory_properties.memory_type_count);
+    return self.vkd.allocateMemory(self.device, info, null) catch |err| {
+        if (err != error.OutOfDeviceMemory) return err;
+        // Release cached blocks before one bounded retry under memory pressure.
+        self.trim();
+        return self.vkd.allocateMemory(self.device, info, null);
+    };
 }
 
 fn destroyLastBlock(self: *MemoryAllocator, block: *Block) void {
@@ -288,6 +343,7 @@ fn allocationFromBlock(block: *Block, offset: vk.DeviceSize, size: vk.DeviceSize
         .size = size,
         .mapped = if (block.mapped) |mapped| mapped + @as(usize, @intCast(offset)) else null,
         .block = block,
+        .properties = block.properties,
     };
 }
 

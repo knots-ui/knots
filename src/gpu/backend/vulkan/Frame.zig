@@ -5,13 +5,15 @@ const Device = @import("Device.zig");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
 const Buffer = @import("Buffer.zig");
+const BindGroup = @import("BindGroup.zig");
+const TransientDescriptors = @import("TransientDescriptors.zig");
 
 const FrameData = struct {
     command_buffer: vk.CommandBuffer,
     image_available: vk.Semaphore,
-    render_finished: vk.Semaphore,
     in_flight: vk.Fence,
     upload_buffer: ?Buffer,
+    descriptors: TransientDescriptors = .{},
 };
 
 const Frame = @This();
@@ -26,6 +28,12 @@ image_index: u32,
 pub const ContextHandle = struct {
     frame: *Frame,
     upload_slot: u32,
+
+    pub fn createBindGroup(self: *const ContextHandle, desc: BindGroup.Desc) !BindGroup {
+        std.debug.assert(self.upload_slot < self.frame.frames.len);
+        std.debug.assert(self.upload_slot == self.frame.current);
+        return BindGroup.createTransient(self.frame.surface.device, &self.frame.frames[self.upload_slot].descriptors, &desc);
+    }
 
     pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
         return self.frame.beginRenderPass(desc);
@@ -57,7 +65,6 @@ pub fn create(surface: *Surface) !Frame {
         for (frames[0..created], command_pools[0..created]) |*f, pool| {
             device.vkd.freeCommandBuffers(device.device, pool, &.{f.command_buffer});
             device.vkd.destroySemaphore(device.device, f.image_available, null);
-            device.vkd.destroySemaphore(device.device, f.render_finished, null);
             device.vkd.destroyFence(device.device, f.in_flight, null);
             if (f.upload_buffer) |*buffer| buffer.deinit();
         }
@@ -69,13 +76,11 @@ pub fn create(surface: *Surface) !Frame {
         var committed = false;
         var command_buffer_allocated = false;
         var image_available: vk.Semaphore = .null_handle;
-        var render_finished: vk.Semaphore = .null_handle;
         var in_flight: vk.Fence = .null_handle;
 
         errdefer if (!committed) {
             if (command_buffer_allocated) device.vkd.freeCommandBuffers(device.device, pool, &.{cmd[0]});
             if (image_available != .null_handle) device.vkd.destroySemaphore(device.device, image_available, null);
-            if (render_finished != .null_handle) device.vkd.destroySemaphore(device.device, render_finished, null);
             if (in_flight != .null_handle) device.vkd.destroyFence(device.device, in_flight, null);
         };
 
@@ -86,7 +91,6 @@ pub fn create(surface: *Surface) !Frame {
         }, &cmd);
         command_buffer_allocated = true;
         image_available = try device.vkd.createSemaphore(device.device, &.{}, null);
-        render_finished = try device.vkd.createSemaphore(device.device, &.{}, null);
         in_flight = try device.vkd.createFence(device.device, &.{ .flags = .{ .signaled = true } }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_commands", .{frame_index})) |label|
@@ -95,9 +99,6 @@ pub fn create(surface: *Surface) !Frame {
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_image_available", .{frame_index})) |label|
             device.setDebugName(.semaphore, @backingInt(image_available), label)
         else |_| {}
-        if (std.fmt.bufPrint(&label_buffer, "frame_{d}_render_finished", .{frame_index})) |label|
-            device.setDebugName(.semaphore, @backingInt(render_finished), label)
-        else |_| {}
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_in_flight", .{frame_index})) |label|
             device.setDebugName(.fence, @backingInt(in_flight), label)
         else |_| {}
@@ -105,7 +106,6 @@ pub fn create(surface: *Surface) !Frame {
         f.* = .{
             .command_buffer = cmd[0],
             .image_available = image_available,
-            .render_finished = render_finished,
             .in_flight = in_flight,
             .upload_buffer = null,
         };
@@ -129,8 +129,8 @@ pub fn deinit(self: *Frame) void {
     for (self.frames, self.command_pools) |*f, pool| {
         device.vkd.freeCommandBuffers(device.device, pool, &.{f.command_buffer});
         device.vkd.destroySemaphore(device.device, f.image_available, null);
-        device.vkd.destroySemaphore(device.device, f.render_finished, null);
         device.vkd.destroyFence(device.device, f.in_flight, null);
+        f.descriptors.deinit(device);
         if (f.upload_buffer) |*buffer| buffer.deinit();
     }
     self.allocator.free(self.frames);
@@ -142,6 +142,7 @@ pub fn begin(self: *Frame) !ContextHandle {
     const device = self.surface.device;
     std.debug.assert(f.in_flight != .null_handle);
     _ = try device.vkd.waitForFences(device.device, &.{f.in_flight}, .true, std.math.maxInt(u64));
+    try f.descriptors.reset(device);
     return .{ .frame = self, .upload_slot = self.current };
 }
 
@@ -218,7 +219,7 @@ fn submitCommands(self: *Frame) !void {
         }},
         .signal_semaphore_info_count = 1,
         .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{.{
-            .semaphore = f.render_finished,
+            .semaphore = self.surface.presentSemaphore(self.image_index),
             .value = 0,
             .stage_mask = .{ .all_commands = true },
             .device_index = 0,
@@ -230,10 +231,9 @@ fn submitCommands(self: *Frame) !void {
 fn present(self: *Frame) !void {
     const surface = self.surface;
     const device = surface.device;
-    const f = &self.frames[self.current];
     const present_result: ?vk.Result = device.vkd.queuePresentKHR(device.graphics_queue, &.{
         .wait_semaphore_count = 1,
-        .p_wait_semaphores = &[_]vk.Semaphore{f.render_finished},
+        .p_wait_semaphores = &[_]vk.Semaphore{surface.presentSemaphore(self.image_index)},
         .swapchain_count = 1,
         .p_swapchains = &[_]vk.SwapchainKHR{surface.swapchain},
         .p_image_indices = &[_]u32{self.image_index},
@@ -316,6 +316,13 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
         }},
     );
     device.vkd.cmdPipelineBarrier2(command_buffer, &.{
+        .memory_barrier_count = 1,
+        .p_memory_barriers = &[_]vk.MemoryBarrier2{.{
+            .src_stage_mask = .{ .copy = true },
+            .src_access_mask = .{ .transfer_write = true },
+            .dst_stage_mask = .{ .host = true },
+            .dst_access_mask = .{ .host_read = true },
+        }},
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
             .src_stage_mask = .{ .all_transfer = true },
@@ -348,7 +355,7 @@ fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadba
         .height = height,
         .format = format,
         .bytes_per_row = row_bytes,
-        .bytes = try allocator.dupe(u8, readback.mapped[0..readback_size]),
+        .bytes = try allocator.dupe(u8, readback.mapped.?[0..readback_size]),
     };
 }
 
@@ -382,7 +389,7 @@ fn createCommandPools(allocator: std.mem.Allocator, device: *Device, count: usiz
     for (command_pools, 0..) |*pool, i| {
         pool.* = try device.vkd.createCommandPool(device.device, &.{
             .queue_family_index = device.queue_family,
-            .flags = .{ .reset_command_buffer = true },
+            .flags = .{},
         }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "frame_{d}_command_pool", .{i})) |label|

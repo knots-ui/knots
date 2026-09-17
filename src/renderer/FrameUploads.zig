@@ -8,8 +8,7 @@ const Context = @import("Context.zig");
 const INIT_VERTEX_BYTES = 256 * 1024;
 const INIT_INSTANCE_BYTES = 64 * 1024;
 const INIT_INDEX_COUNT = 64 * 1024;
-const INIT_TEXT_VERTEX_BYTES = 128 * 1024;
-const INIT_TEXT_INDEX_COUNT = 16 * 1024;
+const INIT_TEXT_INSTANCE_BYTES = 128 * 1024;
 const INIT_CLIP_NODE_COUNT = 64;
 const CUSTOM_UPLOAD_CHUNK_BYTES = 4096;
 const CUSTOM_UPLOAD_ALIGNMENT = 256;
@@ -37,6 +36,7 @@ upload_chunks: std.ArrayList(UploadChunk),
 bind_group_slots: std.ArrayList(?gpu_impl.BindGroup),
 bind_group_count: usize,
 custom_epoch: u64,
+frame_context: ?gpu_impl.Frame.Context = null,
 
 vertex_uniform_buf: gpu_impl.Buffer,
 instance_uniform_buf: gpu_impl.Buffer,
@@ -52,8 +52,7 @@ vertex_buf: gpu_impl.Buffer,
 index_buf: gpu_impl.Buffer,
 instance_buf: gpu_impl.Buffer,
 composite_instance_buf: gpu_impl.Buffer,
-text_vertex_buf: gpu_impl.Buffer,
-text_index_buf: gpu_impl.Buffer,
+text_instance_buf: gpu_impl.Buffer,
 clip_node_buf: gpu_impl.Buffer,
 
 const FrameUploads = @This();
@@ -106,12 +105,10 @@ pub fn init(ctx: *Context) !FrameUploads {
     errdefer instance_buf.deinit();
     var composite_instance_buf = try ctx.device.createBuffer(.{ .size = @sizeOf(gpu.Instance), .usage = .{ .vertex = true, .copy_dst = true }, .label = "composite_instance" });
     errdefer composite_instance_buf.deinit();
-    var text_vertex_buf = try ctx.device.createBuffer(.{ .size = INIT_TEXT_VERTEX_BYTES, .usage = .{ .vertex = true, .copy_dst = true }, .label = "text_vertices" });
-    errdefer text_vertex_buf.deinit();
+    var text_instance_buf = try ctx.device.createBuffer(.{ .size = INIT_TEXT_INSTANCE_BYTES, .usage = .{ .vertex = true, .copy_dst = true }, .label = "text_instances" });
+    errdefer text_instance_buf.deinit();
     var index_buf = try ctx.device.createBuffer(.{ .size = INIT_INDEX_COUNT * @sizeOf(u32), .usage = .{ .index = true, .copy_dst = true }, .label = "ui_indices" });
     errdefer index_buf.deinit();
-    var text_index_buf = try ctx.device.createBuffer(.{ .size = INIT_TEXT_INDEX_COUNT * @sizeOf(u32), .usage = .{ .index = true, .copy_dst = true }, .label = "text_indices" });
-    errdefer text_index_buf.deinit();
 
     return .{
         .context = ctx,
@@ -132,14 +129,15 @@ pub fn init(ctx: *Context) !FrameUploads {
         .index_buf = index_buf,
         .instance_buf = instance_buf,
         .composite_instance_buf = composite_instance_buf,
-        .text_vertex_buf = text_vertex_buf,
-        .text_index_buf = text_index_buf,
+        .text_instance_buf = text_instance_buf,
         .clip_node_buf = clip_node_buf,
     };
 }
 
 pub fn deinit(self: *FrameUploads) void {
-    self.resetCustom();
+    for (self.bind_group_slots.items[0..self.bind_group_count]) |*slot| {
+        if (slot.*) |*value| value.deinit();
+    }
     self.bind_group_slots.deinit(self.context.allocator);
     for (self.upload_chunks.items) |*chunk| chunk.buffer.deinit();
     self.upload_chunks.deinit(self.context.allocator);
@@ -156,12 +154,11 @@ pub fn deinit(self: *FrameUploads) void {
     self.index_buf.deinit();
     self.instance_buf.deinit();
     self.composite_instance_buf.deinit();
-    self.text_vertex_buf.deinit();
-    self.text_index_buf.deinit();
+    self.text_instance_buf.deinit();
     self.clip_node_buf.deinit();
 }
 
-pub fn resetCustom(self: *FrameUploads) void {
+pub fn resetCustom(self: *FrameUploads, frame_context: gpu_impl.Frame.Context) void {
     for (self.bind_group_slots.items[0..self.bind_group_count]) |*slot| {
         if (slot.*) |*value| value.deinit();
         slot.* = null;
@@ -169,6 +166,7 @@ pub fn resetCustom(self: *FrameUploads) void {
     self.bind_group_count = 0;
     for (self.upload_chunks.items) |*chunk| chunk.used = 0;
     self.custom_epoch +%= 1;
+    self.frame_context = frame_context;
 }
 
 pub fn upload(self: *FrameUploads, comptime T: type, values: []const T, requested_usage: gpu.Buffer.Usage) !UploadView {
@@ -212,7 +210,7 @@ pub fn createBindGroup(self: *FrameUploads, desc: gpu_impl.BindGroup.Desc) !Bind
         try self.bind_group_slots.append(self.context.allocator, null);
     const slot = &self.bind_group_slots.items[self.bind_group_count];
     std.debug.assert(slot.* == null);
-    slot.* = try self.context.device.createBindGroup(desc);
+    slot.* = try self.frame_context.?.createBindGroup(desc);
     const slot_index: u32 = @intCast(self.bind_group_count);
     self.bind_group_count += 1;
     return .{ .slot_index = slot_index, .epoch = self.custom_epoch };

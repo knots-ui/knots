@@ -8,6 +8,7 @@ const gpu = @import("gpu");
 /// encoded in packet order. A command's scissor is also expressed in logical
 /// pixels and must be intersected with the render target after content scaling.
 pub const geometry = struct {
+    pub const text_quad_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
     pub const front_face: gpu.Pipeline.FrontFace = .ccw;
     pub const cull_mode: gpu.Pipeline.CullMode = .none;
 };
@@ -79,11 +80,12 @@ pub const blending = struct {
 pub const layouts = struct {
     pub const primitive_stride_bytes: u32 = @sizeOf(gpu.Vertex);
     pub const instance_stride_bytes: u32 = @sizeOf(gpu.Instance);
-    pub const text_stride_bytes: u32 = @sizeOf(gpu.SlugVertex);
+    pub const text_stride_bytes: u32 = @sizeOf(gpu.SlugInstance);
+    pub const text_step_mode: gpu.Pipeline.VertexStepMode = .instance;
 
     pub const primitive_attributes = gpu.Pipeline.attrsFromStruct(gpu.Vertex);
     pub const instance_attributes = gpu.Pipeline.attrsFromStruct(gpu.Instance);
-    pub const text_attributes = gpu.Pipeline.attrsFromStruct(gpu.SlugVertex);
+    pub const text_attributes = gpu.Pipeline.attrsFromStruct(gpu.SlugInstance);
 };
 
 comptime {

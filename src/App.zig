@@ -132,7 +132,7 @@ fn allocateViewportId(self: *App) !Viewport.Id {
     if (impl.next_viewport_id == 0) return error.TooManyViewports;
     const id = impl.next_viewport_id;
     impl.next_viewport_id +%= 1;
-    return @enumFromInt(id);
+    return @fromBackingInt(@intCast(id));
 }
 
 fn viewportForId(self: *App, id: Viewport.Id) ?*Viewport {

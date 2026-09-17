@@ -7,3 +7,7 @@ pub const Frame = @import("Frame.zig");
 pub const RenderPass = @import("RenderPass.zig");
 pub const Texture = @import("Texture.zig");
 pub const Sampler = @import("Sampler.zig");
+
+test {
+    _ = @import("MemoryAllocator.zig");
+}

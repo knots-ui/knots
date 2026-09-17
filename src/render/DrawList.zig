@@ -87,8 +87,7 @@ allocator: std.mem.Allocator,
 vertices: std.ArrayList(gpu.Vertex),
 indices: std.ArrayList(u32),
 instances: std.ArrayList(gpu.Instance),
-text_vertices: std.ArrayList(gpu.SlugVertex),
-text_indices: std.ArrayList(u32),
+text_instances: std.ArrayList(gpu.SlugInstance),
 clip_nodes: std.ArrayList(Clip.Node),
 layer_cmds: std.ArrayList(Command),
 layer_ranges: [MAX_LAYERS]LayerRange,
@@ -103,8 +102,7 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
         .indices = .empty,
         .vertices = .empty,
         .instances = .empty,
-        .text_vertices = .empty,
-        .text_indices = .empty,
+        .text_instances = .empty,
         .clip_nodes = .empty,
         .layer_cmds = .empty,
         .layer_ranges = @splat(.{}),
@@ -117,8 +115,7 @@ pub fn deinit(self: *DrawList) void {
     self.vertices.deinit(self.allocator);
     self.indices.deinit(self.allocator);
     self.instances.deinit(self.allocator);
-    self.text_vertices.deinit(self.allocator);
-    self.text_indices.deinit(self.allocator);
+    self.text_instances.deinit(self.allocator);
     self.clip_nodes.deinit(self.allocator);
     self.layer_cmds.deinit(self.allocator);
 }
@@ -127,8 +124,7 @@ pub fn reset(self: *DrawList) void {
     self.vertices.clearRetainingCapacity();
     self.indices.clearRetainingCapacity();
     self.instances.clearRetainingCapacity();
-    self.text_vertices.clearRetainingCapacity();
-    self.text_indices.clearRetainingCapacity();
+    self.text_instances.clearRetainingCapacity();
     self.clip_nodes.clearRetainingCapacity();
     self.layer_cmds.clearRetainingCapacity();
     self.layers_dirty = .empty;
@@ -182,7 +178,7 @@ pub fn buildPacket(
                     } };
                 },
                 .text => |draw| blk: {
-                    try validateRange(draw.offset, draw.count, self.text_indices.items.len);
+                    try validateRange(draw.offset, draw.count, self.text_instances.items.len);
                     break :blk .{ .text = .{
                         .offset = draw.offset,
                         .count = draw.count,
@@ -202,8 +198,7 @@ pub fn buildPacket(
         self.vertices.items,
         self.indices.items,
         self.instances.items,
-        self.text_vertices.items,
-        self.text_indices.items,
+        self.text_instances.items,
         self.clip_nodes.items,
         glyph_update,
     );
@@ -327,62 +322,26 @@ pub fn pushCustomDraw(
     } }, clip);
 }
 
-pub fn pushText(
-    self: *DrawList,
-    verts: []const gpu.SlugVertex,
-    indices: []const u32,
-    clip: Clip.State,
-) !void {
-    if (verts.len == 0 or indices.len == 0) return;
-    if (!self.lastCmdMatches(.text, .atlas, clip)) {
-        try self.beginCommand(.{ .text = .{
-            .offset = @intCast(self.text_indices.items.len),
-            .count = 0,
-        } }, clip);
-    }
-
-    const vertex_base: u32 = @intCast(self.text_vertices.items.len);
-    try self.text_indices.ensureUnusedCapacity(self.allocator, indices.len);
-    for (indices) |idx| self.text_indices.appendAssumeCapacity(idx + vertex_base);
-    try self.text_vertices.ensureUnusedCapacity(self.allocator, verts.len);
-    const clip_node: f32 = @floatFromInt(clip.node);
-    for (verts) |v| {
-        var out = v;
-        out.clip_node = clip_node;
-        self.text_vertices.appendAssumeCapacity(out);
-    }
-    self.lastCommand().payload.text.count += @intCast(indices.len);
-}
-
-pub fn beginTextBatch(self: *DrawList, max_quads: usize, clip: Clip.State) !?TextBatch {
-    if (max_quads == 0) return null;
-    try self.text_vertices.ensureUnusedCapacity(self.allocator, max_quads * 4);
-    try self.text_indices.ensureUnusedCapacity(self.allocator, max_quads * 6);
+pub fn beginTextBatch(self: *DrawList, glyph_count_max: usize, clip: Clip.State) !?TextBatch {
+    if (glyph_count_max == 0) return null;
+    try self.text_instances.ensureUnusedCapacity(self.allocator, glyph_count_max);
     return .{ .clip = clip };
 }
 
-pub fn pushTextQuad(self: *DrawList, batch: TextBatch, verts: [4]gpu.SlugVertex) !void {
+pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: gpu.SlugInstance) !void {
+    std.debug.assert(self.text_instances.items.len < self.text_instances.capacity);
+    std.debug.assert(instance.origin_size[2] > 0);
     if (!self.lastCmdMatches(.text, .atlas, batch.clip)) {
         try self.beginCommand(.{ .text = .{
-            .offset = @intCast(self.text_indices.items.len),
+            .offset = @intCast(self.text_instances.items.len),
             .count = 0,
         } }, batch.clip);
     }
 
-    const vertex_base: u32 = @intCast(self.text_vertices.items.len);
-    const clip_node: f32 = @floatFromInt(batch.clip.node);
-    inline for (0..4) |i| {
-        var out = verts[i];
-        out.clip_node = clip_node;
-        self.text_vertices.appendAssumeCapacity(out);
-    }
-    self.text_indices.appendAssumeCapacity(vertex_base + 0);
-    self.text_indices.appendAssumeCapacity(vertex_base + 1);
-    self.text_indices.appendAssumeCapacity(vertex_base + 2);
-    self.text_indices.appendAssumeCapacity(vertex_base + 0);
-    self.text_indices.appendAssumeCapacity(vertex_base + 2);
-    self.text_indices.appendAssumeCapacity(vertex_base + 3);
-    self.lastCommand().payload.text.count += 6;
+    var out = instance;
+    out.clip_node = @floatFromInt(batch.clip.node);
+    self.text_instances.appendAssumeCapacity(out);
+    self.lastCommand().payload.text.count += 1;
 }
 
 test "packet preserves layer order and rejects desktop-only commands" {

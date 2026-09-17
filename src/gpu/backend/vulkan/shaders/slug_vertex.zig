@@ -17,9 +17,9 @@ const Uniforms = extern struct {
 
 const u = uniform(Uniforms, "u", .{ .descriptor = .{ .set = 0, .binding = 0 } });
 
-const in_pos = input(Vec4f, "in_pos", .{ .location = 0 });
-const in_tex = input(Vec4f, "in_tex", .{ .location = 1 });
-const in_jac = input(Vec4f, "in_jac", .{ .location = 2 });
+const in_bounds = input(Vec4f, "in_bounds", .{ .location = 0 });
+const in_origin_size = input(Vec4f, "in_origin_size", .{ .location = 1 });
+const in_glyph = input(Vec2f, "in_glyph", .{ .location = 2 });
 const in_bnd = input(Vec4f, "in_bnd", .{ .location = 3 });
 const in_col = input(Vec4f, "in_col", .{ .location = 4 });
 const in_clip_node = input(f32, "in_clip_node", .{ .location = 5 });
@@ -77,10 +77,26 @@ export fn main() callconv(.spirv_vertex) void {
     const m3 = u.*.mvp_row3;
     const vp = u.*.viewport;
 
+    const index = @import("std").spirv.vertex_index;
+    const right = index == 1 or index == 2;
+    const bottom = index == 2 or index == 3;
+    const bounds = in_bounds.*;
+    const origin = in_origin_size.*;
+    const em_x = if (right) bounds[2] else bounds[0];
+    const em_y = if (bottom) bounds[3] else bounds[1];
+    const pos = Vec4f{
+        origin[0] + em_x * origin[2],
+        origin[1] - em_y * origin[2],
+        if (right) 0.70710677 else -0.70710677,
+        if (bottom) 0.70710677 else -0.70710677,
+    };
+    const tex = Vec4f{ em_x, em_y, in_glyph.*[0], in_glyph.*[1] };
+    const jac = Vec4f{ origin[3], 0, 0, -origin[3] };
+
     const dilated = slugDilate(
-        in_pos.*,
-        in_tex.*,
-        in_jac.*,
+        pos,
+        tex,
+        jac,
         m0,
         m1,
         m3,
@@ -102,7 +118,7 @@ export fn main() callconv(.spirv_vertex) void {
     out_world_pos.* = .{ px, py };
     out_clip_node.* = in_clip_node.*;
 
-    const t = in_tex.*;
+    const t = tex;
     const zb: u32 = @bitCast(t[2]);
     const wb: u32 = @bitCast(t[3]);
     out_glyph.* = .{

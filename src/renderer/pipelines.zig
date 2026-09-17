@@ -25,7 +25,7 @@ const premultiplied_blend = gpu.Pipeline.BlendState{
 
 const vertex_attrs = gpu.Pipeline.attrsFromStruct(gpu.Vertex);
 const instance_attrs = gpu.Pipeline.attrsFromStruct(gpu.Instance);
-const slug_attrs = gpu.Pipeline.attrsFromStruct(gpu.SlugVertex);
+const slug_attrs = gpu.Pipeline.attrsFromStruct(gpu.SlugInstance);
 
 const vertex_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
     .stride = @sizeOf(gpu.Vertex),
@@ -40,8 +40,8 @@ const instance_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
 }};
 
 const slug_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
-    .stride = @sizeOf(gpu.SlugVertex),
-    .step_mode = .vertex,
+    .stride = @sizeOf(gpu.SlugInstance),
+    .step_mode = .instance,
     .attributes = &slug_attrs,
 }};
 

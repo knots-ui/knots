@@ -7,5 +7,5 @@ pub const Texture = @import("Texture.zig");
 pub const Sampler = @import("Sampler.zig");
 pub const Vertex = @import("Vertex.zig");
 pub const Instance = @import("Instance.zig");
-pub const SlugVertex = @import("SlugVertex.zig");
+pub const SlugInstance = @import("SlugInstance.zig").SlugInstance;
 pub const SurfaceReadback = @import("SurfaceReadback.zig");

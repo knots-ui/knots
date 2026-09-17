@@ -22,6 +22,7 @@ surface: vk.SurfaceKHR,
 swapchain: vk.SwapchainKHR,
 swapchain_images: []vk.Image,
 swapchain_views: []vk.ImageView,
+present_semaphores: []vk.Semaphore,
 swapchain_format: vk.Format,
 swapchain_color_space: vk.ColorSpaceKHR,
 swapchain_is_srgb: bool,
@@ -54,6 +55,8 @@ pub fn init(device: *Device, window_handle: gpu.Context.WindowHandle, cfg: gpu.C
         allocator.free(views);
     }
 
+    const present_semaphores = try createPresentSemaphores(allocator, device, images.len);
+
     return .{
         .allocator = allocator,
         .device = device,
@@ -61,6 +64,7 @@ pub fn init(device: *Device, window_handle: gpu.Context.WindowHandle, cfg: gpu.C
         .swapchain = sc.swapchain,
         .swapchain_images = images,
         .swapchain_views = views,
+        .present_semaphores = present_semaphores,
         .swapchain_format = sc.format,
         .swapchain_color_space = sc.color_space,
         .swapchain_is_srgb = sc.is_srgb,
@@ -73,6 +77,7 @@ pub fn init(device: *Device, window_handle: gpu.Context.WindowHandle, cfg: gpu.C
 
 pub fn deinit(self: *Surface) void {
     const device = self.device;
+    destroyPresentSemaphores(self.allocator, device, self.present_semaphores);
     for (self.swapchain_views) |v| device.vkd.destroyImageView(device.device, v, null);
     self.allocator.free(self.swapchain_views);
     self.allocator.free(self.swapchain_images);
@@ -103,6 +108,14 @@ pub fn getFormat(self: *const Surface) gpu.Texture.Format {
     return Device.formatFromVk(self.swapchain_format);
 }
 
+pub fn presentSemaphore(self: *const Surface, image_index: u32) vk.Semaphore {
+    std.debug.assert(self.present_semaphores.len == self.swapchain_images.len);
+    std.debug.assert(image_index < self.present_semaphores.len);
+    const semaphore = self.present_semaphores[image_index];
+    std.debug.assert(semaphore != .null_handle);
+    return semaphore;
+}
+
 pub fn recreateSwapchain(self: *Surface, width: u32, height: u32) !void {
     const device = self.device;
     const old_swapchain = self.swapchain;
@@ -122,6 +135,9 @@ pub fn recreateSwapchain(self: *Surface, width: u32, height: u32) !void {
         self.allocator.free(new_views);
     }
 
+    const new_present_semaphores = try createPresentSemaphores(self.allocator, device, new_images.len);
+
+    destroyPresentSemaphores(self.allocator, device, self.present_semaphores);
     for (self.swapchain_views) |v| device.vkd.destroyImageView(device.device, v, null);
     self.allocator.free(self.swapchain_views);
     self.allocator.free(self.swapchain_images);
@@ -130,12 +146,41 @@ pub fn recreateSwapchain(self: *Surface, width: u32, height: u32) !void {
     self.swapchain = sc.swapchain;
     self.swapchain_images = new_images;
     self.swapchain_views = new_views;
+    self.present_semaphores = new_present_semaphores;
     self.swapchain_format = sc.format;
     self.swapchain_color_space = sc.color_space;
     self.swapchain_is_srgb = sc.is_srgb;
     self.swapchain_copy_src = sc.copy_src;
     self.swapchain_extent = sc.extent;
     self.present_modes = sc.present_modes;
+}
+
+fn createPresentSemaphores(allocator: std.mem.Allocator, device: *Device, image_count: usize) ![]vk.Semaphore {
+    std.debug.assert(image_count > 0);
+    const semaphores = try allocator.alloc(vk.Semaphore, image_count);
+    var created: usize = 0;
+    errdefer {
+        for (semaphores[0..created]) |semaphore| device.vkd.destroySemaphore(device.device, semaphore, null);
+        allocator.free(semaphores);
+    }
+    for (semaphores, 0..) |*semaphore, image_index| {
+        semaphore.* = try device.vkd.createSemaphore(device.device, &.{}, null);
+        created += 1;
+        var label_buffer: [64]u8 = undefined;
+        const label = std.fmt.bufPrint(&label_buffer, "image_{d}_present_ready", .{image_index}) catch unreachable;
+        device.setDebugName(.semaphore, @backingInt(semaphore.*), label);
+    }
+    std.debug.assert(created == image_count);
+    return semaphores;
+}
+
+fn destroyPresentSemaphores(allocator: std.mem.Allocator, device: *Device, semaphores: []vk.Semaphore) void {
+    std.debug.assert(semaphores.len > 0);
+    for (semaphores) |semaphore| {
+        std.debug.assert(semaphore != .null_handle);
+        device.vkd.destroySemaphore(device.device, semaphore, null);
+    }
+    allocator.free(semaphores);
 }
 
 fn createImageViews(allocator: std.mem.Allocator, device: *Device, images: []vk.Image, format: vk.Format) ![]vk.ImageView {
@@ -162,7 +207,7 @@ fn createImageViews(allocator: std.mem.Allocator, device: *Device, images: []vk.
         }, null);
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "swapchain_view_{d}", .{i})) |label|
-            device.setDebugName(.image_view, @intFromEnum(view.*), label)
+            device.setDebugName(.image_view, @backingInt(view.*), label)
         else |_| {}
         created += 1;
     }
@@ -218,7 +263,7 @@ fn createSwapchain(
         .clipped = .true,
         .old_swapchain = old_swapchain,
     }, null);
-    device.setDebugName(.swapchain_khr, @intFromEnum(swapchain), "swapchain");
+    device.setDebugName(.swapchain_khr, @backingInt(swapchain), "swapchain");
     return .{
         .swapchain = swapchain,
         .format = cf.format,
@@ -266,7 +311,7 @@ fn getSwapchainImages(allocator: std.mem.Allocator, device: *Device, swapchain: 
     for (images, 0..) |image, i| {
         var label_buffer: [64]u8 = undefined;
         if (std.fmt.bufPrint(&label_buffer, "swapchain_image_{d}", .{i})) |label|
-            device.setDebugName(.image, @intFromEnum(image), label)
+            device.setDebugName(.image, @backingInt(image), label)
         else |_| {}
     }
     return images;

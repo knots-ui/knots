@@ -562,6 +562,11 @@ fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build
             .target = vk_target,
             .optimize = optimize,
             .root_source_file = path,
+            .imports = &.{.{ .name = "shader_common", .module = b.createModule(.{
+                .target = vk_target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/gpu/backend/vulkan/shaders/common.zig"),
+            }) }},
         }),
         .use_llvm = false,
     });

@@ -65,9 +65,13 @@ pub fn create(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHan
     const pixel = [_]u8{0};
     try self.atlas.write(&pixel, 1, 1, null);
 
-    self.unit_index_buf = try self.device.createBuffer(.{ .size = 6 * @sizeOf(u32), .usage = .{ .index = true, .copy_dst = true }, .label = "unit_indices" });
+    self.unit_index_buf = try self.device.createBuffer(.{
+        .size = 6 * @sizeOf(u32),
+        .usage = .{ .index = true },
+        .initial_data = std.mem.asBytes(&@import("render").contract.geometry.text_quad_indices),
+        .label = "unit_indices",
+    });
     errdefer self.unit_index_buf.deinit();
-    self.unit_index_buf.load(u32, &.{ 0, 1, 2, 0, 2, 3 });
 
     self.allocator = allocator;
     return self;

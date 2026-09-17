@@ -32,14 +32,6 @@ const Allocator = std.mem.Allocator;
 pub const INVALID_ID = Element.INVALID_ID;
 pub const InputScopeConfig = InputScope.Config;
 
-const INV_SQRT2: f32 = 0.70710677;
-const TEXT_QUAD_NORMALS = [4][2]f32{
-    .{ -INV_SQRT2, -INV_SQRT2 }, // tl
-    .{ INV_SQRT2, -INV_SQRT2 }, // tr
-    .{ INV_SQRT2, INV_SQRT2 }, // br
-    .{ -INV_SQRT2, INV_SQRT2 }, // bl
-};
-
 pub const HitRecord = struct {
     id: Element.Id,
     bounds: math.Rect,
@@ -936,8 +928,8 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                     const ascender = shaped.ascender / content_scale;
                     const size_logical = t.size;
 
+                    if (size_logical <= 0) continue;
                     const inv_size = 1.0 / size_logical;
-                    const jac = [4]f32{ inv_size, 0, 0, -inv_size };
 
                     var total_glyphs: usize = 0;
                     for (shaped.lines) |ln| total_glyphs += ln.glyphs.len;
@@ -951,30 +943,13 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                             const rec = gl.record;
                             if (rec.is_empty) continue;
 
-                            const em_x: math.Vec4 = .{
-                                rec.bounds_em_min[0],
-                                rec.bounds_em_max[0],
-                                rec.bounds_em_max[0],
-                                rec.bounds_em_min[0],
-                            };
-                            const em_y: math.Vec4 = .{
-                                rec.bounds_em_max[1],
-                                rec.bounds_em_max[1],
-                                rec.bounds_em_min[1],
-                                rec.bounds_em_min[1],
-                            };
-                            const size_v: math.Vec4 = @splat(size_logical);
-                            const origin_x_v: math.Vec4 = @splat(el.box.x() + gl.x / content_scale);
-                            const baseline_v: math.Vec4 = @splat(baseline);
-
-                            const sx_v = origin_x_v + em_x * size_v;
-                            const sy_v = baseline_v - em_y * size_v;
+                            const origin_x = el.box.x() + gl.x / content_scale;
 
                             if (clip.scissor) |c| {
                                 const dilation_margin = 2.0 / content_scale;
                                 const glyph_bounds = math.Rect.fromMinMax(
-                                    .{ @reduce(.Min, sx_v), @reduce(.Min, sy_v) },
-                                    .{ @reduce(.Max, sx_v), @reduce(.Max, sy_v) },
+                                    .{ origin_x + rec.bounds_em_min[0] * size_logical, baseline - rec.bounds_em_max[1] * size_logical },
+                                    .{ origin_x + rec.bounds_em_max[0] * size_logical, baseline - rec.bounds_em_min[1] * size_logical },
                                 ).expand(dilation_margin);
                                 if (!c.overlaps(glyph_bounds)) continue;
                             }
@@ -993,22 +968,13 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
                                 rec.band_offset[0], rec.band_offset[1],
                             };
 
-                            var verts: [4]gpu.SlugVertex = undefined;
-                            inline for (0..4) |ci| {
-                                verts[ci] = .{
-                                    .pos = .{
-                                        sx_v[ci],
-                                        sy_v[ci],
-                                        TEXT_QUAD_NORMALS[ci][0],
-                                        TEXT_QUAD_NORMALS[ci][1],
-                                    },
-                                    .tex = .{ em_x[ci], em_y[ci], tex_z, tex_w },
-                                    .jac = jac,
-                                    .bnd = bnd,
-                                    .col = t.color,
-                                };
-                            }
-                            try draw_list.pushTextQuad(batch, verts);
+                            try draw_list.pushTextInstance(batch, .{
+                                .bounds = .{ rec.bounds_em_min[0], rec.bounds_em_max[1], rec.bounds_em_max[0], rec.bounds_em_min[1] },
+                                .origin_size = .{ origin_x, baseline, size_logical, inv_size },
+                                .glyph = .{ tex_z, tex_w },
+                                .bnd = bnd,
+                                .col = t.color,
+                            });
                         }
                     }
                 }

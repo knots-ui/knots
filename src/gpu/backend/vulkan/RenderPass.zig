@@ -60,6 +60,7 @@ pub fn create(
     device.vkd.cmdPipelineBarrier2(command_buffer, &.{
         .image_memory_barrier_count = 1,
         .p_image_memory_barriers = &[_]vk.ImageMemoryBarrier2{.{
+            .src_stage_mask = .{ .color_attachment_output = true },
             .dst_stage_mask = .{ .color_attachment_output = true },
             .dst_access_mask = .{ .color_attachment_write = true },
             .old_layout = .undefined,

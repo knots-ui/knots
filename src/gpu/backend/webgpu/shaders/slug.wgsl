@@ -30,9 +30,9 @@ var<storage, read> clip_nodes: array<ClipNode>;
 const MAX_CLIP_DEPTH: u32 = 32u;
 
 struct VsIn {
-    @location(0) pos: vec4f,
-    @location(1) tex: vec4f,
-    @location(2) jac: vec4f,
+    @location(0) bounds: vec4f,
+    @location(1) origin_size: vec4f,
+    @location(2) glyph: vec2f,
     @location(3) bnd: vec4f,
     @location(4) col: vec4f,
     @location(5) clip_node: f32,
@@ -87,8 +87,15 @@ fn unpack_glyph(tex: vec4f) -> vec4i {
 }
 
 @vertex
-fn vs_main(in: VsIn) -> VsOut {
-    let dilated = slug_dilate(in.pos, in.tex, in.jac, u.mvp_row0, u.mvp_row1, u.mvp_row3, u.viewport.zw);
+fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
+    let right = index == 1u || index == 2u;
+    let bottom = index == 2u || index == 3u;
+    let em = vec2f(select(in.bounds.x, in.bounds.z, right), select(in.bounds.y, in.bounds.w, bottom));
+    let normal = vec2f(select(-0.70710677, 0.70710677, right), select(-0.70710677, 0.70710677, bottom));
+    let pos = vec4f(in.origin_size.xy + em * vec2f(in.origin_size.z, -in.origin_size.z), normal);
+    let tex = vec4f(em, in.glyph);
+    let jac = vec4f(in.origin_size.w, 0.0, 0.0, -in.origin_size.w);
+    let dilated = slug_dilate(pos, tex, jac, u.mvp_row0, u.mvp_row1, u.mvp_row3, u.viewport.zw);
     let p = dilated.xy;
 
     var out: VsOut;
@@ -100,7 +107,7 @@ fn vs_main(in: VsIn) -> VsOut {
     );
     out.texcoord = dilated.zw;
     out.banding = in.bnd;
-    out.glyph = unpack_glyph(in.tex);
+    out.glyph = unpack_glyph(tex);
     out.color = in.col;
     out.world_pos = p;
     out.clip_node = in.clip_node;

@@ -48,8 +48,7 @@ commands_value: []const Command,
 primitive_vertices_value: []const gpu.Vertex,
 primitive_indices_value: []const u32,
 instances_value: []const gpu.Instance,
-text_vertices_value: []const gpu.SlugVertex,
-text_indices_value: []const u32,
+text_instances_value: []const gpu.SlugInstance,
 clip_nodes_value: []const Clip.Node,
 glyph_update_value: ?GlyphUpdate,
 
@@ -60,8 +59,7 @@ pub fn init(
     primitive_vertices_value: []const gpu.Vertex,
     primitive_indices_value: []const u32,
     instances_value: []const gpu.Instance,
-    text_vertices_value: []const gpu.SlugVertex,
-    text_indices_value: []const u32,
+    text_instances_value: []const gpu.SlugInstance,
     clip_nodes_value: []const Clip.Node,
     glyph_update_value: ?GlyphUpdate,
 ) Packet {
@@ -70,8 +68,7 @@ pub fn init(
         .primitive_vertices_value = primitive_vertices_value,
         .primitive_indices_value = primitive_indices_value,
         .instances_value = instances_value,
-        .text_vertices_value = text_vertices_value,
-        .text_indices_value = text_indices_value,
+        .text_instances_value = text_instances_value,
         .clip_nodes_value = clip_nodes_value,
         .glyph_update_value = glyph_update_value,
     };
@@ -93,12 +90,8 @@ pub fn instances(self: *const Packet) []const gpu.Instance {
     return self.instances_value;
 }
 
-pub fn textVertices(self: *const Packet) []const gpu.SlugVertex {
-    return self.text_vertices_value;
-}
-
-pub fn textIndices(self: *const Packet) []const u32 {
-    return self.text_indices_value;
+pub fn textInstances(self: *const Packet) []const gpu.SlugInstance {
+    return self.text_instances_value;
 }
 
 pub fn clipNodes(self: *const Packet) []const Clip.Node {

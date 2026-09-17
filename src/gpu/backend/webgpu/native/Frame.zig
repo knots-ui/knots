@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const wgpu = @import("wgpu");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
+const BindGroup = @import("BindGroup.zig");
 const gpu = @import("gpu");
 
 const Frame = @This();
@@ -19,6 +20,10 @@ surface: *Surface,
 pub const ContextHandle = struct {
     frame: *Frame,
     upload_slot: u32,
+
+    pub fn createBindGroup(self: *const ContextHandle, desc: BindGroup.Desc) !BindGroup {
+        return self.frame.surface.device.createBindGroup(desc);
+    }
 
     pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
         return self.frame.beginRenderPass(desc);

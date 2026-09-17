@@ -5,7 +5,7 @@ const render = @import("render");
 const PortableEncoder = struct {
     primitive_indices: u32 = 0,
     instances: u32 = 0,
-    text_indices: u32 = 0,
+    text_instances: u32 = 0,
 
     fn encode(self: *PortableEncoder, packet: *const render.Packet) !void {
         for (packet.commands()) |command| {
@@ -20,8 +20,8 @@ const PortableEncoder = struct {
                     self.instances += range.count;
                 },
                 .text => |range| {
-                    try validateRange(range, packet.textIndices().len);
-                    self.text_indices += range.count;
+                    try validateRange(range, packet.textInstances().len);
+                    self.text_instances += range.count;
                 },
             }
         }
@@ -49,8 +49,7 @@ fn packetElementCount(packet: *const render.Packet) u64 {
     total += packet.primitiveVertices().len;
     total += packet.primitiveIndices().len;
     total += packet.instances().len;
-    total += packet.textVertices().len;
-    total += packet.textIndices().len;
+    total += packet.textInstances().len;
     total += packet.clipNodes().len;
     return total;
 }
@@ -67,7 +66,6 @@ test "consumer needs only public render and gpu modules" {
         &commands,
         &primitive_vertices,
         &primitive_indices,
-        &.{},
         &.{},
         &.{},
         &clip_nodes,
