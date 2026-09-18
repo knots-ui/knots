@@ -174,7 +174,7 @@ fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPic
         var buf: [10]u8 = undefined;
         const hex = formatHex(&buf, self.value.*, true);
         @memcpy(s.hex_buf[0..hex.len], hex);
-        s.hex_len = hex.len;
+        s.hex_len = @intCast(hex.len);
         s.editing_hex = true;
     } else if (!hex_focused and s.editing_hex) {
         try commitHexInput(self, frame, s, true);
@@ -186,7 +186,7 @@ fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPic
         var commit = false;
         for (ui.input.chars) |ch| {
             if (ch == 0) break;
-            if (s.hex_len >= s.hex_buf.len) continue;
+            if (s.hex_len >= @as(u32, s.hex_buf.len)) continue;
 
             const c: u8 = switch (ch) {
                 '#' => '#',
@@ -199,7 +199,7 @@ fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPic
             if (c == '#' and s.hex_len != 0) continue;
             if (s.hex_len == 0 and c != '#') s.hex_buf[s.hex_len] = '#';
             if (s.hex_len == 0 and c != '#') s.hex_len += 1;
-            if (s.hex_len < s.hex_buf.len) {
+            if (s.hex_len < @as(u32, s.hex_buf.len)) {
                 s.hex_buf[s.hex_len] = c;
                 s.hex_len += 1;
                 changed = true;
@@ -223,7 +223,7 @@ fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPic
                     var buf: [10]u8 = undefined;
                     const hex = formatHex(&buf, self.value.*, true);
                     @memcpy(s.hex_buf[0..hex.len], hex);
-                    s.hex_len = hex.len;
+                    s.hex_len = @intCast(hex.len);
                 },
                 else => {},
             }

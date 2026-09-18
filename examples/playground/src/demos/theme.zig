@@ -1,7 +1,6 @@
+const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Theme = ui.Theme;
 
@@ -31,12 +30,8 @@ const entries = blk: {
     };
 };
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Theme", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
+pub fn main(app: *knots.Frame) !void {
+    const theme_index = try app.bindState(u32, "playground.theme.index", 1);
     const root = Rect{
         .width = .grow(),
         .height = .fixed(800),
@@ -46,16 +41,16 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
     };
     _ = try root.open(app);
     inline for (0..entries.len) |index| {
-        try Slot(index).render(self, app);
+        try Slot(index).render(app, theme_index);
     }
     try root.close(app);
 }
 
 fn Slot(comptime idx: u32) type {
     return struct {
-        pub fn render(self: *Self, app: *ui.Frame) !void {
+        pub fn render(app: *ui.Frame, theme_index: *u32) !void {
             const entry = entries[idx];
-            const is_active = self.demo_state.theme_idx == idx;
+            const is_active = theme_index.* == idx;
 
             const cell = Rect{
                 .width = .grow(),
@@ -116,7 +111,7 @@ fn Slot(comptime idx: u32) type {
             try button.close(app);
             try cell.close(app);
             if (response.clicked) {
-                self.demo_state.theme_idx = idx;
+                theme_index.* = idx;
                 app.ui().theme = entries[idx].theme;
                 app.requestRedraw();
             }

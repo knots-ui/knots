@@ -1,16 +1,12 @@
+const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Spacer = ui.component.Spacer;
 const Text = ui.component.Text;
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Layout", body);
-}
-
-fn body(_: *knots.App, app: *ui.Frame) !void {
+pub fn main(app: *knots.Frame) !void {
     @setEvalBranchQuota(3000);
     try section(app, "Sizing", .src(@src()));
     try sizing(app);

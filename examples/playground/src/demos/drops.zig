@@ -1,29 +1,26 @@
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Spacer = ui.component.Spacer;
 const For = ui.control.For;
+var dropped_paths: std.ArrayList([]const u8) = .empty;
+var allocator: ?std.mem.Allocator = null;
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Drops", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
+pub fn main(app: *knots.Frame) !void {
+    const active_allocator = app.ui().allocator;
+    allocator = active_allocator;
     const arena = app.arena();
 
     const new_paths = app.droppedPaths();
     if (new_paths.len > 0) {
         for (new_paths) |path| {
-            const copy = try self.allocator.dupe(u8, path);
-            errdefer self.allocator.free(copy);
-            try self.demo_state.dropped_paths.append(self.allocator, copy);
+            const copy = try active_allocator.dupe(u8, path);
+            errdefer active_allocator.free(copy);
+            try dropped_paths.append(active_allocator, copy);
         }
         app.requestRedraw();
     }
@@ -39,10 +36,10 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         .justify = .center,
         .@"align" = .center,
         .text = .{ .content = "clear" },
-    })).clicked) clear(self, app);
+    })).clicked) clear(app);
     try app.e(.{
         Text{
-            .content = try std.fmt.allocPrint(arena, "{d} paths", .{self.demo_state.dropped_paths.items.len}),
+            .content = try std.fmt.allocPrint(arena, "{d} paths", .{dropped_paths.items.len}),
             .size = .sm,
             .color = .dimmed,
             .key = .src(@src()),
@@ -52,7 +49,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
 
-    if (self.demo_state.dropped_paths.items.len == 0) {
+    if (dropped_paths.items.len == 0) {
         try app.e(Text{
             .content = "no drops yet - try dragging a file onto the window.",
             .size = .sm,
@@ -73,7 +70,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         },
         .{
             For([]const u8){
-                .items = self.demo_state.dropped_paths.items,
+                .items = dropped_paths.items,
                 .each = renderItem,
             },
         },
@@ -98,8 +95,17 @@ fn renderItem(app: *ui.Frame, path: []const u8, i: usize) !void {
     });
 }
 
-fn clear(self: *Self, app: *ui.Frame) void {
-    for (self.demo_state.dropped_paths.items) |p| self.allocator.free(p);
-    self.demo_state.dropped_paths.clearRetainingCapacity();
+fn clear(app: *ui.Frame) void {
+    const active_allocator = allocator.?;
+    for (dropped_paths.items) |path| active_allocator.free(path);
+    dropped_paths.clearRetainingCapacity();
     app.requestRedraw();
+}
+
+pub fn deinit() void {
+    const active_allocator = allocator orelse return;
+    for (dropped_paths.items) |path| active_allocator.free(path);
+    dropped_paths.deinit(active_allocator);
+    dropped_paths = .empty;
+    allocator = null;
 }

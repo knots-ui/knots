@@ -30,6 +30,7 @@ id: Id,
 window: Window,
 ui_ctx: Context,
 renderer: *render.Renderer,
+overlay_painter: *render.Painter,
 timer: Timer,
 ui_cfg: UI.Config,
 
@@ -42,13 +43,21 @@ renderer_reconfigure_error: ?render.Renderer.ReconfigureError = null,
 
 frame_active: bool = false,
 frame_pending: bool = false,
+contribution_painters: std.AutoHashMapUnmanaged(u64, *render.Painter) = .empty,
 
 fn init(self: *Viewport, allocator: std.mem.Allocator, id: Id, window_value: Window, renderer_value: *render.Renderer, cfg: Config) !void {
+    var ui_ctx = try Context.init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode });
+    errdefer ui_ctx.deinit();
+
+    const overlay_painter = try renderer_value.createLayerPainter();
+    errdefer overlay_painter.destroyAfterWait();
+
     self.* = .{
         .id = id,
         .window = window_value,
-        .ui_ctx = try .init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode }),
+        .ui_ctx = ui_ctx,
         .renderer = renderer_value,
+        .overlay_painter = overlay_painter,
         .timer = .init(cfg.timer_clock),
         .ui_cfg = cfg.ui,
     };
@@ -111,6 +120,11 @@ pub fn createSecondary(
 pub fn destroy(self: *Viewport, allocator: std.mem.Allocator) void {
     self.window.clearFrameHandler();
     self.ui_ctx.deinit();
+    self.renderer.context.device.waitIdle() catch |err| std.log.warn("Layer shutdown: {s}", .{@errorName(err)});
+    var painters = self.contribution_painters.valueIterator();
+    while (painters.next()) |painter| painter.*.destroyAfterWait();
+    self.contribution_painters.deinit(allocator);
+    self.overlay_painter.destroyAfterWait();
     self.renderer.destroy();
     self.window.deinit();
     allocator.destroy(self);

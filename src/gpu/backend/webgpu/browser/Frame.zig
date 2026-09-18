@@ -46,6 +46,7 @@ pub fn create(surface: *Surface) !Frame {
 }
 
 pub fn begin(self: *Frame) !ContextHandle {
+    self.clearFrameState();
     return .{ .frame = self, .upload_slot = 0 };
 }
 
@@ -62,6 +63,7 @@ pub fn deinit(self: *Frame) void {
 }
 
 fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
+    errdefer self.clearFrameState();
     if (self.encoder == null) {
         var encoder_desc = try js.ObjectBuilder.init();
         defer encoder_desc.finish().release();

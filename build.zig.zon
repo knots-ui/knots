@@ -3,6 +3,17 @@
     .version = "0.2.0",
     .minimum_zig_version = "0.17.0-dev.2131+d08989840",
     .dependencies = .{
+        .wasmtime = .{ .path = "lib/wasmtime", .lazy = true },
+        .watch = .{ .path = "lib/watch" },
+        .pack = .{
+            .url = "git+https://codeberg.org/shahwali/pack.git#5a97dd502b525bec9efc7a9add1847b3ebfb164c",
+            .hash = "pack-0.0.2-gq153kgtAAA6u9mi4oXfGC9kFf3pw3s_ttxRWjHW0TaM",
+        },
+        .celer = .{
+            .url = "git+https://codeberg.org/shahwali/celer.git#48971a27478d079832eb5e1ea60dba723cda5c17",
+            .hash = "celer-0.0.1-qPUU5GhRAACwlHFWZRqrr6Mp4WOUVM4-Ba88aFQleR-L",
+        },
+
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-zig#0cb8b016b5116a7dc801d86c9158fc2242e448a8",
             .hash = "wgpu-0.0.3-Z1CB1kx3AQDJUVuUSck6cILT-Z8qUvTE_ce5v-s8Elg7",
@@ -35,6 +46,7 @@
     },
     .paths = .{
         "build.zig",
+        "HMR.zig",
         "build.zig.zon",
         "src",
         "lib",

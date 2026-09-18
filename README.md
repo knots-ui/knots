@@ -32,6 +32,9 @@ zig fetch --save git+https://codeberg.org/shahwali/knots.git
 
 ## Minimal app
 
+To develop with independently reloadable UI modules in a native window, see the
+[playground and HMR quick start](examples/playground/README.md).
+
 Add the `knots` and `ui` modules to your executable:
 
 ```zig
@@ -83,9 +86,6 @@ app_module.addImport("input", knots_dependency.module("input"));
 app_module.addImport("render", knots_dependency.module("render"));
 app_module.addImport("renderer", knots_dependency.module("renderer"));
 ```
-
-`ui.Context` owns UI state for one viewport and `endFrame` returns one
-`Frame.Output`: platform effects plus an ordered `render.Packet`.
 
 ```zig
 var context = try ui.Context.init(allocator, .{});

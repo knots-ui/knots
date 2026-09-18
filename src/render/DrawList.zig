@@ -83,12 +83,25 @@ pub fn buildPacket(
     portable_commands: *std.ArrayList(Command),
     glyph_atlas: ?GlyphAtlas,
 ) !Packet {
+    return self.buildPacketRange(portable_commands, glyph_atlas, 0, MAX_LAYERS);
+}
+
+/// Flatten one bounded half-open layer range into draw order.
+pub fn buildPacketRange(
+    self: *const DrawList,
+    portable_commands: *std.ArrayList(Command),
+    glyph_atlas: ?GlyphAtlas,
+    layer_min: u32,
+    layer_max: u32,
+) !Packet {
     if (self.layer_cmds.items.len > Packet.commands_max) return error.TooManyDrawCommands;
+    if (layer_min > layer_max) return error.InvalidLayerRange;
+    if (layer_max > MAX_LAYERS) return error.InvalidLayerRange;
     portable_commands.clearRetainingCapacity();
     try portable_commands.ensureTotalCapacity(self.allocator, self.layer_cmds.items.len);
 
-    var layer: u32 = 0;
-    while (layer < MAX_LAYERS) : (layer += 1) {
+    var layer = layer_min;
+    while (layer < layer_max) : (layer += 1) {
         if (!self.layers_dirty.isSet(layer)) continue;
         const range = self.layer_ranges[layer];
         const start: usize = range.start;

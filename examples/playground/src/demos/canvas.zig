@@ -1,8 +1,6 @@
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -14,21 +12,16 @@ const Effect = enum { gradient, clock, bars, polygon };
 
 const canvas_width = 720;
 const canvas_height = 480;
+var canvas_effect: u32 = 0;
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Canvas", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
-
+pub fn main(app: *knots.Frame) !void {
     const controls = Rect{ .width = .fixed(220), .key = .src(@src()) };
     _ = try controls.open(app);
     const selection = try app.interact(SelectInput(Effect){
         .key = .src(@src()),
-        .initial_selected = self.demo_state.canvas_effect,
+        .initial_selected = canvas_effect,
     });
-    if (selection.selected) |selected| self.demo_state.canvas_effect = selected.index;
+    if (selection.selected) |selected| canvas_effect = selected.index;
     try controls.close(app);
 
     try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
@@ -38,7 +31,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         .cmds = &commands,
         .allocator = app.arena(),
     };
-    const effect: Effect = @fromBackingInt(@intCast(self.demo_state.canvas_effect));
+    const effect: Effect = @fromBackingInt(@intCast(canvas_effect));
     switch (effect) {
         .gradient => try drawGradient(app, &painter),
         .clock => try drawClock(app, &painter),

@@ -50,6 +50,9 @@ pub fn create(surface: *Surface) !Frame {
 }
 
 pub fn begin(self: *Frame) !ContextHandle {
+    // A recoverable surface error can abandon an encoded offscreen pass.
+    // Never append the next frame to that unsubmitted command encoder.
+    self.clearFrameState();
     _ = self.surface.device.device.poll(true);
     return .{ .frame = self, .upload_slot = 0 };
 }
@@ -59,20 +62,27 @@ pub fn uploadSlotCount(_: *const Frame) u32 {
 }
 
 pub fn prepareResize(self: *Frame) void {
-    if (self.view) |v| v.deinit();
-    self.view = null;
-    if (self.surface_texture) |t| t.deinit();
-    self.surface_texture = null;
+    self.clearFrameState();
     _ = self.surface.device.device.poll(true);
 }
 
 pub fn deinit(self: *Frame) void {
-    if (self.encoder) |e| e.deinit();
-    if (self.view) |v| v.deinit();
-    if (self.surface_texture) |t| t.deinit();
+    self.clearFrameState();
+}
+
+fn clearFrameState(self: *Frame) void {
+    if (self.encoder) |encoder| encoder.deinit();
+    self.encoder = null;
+    if (self.view) |view| view.deinit();
+    self.view = null;
+    if (self.surface_texture) |texture| texture.deinit();
+    self.surface_texture = null;
+    std.debug.assert(self.encoder == null);
+    std.debug.assert(self.surface_texture == null);
 }
 
 fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
+    errdefer self.clearFrameState();
     if (self.encoder == null) {
         self.encoder = try self.surface.device.device.createCommandEncoder(.{ .label = "frame_encoder" });
     }
@@ -105,14 +115,7 @@ fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
 }
 
 fn submit(self: *Frame) !void {
-    defer {
-        if (self.encoder) |e| e.deinit();
-        self.encoder = null;
-        if (self.view) |v| v.deinit();
-        self.view = null;
-        if (self.surface_texture) |t| t.deinit();
-        self.surface_texture = null;
-    }
+    defer self.clearFrameState();
 
     const cmd = try self.encoder.?.finish(.{});
     self.surface.device.queue.submitCommands(&.{cmd});

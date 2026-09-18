@@ -24,7 +24,9 @@ const PIXEL_TEXTURE_TTL_FRAMES: u64 = 2;
 
 const CURVE_TEX_WIDTH: u32 = GlyphAtlas.width;
 const BAND_TEX_WIDTH: u32 = GlyphAtlas.width;
-const INITIAL_TEX_HEIGHT: u32 = 256;
+// Start with one row and grow geometrically in uploadGlyphAtlas. A 256-row
+// pair reserves 32 MiB per painter even for an empty or single-line panel.
+const INITIAL_TEX_HEIGHT: u32 = 1;
 
 allocator: std.mem.Allocator,
 context: *Context,

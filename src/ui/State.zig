@@ -3,6 +3,7 @@ const Element = @import("layout").Element;
 const math = @import("math");
 const animation = @import("animation.zig");
 const Layer = @import("Layer.zig");
+const StateBridge = @import("StateBridge.zig");
 
 pub const TextInput = struct {
     cursor: u32 = 0,
@@ -48,7 +49,7 @@ pub const ColorPicker = struct {
     alpha: f32 = 1,
     editing_hex: bool = false,
     hex_buf: [9]u8 = @splat(0),
-    hex_len: usize = 0,
+    hex_len: u32 = 0,
     original_color: [4]f32 = .{ 0, 0, 0, 1 },
     has_original: bool = false,
     anchor_box: math.Rect = .zero,
@@ -316,6 +317,43 @@ pub fn forEach(
     comptime f: fn (@TypeOf(ctx), Element.Id, *PoolValueType(@FieldType(Storage.StoragePools, @tagName(name)))) void,
 ) void {
     self.storage.forEach(name, ctx, f);
+}
+
+/// Restore widget values from the host-owned bridge. Transient hit/focus
+/// scalars remain frame-local because the host input router owns them.
+pub fn importBridge(self: *State, bridge: *StateBridge) !void {
+    const field_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
+    inline for (field_names) |field_name| {
+        const name: std.meta.FieldEnum(Storage.StoragePools) = @field(std.meta.FieldEnum(Storage.StoragePools), field_name);
+        const PoolType = @FieldType(Storage.StoragePools, field_name);
+        const ValueType = PoolType.Value;
+        const Context = struct {
+            state: *State,
+
+            fn restore(context: @This(), source: *StateBridge, id: u64) !void {
+                const value = (try source.readDomain(ValueType, stateDomain(field_name), id)) orelse return error.MissingStateValue;
+                const target = try context.state.storage.getOrCreate(name, context.state.allocator, id, context.state.frame);
+                target.* = value;
+            }
+        };
+        try bridge.forEachDomain(stateDomain(field_name), Context{ .state = self }, Context.restore);
+    }
+}
+
+/// Commit every live widget value after hit testing, before module execution.
+pub fn exportBridge(self: *State, bridge: *StateBridge) !void {
+    const field_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
+    inline for (field_names) |field_name| {
+        const pool = &@field(self.storage.pools, field_name);
+        var iterator = pool.map.iterator();
+        while (iterator.next()) |entry| {
+            try bridge.writeDomain(PoolValueType(@TypeOf(pool.*)), stateDomain(field_name), entry.key_ptr.*, entry.value_ptr.value);
+        }
+    }
+}
+
+fn stateDomain(comptime field_name: []const u8) u64 {
+    return StateBridge.key("knots.ui.state." ++ field_name);
 }
 
 const FLOATING_WINDOW_Z_CAPACITY: usize = Layer.floating_window_capacity;

@@ -9,7 +9,23 @@ pub fn build(b: *std.Build) void {
 
     const knots = b.dependency("knots", .{ .target = target, .optimize = optimize, .web_threads = web_threads, .gpu_backend = gpu_backend });
 
-    const mod = b.addModule("playground", .{
+    const exe = buildExecutable(b, target, optimize, gpu_backend, knots, "playground");
+    b.installArtifact(exe);
+    const dev_exe = buildExecutable(b, target, optimize, gpu_backend, knots, "playground-dev");
+    const hmr = Knots.HMR.init(b, dev_exe, .{
+        .knots = knots,
+        .roots = &.{b.path("src/demos")},
+        .watch_roots = &.{b.path("src")},
+    });
+    hmr.attachNative(exe);
+    const run = b.addRunArtifact(exe);
+    run.addPassthruArgs();
+    b.step("run", "Run the standalone native playground").dependOn(&run.step);
+    b.step("dev", "Run the playground with HMR").dependOn(&hmr.addDevRunner(.{}).step);
+}
+
+fn buildExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, gpu_backend: Knots.GPUBackend, knots: *std.Build.Dependency, name: []const u8) *std.Build.Step.Compile {
+    const mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -40,48 +56,8 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const exe = b.addExecutable(.{ .name = "playground", .root_module = exe_mod });
-    b.installArtifact(exe);
-
-    const run_step = b.step("run", "Run the playground app");
-
-    if (isBrowserWasmTarget(target.result)) {
-        exe.entry = .disabled;
-
-        Knots.installWeb(b, knots, exe_mod, exe, .{ .index_html = b.path("src/shell_wasm.html") });
-
-        const serve = if (web_threads) blk: {
-            const command = b.addSystemCommand(&.{"python3"});
-            command.addFileArg(b.path("serve.py"));
-            command.addArgs(&.{ "--port", "8000", "--directory", "zig-out/web" });
-            break :blk command;
-        } else b.addSystemCommand(&.{ "python3", "-m", "http.server", "8000", "--directory", "zig-out/web" });
-        serve.step.dependOn(b.getInstallStep());
-        run_step.dependOn(&serve.step);
-    } else {
-        const run_cmd = b.addRunArtifact(exe);
-        run_step.dependOn(&run_cmd.step);
-
-        run_cmd.step.dependOn(b.getInstallStep());
-
-        run_cmd.addPassthruArgs();
-
-        const mod_tests = b.addTest(.{
-            .root_module = mod,
-        });
-
-        const run_mod_tests = b.addRunArtifact(mod_tests);
-
-        const exe_tests = b.addTest(.{
-            .root_module = exe.root_module,
-        });
-
-        const run_exe_tests = b.addRunArtifact(exe_tests);
-
-        const test_step = b.step("test", "Run tests");
-        test_step.dependOn(&run_mod_tests.step);
-        test_step.dependOn(&run_exe_tests.step);
-    }
+    const exe = b.addExecutable(.{ .name = name, .root_module = exe_mod });
+    return exe;
 }
 
 fn isBrowserWasmTarget(target: std.Target) bool {

@@ -7,6 +7,7 @@ pub const Input = @import("Input.zig");
 pub const Key = @import("Key.zig");
 pub const Layer = @import("Layer.zig");
 pub const State = @import("State.zig");
+pub const StateBridge = @import("StateBridge.zig");
 pub const Theme = @import("Theme.zig");
 pub const Accessibility = @import("Accessibility.zig");
 pub const Color = @import("Color.zig");
@@ -18,6 +19,7 @@ pub const scrollbar = @import("scrollbar.zig");
 
 test {
     _ = State;
+    _ = StateBridge;
     _ = UI;
     _ = scrollbar;
     _ = Context;

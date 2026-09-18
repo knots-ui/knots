@@ -4,6 +4,8 @@ const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
 
+pub const HMR = @import("HMR.zig");
+
 /// Source files for knots' Vulkan UI-rendering shaders, written as comptime Zig and
 /// compiled to SPIR-V at build time. Consumers driving their own Vulkan renderer for
 /// knots' portable render packets can compile and reflect these without
@@ -66,9 +68,14 @@ pub const WebInstallOptions = struct {
 
 pub fn build(b: *std.Build) void {
     var target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    if (b.option(bool, "module_guest", "Build portable UI module dependencies.") orelse false) {
+        buildModuleDependencies(b, target, optimize);
+        return;
+    }
     const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
     configureWebTarget(&target, web_threads);
-    const optimize = b.standardOptimizeOption(.{});
     const browser_wasm = isBrowserWasmTarget(target.result);
 
     const gpu_backend =
@@ -262,10 +269,16 @@ pub fn build(b: *std.Build) void {
     window_impl_mod.addImport("input", input_mod);
     window_mod.addImport("input", input_mod);
 
-    const math_mod = b.createModule(.{
+    const math_mod = b.addModule("math", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/math/root.zig"),
+    });
+
+    const signal_mod = b.addModule("signal", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/signal/root.zig"),
     });
 
     const text_mod = b.createModule(.{
@@ -319,6 +332,8 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "math", .module = math_mod }},
     });
 
+    var state_bridge_config = b.addOptions();
+    state_bridge_config.addOption(bool, "host_graph_enabled", true);
     const ui_mod = b.addModule("ui", .{
         .target = target,
         .optimize = optimize,
@@ -330,8 +345,19 @@ pub fn build(b: *std.Build) void {
             .{ .name = "render_types", .module = render_types_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
+            .{ .name = "signal", .module = signal_mod },
         },
     });
+    ui_mod.addOptions("state_bridge_config", state_bridge_config);
+
+    const portable = b.createModule(.{ .root_source_file = b.path("src/portable.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
+    const hmr_mod = b.addModule("hmr", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/hmr/root.zig"),
+        .imports = &.{ .{ .name = "ui", .module = ui_mod }, .{ .name = "input", .module = input_mod }, .{ .name = "render", .module = render_mod }, .{ .name = "math", .module = math_mod }, .{ .name = "knots", .module = portable } },
+    });
+    hmr_mod.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
 
     var debug_opts = b.addOptions();
     debug_opts.addOption([]const u8, "version", build_zon.version);
@@ -361,6 +387,7 @@ pub fn build(b: *std.Build) void {
     const text_tests = b.addTest(.{ .root_module = text_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
     const input_tests = b.addTest(.{ .root_module = input_mod });
+    const signal_tests = b.addTest(.{ .root_module = signal_mod });
     const public_render_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
@@ -389,6 +416,7 @@ pub fn build(b: *std.Build) void {
     const renderer_tests = b.addTest(.{ .root_module = renderer_mod });
 
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = hmr_mod })).step);
     test_step.dependOn(&b.addRunArtifact(render_tests).step);
     test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
@@ -397,6 +425,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(text_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
     test_step.dependOn(&b.addRunArtifact(input_tests).step);
+    test_step.dependOn(&b.addRunArtifact(signal_tests).step);
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
 
@@ -436,6 +465,29 @@ pub fn installWeb(
     options: WebInstallOptions,
 ) void {
     const web_threads = knots.builder.named_lazy_paths.contains("web-worker-js");
+    configureWebExecutable(b, knots, root_module, exe, options);
+    if (options.index_html) |index_html| {
+        const install_index = b.addInstallFileWithDir(index_html, .{ .custom = options.dir }, options.index_name);
+        b.getInstallStep().dependOn(&install_index.step);
+    }
+
+    const install_host_js = b.addInstallFileWithDir(knots.namedLazyPath("web-host-js"), .{ .custom = options.dir }, options.host_js_name);
+    const install_bridge_js = b.addInstallFileWithDir(knots.namedLazyPath("web-bridge-js"), .{ .custom = options.dir }, options.bridge_js_name);
+    const install_wasm = b.addInstallFileWithDir(exe.getEmittedBin(), .{ .custom = options.dir }, options.wasm_name);
+
+    b.getInstallStep().dependOn(&install_host_js.step);
+    b.getInstallStep().dependOn(&install_bridge_js.step);
+    b.getInstallStep().dependOn(&install_wasm.step);
+    if (web_threads) {
+        const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
+        const install_worker_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-js"), .{ .custom = options.dir }, "knots-worker.js");
+        b.getInstallStep().dependOn(&install_worker_pool_js.step);
+        b.getInstallStep().dependOn(&install_worker_js.step);
+    }
+}
+
+pub fn configureWebExecutable(b: *std.Build, knots: *std.Build.Dependency, root_module: *std.Build.Module, exe: *std.Build.Step.Compile, options: WebInstallOptions) void {
+    const web_threads = knots.builder.named_lazy_paths.contains("web-worker-js");
     configureWebTarget(&root_module.resolved_target.?, web_threads);
     configureWebTarget(&exe.root_module.resolved_target.?, web_threads);
     exe.import_memory = web_threads;
@@ -455,24 +507,6 @@ pub fn installWeb(
     const extra_start = 1 + web_bridge_export_symbol_names.len + thread_export_count;
     for (options.extra_export_symbol_names, 0..) |name, i| names[extra_start + i] = name;
     root_module.export_symbol_names = names;
-    if (options.index_html) |index_html| {
-        const install_index = b.addInstallFileWithDir(index_html, .{ .custom = options.dir }, options.index_name);
-        b.getInstallStep().dependOn(&install_index.step);
-    }
-
-    const install_host_js = b.addInstallFileWithDir(knots.namedLazyPath("web-host-js"), .{ .custom = options.dir }, options.host_js_name);
-    const install_bridge_js = b.addInstallFileWithDir(knots.namedLazyPath("web-bridge-js"), .{ .custom = options.dir }, options.bridge_js_name);
-    const install_wasm = b.addInstallFileWithDir(exe.getEmittedBin(), .{ .custom = options.dir }, options.wasm_name);
-
-    b.getInstallStep().dependOn(&install_host_js.step);
-    b.getInstallStep().dependOn(&install_bridge_js.step);
-    b.getInstallStep().dependOn(&install_wasm.step);
-    if (web_threads) {
-        const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
-        const install_worker_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-js"), .{ .custom = options.dir }, "knots-worker.js");
-        b.getInstallStep().dependOn(&install_worker_pool_js.step);
-        b.getInstallStep().dependOn(&install_worker_js.step);
-    }
 }
 
 fn configureWebTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
@@ -562,4 +596,94 @@ fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build
     });
 
     mod.addAnonymousImport(name, .{ .root_source_file = spv.getEmittedBin() });
+}
+
+/// Portable modules have no window, GPU, JavaScript, or operating-system imports.
+fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const math = b.addModule("math", .{
+        .root_source_file = b.path("src/math/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const signal = b.addModule("signal", .{
+        .root_source_file = b.path("src/signal/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const input = b.addModule("input", .{
+        .root_source_file = b.path("src/input/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const types = b.createModule(.{
+        .root_source_file = b.path("src/render/types/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const layout = b.createModule(.{
+        .root_source_file = b.path("src/layout/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "math", .module = math }},
+    });
+    const truetype = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
+    const text = b.createModule(.{
+        .root_source_file = b.path("src/text/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "TrueType", .module = truetype.module("TrueType") }},
+    });
+    const render = b.addModule("render", .{
+        .root_source_file = b.path("src/render/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "math", .module = math },
+            .{ .name = "render_types", .module = types },
+        },
+    });
+    const shader_config = b.addOptions();
+    shader_config.addOption(bool, "has_spirv_shaders", false);
+    render.addOptions("shader_config", shader_config);
+    addRenderShaderSources(b, render);
+    var state_bridge_config = b.addOptions();
+    state_bridge_config.addOption(bool, "host_graph_enabled", false);
+    const ui = b.addModule("ui", .{
+        .root_source_file = b.path("src/ui/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "math", .module = math },
+            .{ .name = "input", .module = input },
+            .{ .name = "render_types", .module = types },
+            .{ .name = "layout", .module = layout },
+            .{ .name = "render", .module = render },
+            .{ .name = "text", .module = text },
+            .{ .name = "signal", .module = signal },
+        },
+    });
+    ui.addOptions("state_bridge_config", state_bridge_config);
+    const portable = b.addModule("knots", .{
+        .root_source_file = b.path("src/portable.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "ui", .module = ui }},
+    });
+    const hmr = b.addModule("hmr", .{
+        .root_source_file = b.path("src/hmr/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ui", .module = ui },
+            .{ .name = "input", .module = input },
+            .{ .name = "render", .module = render },
+            .{ .name = "math", .module = math },
+        },
+    });
+    hmr.addImport("knots", portable);
+    hmr.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
+    if (!target.result.cpu.arch.isWasm()) {
+        const tests = b.addTest(.{ .root_module = hmr });
+        b.step("test", "Test the portable HMR boundary").dependOn(&b.addRunArtifact(tests).step);
+    }
 }

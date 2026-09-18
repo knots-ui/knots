@@ -71,10 +71,14 @@ pub const Backend = struct {
     }
 
     pub fn pollEvents(_: *const Self, _: std.Io) void {
+        const pool = objc.AutoreleasePool.init();
+        defer pool.deinit();
         drainEventQueue(ak.sharedApp());
     }
 
     pub fn waitEvents(self: *const Self, io: std.Io) void {
+        const pool = objc.AutoreleasePool.init();
+        defer pool.deinit();
         const NSApp = ak.sharedApp();
         const NSDate = objc.getClass("NSDate").?;
         const distant_future = NSDate.msgSend(objc.Object, "distantFuture", .{});
@@ -334,6 +338,10 @@ pub fn initSecondary(_: *const Backend, _: std.Io, _: std.mem.Allocator, cfg: wi
 }
 
 fn frameSourcePerform(info: ?*anyopaque) callconv(.c) void {
+    // A self-requesting frame can run repeatedly inside nextEventMatchingMask.
+    // Drain each callback even when the outer event wait has not returned.
+    const pool = objc.AutoreleasePool.init();
+    defer pool.deinit();
     const owner: *window.Window = @ptrCast(@alignCast(info orelse return));
     owner.backend.frame_requested = false;
     if (owner.isOpen()) owner.stepFrame();

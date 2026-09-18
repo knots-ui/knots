@@ -1,8 +1,6 @@
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -10,13 +8,10 @@ const Spacer = ui.component.Spacer;
 const ContextMenu = ui.component.ContextMenu;
 
 const Menu = ContextMenu(ContextActions);
+var last_action: []const u8 = "none";
+var last_target: []const u8 = "none";
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Context menu", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
+pub fn main(app: *knots.Frame) !void {
     const arena = app.arena();
 
     try app.e(.{
@@ -24,7 +19,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
             .content = try std.fmt.allocPrint(
                 arena,
                 "last action: {s} on {s}",
-                .{ self.demo_state.context_menu_last_action, self.demo_state.context_menu_last_target },
+                .{ last_action, last_target },
             ),
             .key = .src(@src()),
         },
@@ -45,15 +40,14 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
     };
 
     _ = try grid.open(app);
-    try card(self, app, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
-    try card(self, app, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
-    try card(self, app, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
-    try card(self, app, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
+    try card(app, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
+    try card(app, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
+    try card(app, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
+    try card(app, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
     try grid.close(app);
 }
 
 fn card(
-    state: *Self,
     app: *ui.Frame,
     comptime target: []const u8,
     comptime title: []const u8,
@@ -64,7 +58,6 @@ fn card(
         Menu{
             .key = .str(key_prefix ++ ".wrap"),
             .menu = ContextActions{
-                .state = state,
                 .target = target,
                 .inspect_key = .str(key_prefix ++ ".inspect"),
                 .duplicate_key = .str(key_prefix ++ ".duplicate"),
@@ -100,7 +93,6 @@ fn card(
 }
 
 const ContextActions = struct {
-    state: *Self,
     target: []const u8,
     inspect_key: ui.Key,
     duplicate_key: ui.Key,
@@ -108,15 +100,14 @@ const ContextActions = struct {
 
     pub fn render(self: *const ContextActions, app: *ui.Frame) anyerror!void {
         try app.e(.{
-            ActionRow{ .state = self.state, .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
-            ActionRow{ .state = self.state, .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
-            ActionRow{ .state = self.state, .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
+            ActionRow{ .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
+            ActionRow{ .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
+            ActionRow{ .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
         });
     }
 };
 
 const ActionRow = struct {
-    state: *Self,
     target: []const u8,
     action: []const u8,
     label: []const u8,
@@ -152,8 +143,8 @@ const ActionRow = struct {
         app.ui().close();
 
         if (app.ui().leftClicked(id, .within)) {
-            self.state.demo_state.context_menu_last_action = self.action;
-            self.state.demo_state.context_menu_last_target = self.target;
+            last_action = self.action;
+            last_target = self.target;
             app.requestRedraw();
         }
     }
