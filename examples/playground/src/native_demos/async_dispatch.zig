@@ -76,7 +76,7 @@ fn sleep10(self: *Self, app: *knots.App, frame: *ui.Frame) !void {
 }
 
 fn doSleep(io: std.Io, seconds: i64) std.Io.Cancelable!void {
-    try io.sleep(.fromSeconds(seconds), .boot);
+    try std.Io.sleep(io, .fromSeconds(seconds), .awake);
 }
 
 fn onWakeup(view: *knots.View, frame: *ui.Frame, _: std.Io.Cancelable!void) !void {

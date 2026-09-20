@@ -7,15 +7,15 @@ boundary.
 
 ## Supported platforms
 
-| Platform            | GPU APIs                    |
-| ------------------- | --------------------------- |
-| macOS               | WebGPU, Vulkan (MoltenVK)   |
-| Linux               | WebGPU, Vulkan              |
-| Windows             | WebGPU, Vulkan              |
-| WASM (freestanding) | WebGPU                      |
-
+| Platform            | GPU APIs                  |
+| ------------------- | ------------------------- |
+| macOS               | WebGPU, Vulkan (MoltenVK) |
+| Linux               | WebGPU, Vulkan            |
+| Windows             | WebGPU, Vulkan            |
+| WASM (freestanding) | WebGPU                    |
 
 ## Known limitations
+
 - Linux windowing is Wayland-only.
 - Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.
 
@@ -31,6 +31,9 @@ zig fetch --save git+https://codeberg.org/shahwali/knots.git
 - On Linux, Wayland development packages are required: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, pkg-config, and xkbcommon.
 
 ## Minimal app
+
+To develop with independently reloadable UI modules in a native window, see the
+[playground and HMR quick start](examples/playground/README.md).
 
 Add the `knots` and `ui` modules to your executable:
 
@@ -83,9 +86,6 @@ app_module.addImport("input", knots_dependency.module("input"));
 app_module.addImport("render", knots_dependency.module("render"));
 app_module.addImport("renderer", knots_dependency.module("renderer"));
 ```
-
-`ui.Context` owns UI state for one viewport and `endFrame` returns one
-`Frame.Output`: platform effects plus an ordered `render.Packet`.
 
 ```zig
 var context = try ui.Context.init(allocator, .{});

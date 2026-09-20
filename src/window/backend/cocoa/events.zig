@@ -1,3 +1,4 @@
+const std = @import("std");
 const input_types = @import("input");
 const objc = @import("objc");
 const window = @import("window");
@@ -41,6 +42,7 @@ pub const delegate_methods = .{
     .{ "windowShouldClose:", windowShouldClose },
     .{ "windowDidBecomeKey:", windowDidBecomeKey },
     .{ "windowDidResignKey:", windowDidResignKey },
+    .{ "windowDidChangeOcclusionState:", windowDidChangeOcclusionState },
     .{ "windowDidEnterFullScreen:", windowDidEnterFullScreen },
     .{ "windowDidExitFullScreen:", windowDidExitFullScreen },
     .{ "windowDidResize:", windowDidResize },
@@ -149,7 +151,7 @@ fn keyDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const flags = event.msgSend(c_ulong, "modifierFlags", .{});
     const key = keymap.translateKeyCode(kc);
     const mods = modsFromFlags(flags);
-    owner.pushKey(@intFromEnum(key), .press, mods);
+    owner.pushKey(@backingInt(key), .press, mods);
 
     const skip_chars = (flags & ak.NSEventModifierFlagCommand) != 0 or
         (flags & ak.NSEventModifierFlagControl) != 0;
@@ -172,7 +174,7 @@ fn keyUp(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const kc = event.msgSend(u16, "keyCode", .{});
     const flags = event.msgSend(c_ulong, "modifierFlags", .{});
     const key = keymap.translateKeyCode(kc);
-    owner.pushKey(@intFromEnum(key), .release, modsFromFlags(flags));
+    owner.pushKey(@backingInt(key), .release, modsFromFlags(flags));
 }
 
 fn flagsChanged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
@@ -191,7 +193,7 @@ fn flagsChanged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
         else => 0,
     };
     const action: input_types.KeyAction = if (key_bit != 0 and (flags & key_bit) != 0) .press else .release;
-    owner.pushKey(@intFromEnum(key), action, modsFromFlags(flags));
+    owner.pushKey(@backingInt(key), action, modsFromFlags(flags));
 }
 
 fn draggingEntered(_: c.id, _: c.SEL, _: c.id) callconv(.c) c_ulong {
@@ -241,6 +243,15 @@ fn windowDidBecomeKey(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
 fn windowDidResignKey(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
     owner.setFocused(false);
+}
+
+fn windowDidChangeOcclusionState(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    std.debug.assert(owner.backend.ns_window.value != null);
+    std.debug.assert(owner.backend.ns_view.value != null);
+    // An occluded surface skips presentation and stops its redraw chain.
+    // Schedule through the normal frame source when visibility changes.
+    owner.requestFrame();
 }
 
 fn windowDidEnterFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {

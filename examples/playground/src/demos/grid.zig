@@ -1,6 +1,6 @@
+const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -9,11 +9,7 @@ const Spacer = ui.component.Spacer;
 const cols = [_]Rect.GridTrack{ .{ .fixed = 100 }, .{ .fr = 1 }, .{ .fr = 1 } };
 const rows = [_]Rect.GridTrack{ .{ .fixed = 28 }, .{ .fr = 1 }, .{ .fr = 1 }, .{ .fixed = 24 } };
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Grid", body);
-}
-
-fn body(_: *knots.App, app: *ui.Frame) !void {
+pub fn main(app: *knots.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),

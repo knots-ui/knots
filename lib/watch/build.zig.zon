@@ -1,0 +1,14 @@
+.{
+    .name = .watch,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .dependencies = .{
+        .win32 = .{
+            .url = "git+https://github.com/marlersoft/zigwin32.git#ec98bb4d9eea532320a8551720a9e3ec6de64994",
+            .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "src", "build.zig", "build.zig.zon" },
+    .fingerprint = 0x500b4a262229bd03,
+}

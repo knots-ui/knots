@@ -2,6 +2,9 @@ import { createBridgeImports } from "./js-bridge.js";
 
 const WASM_MEMORY_INITIAL_PAGES = 256;
 const WASM_MEMORY_MAX_PAGES = 32768;
+const browserHmrDefault = new URL(import.meta.url).searchParams.has("knots-hmr") ? {} : undefined;
+const textDecoder = new TextDecoder("utf-8");
+const textEncoder = new TextEncoder();
 
 function isCanvas(value) {
   return typeof HTMLCanvasElement !== "undefined" && value instanceof HTMLCanvasElement;
@@ -149,6 +152,238 @@ const keyCodes = new Map(
 
 const keyDefaults = new Set([32, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269]);
 
+class BrowserHmr {
+  constructor(host, options) {
+    if (!host) throw new Error("Knots HMR requires a browser host");
+    this.host = host;
+    this.options = typeof options === "object" ? options : {};
+    this.manifestUrl = new URL(this.options.manifestUrl ?? "../hmr/manifest.json", import.meta.url);
+    this.statusUrl = new URL(this.options.statusUrl ?? "../hmr/status.json", import.meta.url);
+    this.artifactBaseUrl = new URL(
+      this.options.artifactBaseUrl ?? "../hmr/artifacts/",
+      import.meta.url,
+    );
+    this.eventsUrl = new URL(this.options.eventsUrl ?? "../hmr/events", import.meta.url);
+    this.revision = 0;
+    this.manifestText = "";
+    this.manifestBytes = new Uint8Array();
+    this.statusText = "";
+    this.statusBytes = new Uint8Array();
+    this.candidates = new Map();
+    this.handles = new Map();
+    this.nextHandle = 1;
+    this.refreshing = false;
+    this.refreshPending = false;
+    this.events = null;
+  }
+
+  async init() {
+    await new Promise((resolve, reject) => {
+      const events = new EventSource(this.eventsUrl);
+      this.events = events;
+      let initialized = false;
+      events.addEventListener("change", () => {
+        this.refresh()
+          .then(() => {
+            if (!initialized) {
+              initialized = true;
+              resolve();
+            }
+          })
+          .catch((error) => {
+            if (!initialized) {
+              reject(error);
+            } else {
+              this.host.log(2, `Knots HMR refresh failed: ${errorMessage(error)}`);
+            }
+          });
+      });
+      events.onerror = () => {
+        if (!initialized) reject(new Error(`Knots HMR event stream failed: ${this.eventsUrl}`));
+      };
+    });
+  }
+
+  async refresh() {
+    if (this.refreshing) {
+      this.refreshPending = true;
+      return;
+    }
+    this.refreshing = true;
+    try {
+      do {
+        this.refreshPending = false;
+        await this.refreshOnce();
+      } while (this.refreshPending);
+    } finally {
+      this.refreshing = false;
+    }
+  }
+
+  async refreshOnce() {
+    const [statusText, manifestText] = await Promise.all([
+      this.fetchText(this.statusUrl),
+      this.fetchText(this.manifestUrl),
+    ]);
+    const manifest = JSON.parse(manifestText);
+    if (!manifest || !Array.isArray(manifest.modules))
+      throw new Error("Knots HMR manifest must contain a modules array");
+    if (manifest.modules.length > 128)
+      throw new Error("Knots HMR manifest contains too many modules");
+
+    const desiredKeys = new Set();
+    let loaded = false;
+    for (const entry of manifest.modules) {
+      this.validateEntry(entry);
+      const key = this.moduleKey(entry.id, entry.hash);
+      if (desiredKeys.has(key)) throw new Error(`Duplicate Knots HMR module: ${entry.id}`);
+      desiredKeys.add(key);
+      if (this.candidates.has(key)) continue;
+      try {
+        const record = await this.load(entry.id, entry.hash);
+        this.candidates.set(key, record);
+        loaded = true;
+      } catch (error) {
+        this.host.log(2, `Knots HMR module rejected (${entry.id}): ${errorMessage(error)}`);
+      }
+    }
+
+    for (const [key, record] of this.candidates) {
+      if (desiredKeys.has(key)) continue;
+      this.candidates.delete(key);
+      this.release(record);
+    }
+
+    const changed = loaded || statusText !== this.statusText || manifestText !== this.manifestText;
+    this.statusText = statusText;
+    this.statusBytes = textEncoder.encode(statusText);
+    this.manifestText = manifestText;
+    this.manifestBytes = textEncoder.encode(manifestText);
+    if (changed) {
+      this.revision = this.revision === 0xffffffff ? 1 : this.revision + 1;
+      this.host.requestFrame();
+    }
+  }
+
+  async fetchText(url) {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Knots HMR request failed (${response.status}): ${url}`);
+    return response.text();
+  }
+
+  validateEntry(entry) {
+    if (!entry || typeof entry.id !== "string" || entry.id.length === 0)
+      throw new Error("Knots HMR module id must be a non-empty string");
+    if (typeof entry.hash !== "string" || !/^[0-9a-f]{64}$/.test(entry.hash))
+      throw new Error(`Knots HMR module hash is invalid: ${entry.id}`);
+  }
+
+  moduleKey(id, hash) {
+    if (id.length === 0 || hash.length !== 64) throw new Error("Invalid Knots HMR module key");
+    return `${id}\0${hash}`;
+  }
+
+  async load(id, hash) {
+    const url = new URL(`${hash}.wasm`, this.artifactBaseUrl);
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Module request failed (${response.status})`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const actualHash = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualHash !== hash) throw new Error("Module hash mismatch");
+    const result = await WebAssembly.instantiate(bytes, {});
+    const exports = result.instance.exports;
+    this.validateExports(exports);
+    if (exports.knots_hmr_version() !== 1) throw new Error("Unsupported module protocol version");
+    if (exports.knots_hmr_init() !== 0) throw new Error("Module initialization failed");
+    const source = this.readGuestBytes(
+      exports,
+      exports.knots_hmr_source(),
+      exports.knots_hmr_source_length(),
+    );
+    return { id, hash, exports, source, output: new Uint8Array(), references: 1, destroyed: false };
+  }
+
+  validateExports(exports) {
+    if (!(exports.memory instanceof WebAssembly.Memory))
+      throw new Error("Module memory export is missing");
+    for (const name of [
+      "knots_hmr_version",
+      "knots_hmr_init",
+      "knots_hmr_input",
+      "knots_hmr_frame",
+      "knots_hmr_output",
+      "knots_hmr_output_length",
+      "knots_hmr_deinit",
+      "knots_hmr_source",
+      "knots_hmr_source_length",
+    ]) {
+      if (typeof exports[name] !== "function") throw new Error(`Module export is missing: ${name}`);
+    }
+  }
+
+  readGuestBytes(exports, offset, length) {
+    offset = Number(offset);
+    length = Number(length);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid module byte offset");
+    if (!Number.isSafeInteger(length) || length < 0) throw new Error("Invalid module byte length");
+    const end = offset + length;
+    if (!Number.isSafeInteger(end) || end > exports.memory.buffer.byteLength)
+      throw new Error("Module byte range is outside memory");
+    return new Uint8Array(exports.memory.buffer.slice(offset, end));
+  }
+
+  open(id, hash) {
+    const record = this.candidates.get(this.moduleKey(id, hash));
+    if (!record || record.destroyed) return 0;
+    const handle = this.nextHandle;
+    this.nextHandle = this.nextHandle === 0xffffffff ? 1 : this.nextHandle + 1;
+    if (this.handles.has(handle)) throw new Error("Knots HMR handle space exhausted");
+    record.references += 1;
+    this.handles.set(handle, record);
+    return handle;
+  }
+
+  close(handle) {
+    const record = this.handles.get(handle);
+    if (!record) return;
+    this.handles.delete(handle);
+    this.release(record);
+  }
+
+  release(record) {
+    if (record.references <= 0) throw new Error("Knots HMR module reference underflow");
+    record.references -= 1;
+    if (record.references > 0) return;
+    if (record.destroyed) throw new Error("Knots HMR module destroyed twice");
+    record.destroyed = true;
+    record.exports.knots_hmr_deinit();
+  }
+
+  record(handle) {
+    const record = this.handles.get(handle);
+    if (!record || record.destroyed) throw new Error(`Invalid Knots HMR handle: ${handle}`);
+    return record;
+  }
+
+  frame(handle, request) {
+    const record = this.record(handle);
+    const offset = Number(record.exports.knots_hmr_input(request.length));
+    if (!Number.isSafeInteger(offset) || offset <= 0)
+      throw new Error("Module input allocation failed");
+    const memory = new Uint8Array(record.exports.memory.buffer);
+    if (offset + request.length > memory.length)
+      throw new Error("Module input range is outside memory");
+    memory.set(request, offset);
+    if (record.exports.knots_hmr_frame() !== 0) throw new Error("Module frame failed");
+    record.output = this.readGuestBytes(
+      record.exports,
+      record.exports.knots_hmr_output(),
+      record.exports.knots_hmr_output_length(),
+    );
+  }
+}
+
 class KnotsBrowserHost {
   constructor(options) {
     this.canvas = options.canvas;
@@ -164,10 +399,11 @@ class KnotsBrowserHost {
     for (const event of ["pointerdown", "mousedown", "keydown", "touchstart"]) {
       document.addEventListener(event, this.serviceFullscreen, true);
     }
-    this.ready = this.initGpu();
     this.workerPool = null;
     this.frameCallback = null;
     this.frameRequest = null;
+    this.hmr = options.hmr ? new BrowserHmr(this, options.hmr) : null;
+    this.ready = this.hmr ? Promise.all([this.initGpu(), this.hmr.init()]) : this.initGpu();
   }
 
   setWorkerPool(workerPool) {
@@ -422,6 +658,72 @@ class KnotsBrowserHost {
   }
 }
 
+function createHmrImports(host, bridge) {
+  const hmr = host.hmr;
+
+  function manager() {
+    if (!hmr) throw new Error("Knots browser HMR is not enabled");
+    return hmr;
+  }
+
+  function mainBytes(pointer, length) {
+    pointer = safeUsizeNumber(pointer, "HMR pointer");
+    length = safeUsizeNumber(length, "HMR length");
+    bridge.refreshMemory();
+    const end = pointer + length;
+    if (!Number.isSafeInteger(end) || end > bridge.bytes.length)
+      throw new RangeError("Knots HMR byte range is outside main memory");
+    return bridge.bytes.subarray(pointer, end);
+  }
+
+  function copyToMain(bytes, pointer, capacity) {
+    const output = mainBytes(pointer, capacity);
+    if (output.length !== bytes.length) return 0;
+    output.set(bytes);
+    return bytes.length;
+  }
+
+  function decode(pointer, length) {
+    return textDecoder.decode(mainBytes(pointer, length));
+  }
+
+  function guarded(fallback, operation) {
+    try {
+      return operation();
+    } catch (error) {
+      host.log(2, `Knots browser HMR operation failed: ${errorMessage(error)}`);
+      return fallback;
+    }
+  }
+
+  return {
+    revision: () => guarded(0, () => manager().revision),
+    manifestLength: () => guarded(0, () => manager().manifestBytes.length),
+    manifestCopy: (pointer, capacity) =>
+      guarded(0, () => copyToMain(manager().manifestBytes, pointer, capacity)),
+    statusLength: () => guarded(0, () => manager().statusBytes.length),
+    statusCopy: (pointer, capacity) =>
+      guarded(0, () => copyToMain(manager().statusBytes, pointer, capacity)),
+    open: (idPointer, idLength, hashPointer, hashLength) =>
+      guarded(0, () =>
+        manager().open(decode(idPointer, idLength), decode(hashPointer, hashLength)),
+      ),
+    close: (handle) => guarded(undefined, () => manager().close(handle)),
+    sourceLength: (handle) => guarded(0, () => manager().record(handle).source.length),
+    sourceCopy: (handle, pointer, capacity) =>
+      guarded(0, () => copyToMain(manager().record(handle).source, pointer, capacity)),
+    frame: (handle, requestPointer, requestLength) =>
+      guarded(0, () => {
+        const request = new Uint8Array(mainBytes(requestPointer, requestLength));
+        manager().frame(handle, request);
+        return 1;
+      }),
+    outputLength: (handle) => guarded(0, () => manager().record(handle).output.length),
+    outputCopy: (handle, pointer, capacity) =>
+      guarded(0, () => copyToMain(manager().record(handle).output, pointer, capacity)),
+  };
+}
+
 export function createKnotsImports(options) {
   const bridge = createBridgeImports();
   bridge.setExportSymbols({
@@ -431,9 +733,13 @@ export function createKnotsImports(options) {
   const host = new KnotsBrowserHost(options);
   bridge.setHost(host);
   if (options.wasmExports) bridge.setWasmExports(options.wasmExports);
+  const imports = {
+    ...bridge.imports,
+    knots_hmr: createHmrImports(host, bridge),
+  };
 
   return {
-    imports: bridge.imports,
+    imports,
     ready: host.ready,
     bridge,
     host,
@@ -546,6 +852,7 @@ export async function startKnots({
   wasmExports,
   log,
   onError,
+  hmr = browserHmrDefault,
 }) {
   const module = wasmExports ? null : await compileWasm(wasmUrl);
   const threaded =
@@ -565,6 +872,7 @@ export async function startKnots({
     wasmExports: exports,
     log,
     onError,
+    hmr,
     symbols: resolvedSymbols,
   });
   await imports.ready;

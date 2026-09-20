@@ -754,6 +754,23 @@ pub fn resolveHit(self: *UI) bool {
     return changed;
 }
 
+pub fn hitLayerAt(self: *UI, point: math.Vec2) ?Layer {
+    var best: ?HitRecord = null;
+    for (self.hit_records.items) |record| {
+        if (!record.bounds.contains(point)) continue;
+        if (!Clip.contains(record.clip, self.clip_nodes.items, point)) continue;
+        if (!self.input_scopes.allows(record.input_scope)) continue;
+        if (best) |previous| {
+            if (previous.layer.above(record.layer)) continue;
+            if (previous.layer.eql(record.layer)) {
+                if (previous.insertion_order > record.insertion_order) continue;
+            }
+        }
+        best = record;
+    }
+    return if (best) |record| record.layer else null;
+}
+
 fn hitTarget(self: *UI, p: math.Vec2) Element.Id {
     var best_id: Element.Id = Element.INVALID_ID;
     var best_layer: Layer = Layer.base;

@@ -1,0 +1,26 @@
+.{
+    .name = .wasmtime,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .dependencies = .{
+        .wasmtime_linux_x86_64 = .{
+            .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-linux-c-api.tar.xz",
+            .hash = "N-V-__8AACKuZwZAUqtfncpykr6w6VKWURakWwOksH-uJnq7",
+        },
+        .wasmtime_windows_x86_64 = .{
+            .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-windows-c-api.zip",
+            .hash = "N-V-__8AAEJJkgZEtCGr3ZzMGzOlMjniprRsWSIyxOZikMJP",
+        },
+        .wasmtime_macos_aarch64 = .{
+            .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-aarch64-macos-c-api.tar.xz",
+            .hash = "N-V-__8AAO7VOwSHZwfzZvB87CfDFhNBc0X82LHh5ja5aLmg",
+        },
+    },
+    .paths = .{
+        "README.md",
+        "src",
+        "build.zig",
+        "build.zig.zon",
+    },
+    .fingerprint = 0x4cb28b7b3f5b8f96,
+}

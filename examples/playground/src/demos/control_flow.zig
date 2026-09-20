@@ -1,8 +1,6 @@
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -13,13 +11,12 @@ const VirtualList = ui.control.VirtualList;
 
 const virtual_items_count: usize = 100_000;
 const virtual_row_height: f32 = 22;
+var counter: isize = 0;
+var counter_items: [100]isize = undefined;
+var counter_items_count: usize = 0;
+var show_details = true;
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Control flow", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
+pub fn main(app: *knots.Frame) !void {
     const arena = app.arena();
 
     const actions = Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) };
@@ -33,7 +30,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         .justify = .center,
         .@"align" = .center,
         .text = .{ .content = "+1" },
-    })).clicked) try pushItem(self, app);
+    })).clicked) pushItem(app);
     if ((try app.interact(Button{
         .height = .fixed(28),
         .width = .fixed(60),
@@ -43,7 +40,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         .justify = .center,
         .@"align" = .center,
         .text = .{ .content = "-1" },
-    })).clicked) popItem(self, app);
+    })).clicked) popItem(app);
     if ((try app.interact(Button{
         .height = .fixed(28),
         .width = .fixed(96),
@@ -52,11 +49,11 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
         .key = .src(@src()),
         .justify = .center,
         .@"align" = .center,
-        .text = .{ .content = if (self.demo_state.show_details) "hide" else "show" },
-    })).clicked) toggle(self, app);
+        .text = .{ .content = if (show_details) "hide" else "show" },
+    })).clicked) toggle(app);
     try app.e(.{
         Text{
-            .content = try std.fmt.allocPrint(arena, "{d} items", .{self.demo_state.counter_items.items.len}),
+            .content = try std.fmt.allocPrint(arena, "{d} items", .{counter_items_count}),
             .size = .sm,
             .color = .dimmed,
             .key = .src(@src()),
@@ -68,10 +65,10 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
 
     const collapsible = ui.component.Collapsible{
         .key = .str("control_flow.details"),
-        .open = self.demo_state.show_details,
+        .open = show_details,
     };
     if (try collapsible.openContent(app)) {
-        try dynamicList(self, app);
+        try dynamicList(app);
         collapsible.closeContent(app);
     }
 
@@ -108,7 +105,7 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
     });
 }
 
-fn dynamicList(self: *Self, app: *ui.Frame) !void {
+fn dynamicList(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .width = .grow(),
@@ -120,7 +117,7 @@ fn dynamicList(self: *Self, app: *ui.Frame) !void {
         },
         .{
             For(isize){
-                .items = self.demo_state.counter_items.items,
+                .items = counter_items[0..counter_items_count],
                 .each = renderItem,
             },
         },
@@ -176,18 +173,23 @@ fn renderItem(app: *ui.Frame, item: isize, i: usize) !void {
     });
 }
 
-fn pushItem(self: *Self, app: *ui.Frame) !void {
-    self.demo_state.counter += 1;
-    try self.demo_state.counter_items.append(self.allocator, self.demo_state.counter);
+fn pushItem(app: *ui.Frame) void {
+    if (counter_items_count == counter_items.len) return;
+    counter += 1;
+    counter_items[counter_items_count] = counter;
+    counter_items_count += 1;
     app.requestRedraw();
 }
 
-fn popItem(self: *Self, app: *ui.Frame) void {
-    if (self.demo_state.counter_items.pop() != null) self.demo_state.counter -= 1;
+fn popItem(app: *ui.Frame) void {
+    if (counter_items_count > 0) {
+        counter_items_count -= 1;
+        counter -= 1;
+    }
     app.requestRedraw();
 }
 
-fn toggle(self: *Self, app: *ui.Frame) void {
-    self.demo_state.show_details = !self.demo_state.show_details;
+fn toggle(app: *ui.Frame) void {
+    show_details = !show_details;
     app.requestRedraw();
 }

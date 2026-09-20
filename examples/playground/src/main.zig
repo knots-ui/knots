@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const knots = @import("knots");
 const playground = @import("playground");
 
@@ -10,9 +9,8 @@ pub const main = if (knots.platform.is_browser_wasm) struct {
 }.main else nativeMain;
 
 fn nativeMain(init: std.process.Init) !void {
-    var app = try playground.init(init.io, init.gpa);
+    var app = try playground.init(init.io, init.gpa, init.environ_map);
     defer app.deinit();
-
     try app.start();
 }
 
@@ -21,18 +19,16 @@ comptime {
         @export(&struct {
             fn webMain() callconv(.{ .wasm_mvp = .{} }) i32 {
                 const allocator = knots.web.allocator;
-                const io = knots.web.io;
-                const ptr = allocator.create(playground) catch |err| return knots.web.fail(err);
-                ptr.* = playground.init(io, allocator) catch |err| {
-                    allocator.destroy(ptr);
+                const app = allocator.create(playground) catch |err| return knots.web.fail(err);
+                app.* = playground.init(knots.web.io, allocator, &.{}) catch |err| {
+                    allocator.destroy(app);
                     return knots.web.fail(err);
                 };
-                ptr.start() catch |err| {
-                    ptr.deinit();
-                    allocator.destroy(ptr);
+                app.start() catch |err| {
+                    app.deinit();
+                    allocator.destroy(app);
                     return knots.web.fail(err);
                 };
-
                 return 0;
             }
         }.webMain, .{ .name = "main" });

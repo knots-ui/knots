@@ -414,7 +414,51 @@ fn renderFrame(
         return;
     }
 
-    switch (viewport.renderer.render(
+    // Release painters for removed contributions at a safe GPU boundary.
+    var obsolete: [Frame.modules_max]u64 = undefined;
+    var obsolete_count: u32 = 0;
+    var iterator = viewport.contribution_painters.keyIterator();
+    while (iterator.next()) |identity| {
+        var present = false;
+        for (output.contributions) |contribution| {
+            if (contribution.identity == identity.*) present = true;
+        }
+        if (!present) {
+            std.debug.assert(obsolete_count < obsolete.len);
+            obsolete[obsolete_count] = identity.*;
+            obsolete_count += 1;
+        }
+    }
+    if (obsolete_count > 0) try self.render_context.device.waitIdle();
+    for (obsolete[0..obsolete_count]) |identity| {
+        const removed = viewport.contribution_painters.fetchRemove(identity).?;
+        removed.value.destroyAfterWait();
+    }
+
+    if (output.contributions.len > 0 or output.host_overlay != null) {
+        var graph: [32]renderer.Renderer.CompositionNode = undefined;
+        graph[0] = .{ .painter = viewport.renderer.painter, .packet = &output.packet };
+        for (output.contributions, 0..) |*contribution, index| {
+            const entry = try viewport.contribution_painters.getOrPut(self.allocator, contribution.identity);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = viewport.renderer.createLayerPainter() catch |err| {
+                    _ = viewport.contribution_painters.remove(contribution.identity);
+                    return err;
+                };
+            }
+            graph[index + 1] = .{ .painter = entry.value_ptr.*, .packet = &contribution.packet };
+        }
+        var graph_count: u32 = @intCast(output.contributions.len + 1);
+        if (output.host_overlay) |*packet| {
+            std.debug.assert(graph_count < graph.len);
+            graph[graph_count] = .{ .painter = viewport.overlay_painter, .packet = packet };
+            graph_count += 1;
+        }
+        viewport.renderer.renderGraph(graph[0..graph_count], viewport.window.getContentScale()) catch |err| switch (err) {
+            error.SurfaceUnavailable => return,
+            else => return err,
+        };
+    } else switch (viewport.renderer.render(
         &output.packet,
         viewport.window.getContentScale(),
     )) {
@@ -490,11 +534,7 @@ fn runCompletion(
 
     var view = self.viewForViewport(viewport);
 
-    try callback(
-        &view,
-        frame,
-        context,
-    );
+    try callback(&view, frame, context);
 
     if (!viewport.frame_active and
         viewport.window.isOpen())

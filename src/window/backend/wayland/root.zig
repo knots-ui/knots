@@ -68,7 +68,7 @@ const Shared = struct {
     repeat_rate: i32 = 0,
     repeat_delay_ms: i32 = 600,
     repeat_key: ?u32 = null,
-    repeat_window_key: input_types.Key = @enumFromInt(0),
+    repeat_window_key: input_types.Key = @fromBackingInt(@intCast(0)),
     repeat_char: ?u21 = null,
     repeat_next_ms: i64 = 0,
     last_keyboard_serial: u32 = 0,
@@ -180,7 +180,7 @@ const Shared = struct {
         const interval = @max(@as(i64, 1), @divTrunc(1000, @as(i64, self.repeat_rate)));
         var emitted: usize = 0;
         while (now >= self.repeat_next_ms and emitted < 8) : (emitted += 1) {
-            owner.pushKey(@intFromEnum(self.repeat_window_key), .repeat, self.currentMods());
+            owner.pushKey(@backingInt(self.repeat_window_key), .repeat, self.currentMods());
             if (self.repeat_char) |cp| owner.pushChar(cp);
             self.repeat_next_ms += interval;
         }
@@ -370,15 +370,14 @@ pub const Backend = struct {
     }
 
     pub fn pollEvents(self: *const Self, io: std.Io) void {
-        const shared = self.state.shared;
-        drainWake(shared);
-        _ = shared.display.dispatchPending();
-        shared.processRepeat(io);
-        drainWake(shared);
-        dispatchFrames(shared);
+        self.dispatchEvents(io, 0);
     }
 
     pub fn waitEvents(self: *const Self, io: std.Io) void {
+        self.dispatchEvents(io, self.state.shared.repeatTimeoutMs(io));
+    }
+
+    fn dispatchEvents(self: *const Self, io: std.Io, timeout_ms: i32) void {
         const shared = self.state.shared;
         while (!shared.display.prepareRead()) {
             _ = shared.display.dispatchPending();
@@ -398,7 +397,7 @@ pub const Backend = struct {
                 .revents = 0,
             },
         };
-        const ready = posix.poll(&fds, shared.repeatTimeoutMs(io)) catch 0;
+        const ready = posix.poll(&fds, timeout_ms) catch 0;
         if (ready > 0 and (fds[0].revents & @as(i16, @intCast(posix.POLL.IN))) != 0) {
             _ = shared.display.readEvents();
         } else {
@@ -747,7 +746,7 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, state: *Stat
             if (configure.height > 0) state.configured_size.height = @intCast(configure.height);
             var mode: window.DisplayMode = .windowed;
             for (configure.states.*.slice(u32)) |configured_state| {
-                if (configured_state == @intFromEnum(xdg.Toplevel.State.fullscreen)) {
+                if (configured_state == @backingInt(xdg.Toplevel.State.fullscreen)) {
                     mode = .fullscreen;
                     break;
                 }
@@ -917,12 +916,12 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
             switch (key.state) {
                 .pressed => {
                     const cp = state.utf32ForKey(key.key);
-                    owner.pushKey(@intFromEnum(translated), .press, mods);
+                    owner.pushKey(@backingInt(translated), .press, mods);
                     if (cp) |ch| owner.pushChar(ch);
                     state.startRepeat(key.key, translated, cp);
                 },
                 .released => {
-                    owner.pushKey(@intFromEnum(translated), .release, mods);
+                    owner.pushKey(@backingInt(translated), .release, mods);
                     if (state.repeat_key != null and state.repeat_key.? == key.key) state.clearRepeat();
                 },
                 _ => {},

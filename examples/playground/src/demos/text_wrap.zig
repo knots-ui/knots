@@ -1,7 +1,6 @@
+const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
-const ui_helpers = @import("../ui_helpers.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -19,19 +18,17 @@ const with_newlines =
     "\n" ++
     "Empty line above. The greedy wrapper breaks on spaces and hard newlines, " ++
     "and falls back to mid-word breaks for runs longer than the wrap width.";
+var notes: std.ArrayList(u8) = .empty;
+var allocator: ?std.mem.Allocator = null;
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    try ui_helpers.panel(desktop, app, "Text wrap", body);
-}
-
-fn body(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
+pub fn main(app: *knots.Frame) !void {
+    allocator = app.ui().allocator;
     const root = Rect{ .width = .grow(), .dir = .column, .gap = 16, .key = .src(@src()) };
     _ = try root.open(app);
     try fixedWidthSection(app);
     try growWidthSection(app);
     try newlinesSection(app);
-    try multiLineInputSection(self, app);
+    try multiLineInputSection(app);
     try root.close(app);
 }
 
@@ -131,13 +128,20 @@ fn newlinesSection(app: *ui.Frame) !void {
     });
 }
 
-fn multiLineInputSection(self: *Self, app: *ui.Frame) !void {
+fn multiLineInputSection(app: *ui.Frame) !void {
     try caption(app, "TextArea: multi-line, enter inserts a newline, arrow up/down navigate lines; drag the bottom edge to resize height (persists)", .src(@src()));
     try app.e(TextArea{
         .key = .src(@src()),
-        .buf = &self.demo_state.notes_buf,
+        .buf = &notes,
         .placeholder = "type a multi-line note... drag the bottom edge to grow it",
         .width = .fixed(360),
         .height = .fixed(96),
     });
+}
+
+pub fn deinit() void {
+    const active_allocator = allocator orelse return;
+    notes.deinit(active_allocator);
+    notes = .empty;
+    allocator = null;
 }
