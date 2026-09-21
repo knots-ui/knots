@@ -82,6 +82,23 @@ fn openResponse(self: *const SliderInput, frame: *Frame) !Response {
         }
     }
 
+    const step = if (self.steps > 0) self.steps else @abs(self.max - self.min) / 100.0;
+    var requested: ?f32 = null;
+    if (ui.consumeAccessibilityAction(id, .increment) != null) requested = self.value.* + step;
+    if (ui.consumeAccessibilityAction(id, .decrement) != null) requested = self.value.* - step;
+    if (ui.consumeAccessibilityAction(id, .set_value)) |action| {
+        if (action.value_number) |number| {
+            if (std.math.isFinite(number)) requested = @floatCast(number);
+        }
+    }
+    if (requested) |number| {
+        const next = self.steppedValue(std.math.clamp(number, @min(self.min, self.max), @max(self.min, self.max)));
+        if (self.value.* != next) {
+            self.value.* = next;
+            changed = true;
+        }
+    }
+
     const range = self.max - self.min;
     const display_value = self.steppedValue(self.value.*);
     const progress: f32 = if (range > 0) std.math.clamp((display_value - self.min) / range, 0, 1) else 0;

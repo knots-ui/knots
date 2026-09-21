@@ -86,6 +86,7 @@ pub const ModuleOutput = struct {
 };
 
 pub const Output = struct {
+    accessibility: @import("Accessibility.zig").Snapshot = .{},
     contributions: []const Contribution = &.{},
     packet: render.Packet,
     host_overlay: ?render.Packet = null,

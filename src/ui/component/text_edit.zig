@@ -11,6 +11,62 @@ const util = @import("util.zig");
 
 const DOUBLE_CLICK_MS: i64 = 400;
 
+pub fn processAccessibility(buf: *std.ArrayList(u8), frame: *Frame, state: *State.TextInput, id: Element.Id, bytes_max: u32) !void {
+    const ui = frame.ui();
+    if (ui.consumeAccessibilityAction(id, .set_value)) |request| {
+        if (request.value_text) |value| {
+            if (value.len <= bytes_max) {
+                try buf.replaceRange(ui.allocator, 0, buf.items.len, value);
+                state.cursor = @intCast(value.len);
+                state.sel_anchor = state.cursor;
+            }
+        }
+    }
+    if (ui.consumeAccessibilityAction(id, .set_text_selection)) |request| {
+        if (request.selection_anchor) |anchor| {
+            if (request.selection_focus) |focus| {
+                state.sel_anchor = characterToByte(buf.items, anchor);
+                state.cursor = characterToByte(buf.items, focus);
+            }
+        }
+    }
+    if (ui.consumeAccessibilityAction(id, .replace_selected_text)) |request| {
+        if (request.value_text) |value| {
+            const selection = selectionRange(state);
+            const final_len = buf.items.len - (selection.hi - selection.lo) + value.len;
+            if (final_len <= bytes_max) {
+                try buf.replaceRange(ui.allocator, selection.lo, selection.hi - selection.lo, value);
+                state.cursor = selection.lo + @as(u32, @intCast(value.len));
+                state.sel_anchor = state.cursor;
+            }
+        }
+    }
+}
+
+pub fn byteToCharacter(bytes: []const u8, byte: u32) u32 {
+    var offset: u32 = 0;
+    var characters: u32 = 0;
+    while (offset < @min(byte, bytes.len)) {
+        const width: u32 = std.unicode.utf8ByteSequenceLength(bytes[offset]) catch break;
+        if (offset + width > bytes.len) break;
+        offset += width;
+        characters += 1;
+    }
+    return characters;
+}
+
+fn characterToByte(bytes: []const u8, character: u32) u32 {
+    var offset: u32 = 0;
+    var index: u32 = 0;
+    while (offset < bytes.len and index < character) {
+        const width: u32 = std.unicode.utf8ByteSequenceLength(bytes[offset]) catch break;
+        if (offset + width > bytes.len) break;
+        offset += width;
+        index += 1;
+    }
+    return offset;
+}
+
 pub fn validateByteLimit(bytes_max: u32) !void {
     if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
 }

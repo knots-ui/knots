@@ -28,17 +28,21 @@ pub fn open(self: *const Text, frame: *Frame) !Element.Id {
     if (!self.selectable) {
         var decoration = try ui.textDecoration(self.content, self.size.resolve(), self.font, self.wrap);
         decoration.text.color = self.color.resolve(&ui.theme);
-        return try ui.open(self.key, .{
+        const id = try ui.open(self.key, .{
             .width = self.width,
             .height = self.height,
         }, decoration);
+        try ui.setAccessibility(id, .{ .role = .text_run, .state = .{ .value_text = self.content } });
+        return id;
     }
 
-    return try ui.open(self.key, .{
+    const id = try ui.open(self.key, .{
         .width = self.width,
         .height = self.height,
         .interactive = true,
     }, .none);
+    try ui.setAccessibility(id, .{ .role = .text_run, .state = .{ .value_text = self.content } });
+    return id;
 }
 
 pub fn close(self: *const Text, frame: *Frame) !void {

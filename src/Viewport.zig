@@ -10,6 +10,7 @@ const WindowConfig = @import("window").Config;
 
 const App = @import("App.zig");
 const Timer = @import("Timer.zig");
+const NativeAccessibility = if (@import("platform.zig").is_browser_wasm) void else @import("native_accessibility");
 
 const Viewport = @This();
 
@@ -22,6 +23,7 @@ pub const Config = struct {
     ui: UI.Config,
     arena_reset_mode: std.heap.ArenaAllocator.ResetMode,
     timer_clock: std.Io.Clock,
+    accessibility: bool = true,
 };
 
 app: ?*App = null,
@@ -44,6 +46,7 @@ renderer_reconfigure_error: ?render.Renderer.ReconfigureError = null,
 frame_active: bool = false,
 frame_pending: bool = false,
 contribution_painters: std.AutoHashMapUnmanaged(u64, *render.Painter) = .empty,
+accessibility: ?*NativeAccessibility = null,
 
 fn init(self: *Viewport, allocator: std.mem.Allocator, id: Id, window_value: Window, renderer_value: *render.Renderer, cfg: Config) !void {
     var ui_ctx = try Context.init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode });
@@ -65,6 +68,7 @@ fn init(self: *Viewport, allocator: std.mem.Allocator, id: Id, window_value: Win
 
 pub fn create(
     allocator: std.mem.Allocator,
+    io: std.Io,
     id: Id,
     window_value: Window,
     renderer_value: *render.Renderer,
@@ -74,6 +78,16 @@ pub fn create(
     errdefer allocator.destroy(self);
 
     try self.init(allocator, id, window_value, renderer_value, cfg);
+    errdefer {
+        self.overlay_painter.destroyAfterWait();
+        self.ui_ctx.deinit();
+    }
+    if (!@import("platform.zig").is_browser_wasm) {
+        if (cfg.accessibility) {
+            self.accessibility = try NativeAccessibility.create(allocator, io, self.window.getWindowHandle(), &self.window, wakeAccessibility);
+            self.window.accessibility = self.accessibility;
+        }
+    }
 
     return self;
 }
@@ -109,7 +123,7 @@ pub fn createSecondary(
     errdefer if (renderer_owned)
         renderer_value.destroy();
 
-    const self = try create(allocator, id, window_value, renderer_value, cfg);
+    const self = try create(allocator, io, id, window_value, renderer_value, cfg);
 
     window_owned = false;
     renderer_owned = false;
@@ -119,6 +133,10 @@ pub fn createSecondary(
 
 pub fn destroy(self: *Viewport, allocator: std.mem.Allocator) void {
     self.window.clearFrameHandler();
+    if (!@import("platform.zig").is_browser_wasm) {
+        self.window.accessibility = null;
+        if (self.accessibility) |adapter| adapter.destroy();
+    }
     self.ui_ctx.deinit();
     self.renderer.context.device.waitIdle() catch |err| std.log.warn("Layer shutdown: {s}", .{@errorName(err)});
     var painters = self.contribution_painters.valueIterator();
@@ -128,6 +146,11 @@ pub fn destroy(self: *Viewport, allocator: std.mem.Allocator) void {
     self.renderer.destroy();
     self.window.deinit();
     allocator.destroy(self);
+}
+
+fn wakeAccessibility(context: *anyopaque) void {
+    const window: *Window = @ptrCast(@alignCast(context));
+    window.postEmptyEvent();
 }
 
 /// Queue a renderer configuration change for the next frame.

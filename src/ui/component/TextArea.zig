@@ -12,6 +12,7 @@ const Decoration = @import("../root.zig").Decoration;
 const Face = @import("text").Face;
 
 const Element = @import("layout").Element;
+const Accessibility = @import("../Accessibility.zig");
 const util = @import("util.zig");
 const edit = @import("text_edit.zig");
 
@@ -48,10 +49,12 @@ pub fn open(self: *const TextArea, frame: *Frame) !Element.Id {
     if (ui.hovering(id)) ui.requestCursor(.text);
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
+    const edit_state = try ui.state.getOrCreate(.text_input, ui.allocator, id);
+    try edit.processAccessibility(self.buf, frame, edit_state, id, self.bytes_max);
+
     if (is_focused) {
         ui.requestTextInput();
-        const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, frame, s, true, self.bytes_max);
+        try edit.processInputEarly(self.buf, frame, edit_state, true, self.bytes_max);
     }
 
     const rs = try ui.state.getOrCreate(.resize, ui.allocator, id);
@@ -89,11 +92,6 @@ pub fn open(self: *const TextArea, frame: *Frame) !Element.Id {
         .focusable = true,
         .padding = self.padding,
     }, decoration);
-    try ui.setAccessibility(element_id, .{
-        .role = .text_input,
-        .name = self.placeholder,
-        .state = .{ .value_text = self.buf.items, .multiline = true },
-    });
     return element_id;
 }
 
@@ -199,6 +197,24 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
     }
 
     ui.close();
+    const text_run_id = self.key.indexed(Accessibility.text_run_index).hash();
+    const edit_state = ui.state.get(.text_input, id).?;
+    try ui.setAccessibility(id, .{
+        .role = .text_input,
+        .text_run_id = text_run_id,
+        .name = self.placeholder,
+        .state = .{
+            .value_text = self.buf.items,
+            .multiline = true,
+            .selection_anchor = edit.byteToCharacter(self.buf.items, edit_state.sel_anchor),
+            .selection_focus = edit.byteToCharacter(self.buf.items, edit_state.cursor),
+        },
+    });
+    try ui.setAccessibility(text_run_id, .{
+        .role = .text_run,
+        .parent = id,
+        .state = .{ .value_text = self.buf.items },
+    });
 }
 
 fn ensureCaretVisibleY(scroll: *State.Scroll, caret_y: f32, line_h: f32, viewport_h: f32, content_h: f32) void {
