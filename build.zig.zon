@@ -40,6 +40,7 @@
             .hash = "wayland-0.7.0-dev-lQa1krf8AQDEncPPkLgIo8fq4kXqSRsGdG1haA2hPj_w",
         },
         .js_bridge = .{ .path = "lib/js-bridge" },
+        .accesskit = .{ .path = "lib/accesskit", .lazy = true },
         .wasmtime = .{ .path = "lib/wasmtime", .lazy = true },
         .watch = .{ .path = "lib/watch" },
     },

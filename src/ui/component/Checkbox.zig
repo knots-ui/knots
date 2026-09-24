@@ -65,9 +65,10 @@ fn openResponse(self: *const Checkbox, frame: *Frame) !Response {
 
     const key_activate = ui.focused(id) and
         (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
-    const changed = ui.leftClicked(id, .within) or key_activate;
+    const changed = ui.leftClicked(id, .within) or key_activate or ui.consumeAccessibilityAction(id, .click) != null;
     if (changed) {
         self.checked.* = !self.checked.*;
+        try ui.setAccessibility(id, .{ .role = .checkbox, .name = self.label orelse &.{}, .state = .{ .checked = self.checked.* } });
         if (key_activate) ui.input.consumeKeyboard();
     }
 

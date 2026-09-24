@@ -276,11 +276,11 @@ pub const Backend = struct {
     }
 
     pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
-        if (win32.IsClipboardFormatAvailable(@intFromEnum(win32.CF_UNICODETEXT)) == 0) return null;
+        if (win32.IsClipboardFormatAvailable(@backingInt(win32.CF_UNICODETEXT)) == 0) return null;
         if (win32.OpenClipboard(self.hwnd) == 0) return null;
         defer _ = win32.CloseClipboard();
 
-        const handle = win32.GetClipboardData(@intFromEnum(win32.CF_UNICODETEXT)) orelse return null;
+        const handle = win32.GetClipboardData(@backingInt(win32.CF_UNICODETEXT)) orelse return null;
         const raw_handle: isize = @bitCast(@intFromPtr(handle));
         const locked = win32.GlobalLock(raw_handle) orelse return null;
         defer _ = win32.GlobalUnlock(raw_handle);
@@ -315,7 +315,7 @@ pub const Backend = struct {
 
         if (win32.EmptyClipboard() == 0) return false;
         const clipboard_handle: win32.HANDLE = @ptrFromInt(@as(usize, @bitCast(handle)));
-        if (win32.SetClipboardData(@intFromEnum(win32.CF_UNICODETEXT), clipboard_handle) == null) return false;
+        if (win32.SetClipboardData(@backingInt(win32.CF_UNICODETEXT), clipboard_handle) == null) return false;
         transferred = true;
 
         return true;
@@ -483,6 +483,14 @@ fn trackSize(hwnd: win32.HWND, size: input_types.Size, scale: f32) win32.POINT {
 
 fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) callconv(.winapi) win32.LRESULT {
     switch (msg) {
+        win32.WM_GETOBJECT => {
+            if (ownerOf(hwnd)) |owner| {
+                if (owner.accessibility) |adapter| {
+                    if (adapter.handleWmGetobject(wparam, lparam)) |result| return result;
+                }
+            }
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
         win32.WM_CLOSE => {
             if (ownerOf(hwnd)) |o| {
                 o.markClosed();

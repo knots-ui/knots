@@ -96,6 +96,9 @@ pub fn SelectInput(comptime T: type) type {
             if (!existed) s.selected = self.initial_selected;
 
             if (ui.leftPressed(id, .exact)) s.open = !s.open;
+            if (ui.consumeAccessibilityAction(id, .click) != null) s.open = !s.open;
+            if (ui.consumeAccessibilityAction(id, .expand) != null) s.open = true;
+            if (ui.consumeAccessibilityAction(id, .collapse) != null) s.open = false;
             if (ui.focused(id)) {
                 var next_selected: ?usize = null;
                 if (ui.input.containsKey(.escape)) {
@@ -138,7 +141,7 @@ pub fn SelectInput(comptime T: type) type {
             if (s.open) {
                 for (self.labels, 0..) |_, i| {
                     const opt_id = self.key.indexed(4 + i).hash();
-                    if (ui.leftPressed(opt_id, .exact)) {
+                    if (ui.leftPressed(opt_id, .exact) or ui.consumeAccessibilityAction(opt_id, .click) != null) {
                         const idx_u32: u32 = @intCast(i);
                         s.open = false;
                         s.selected = idx_u32;
@@ -267,7 +270,7 @@ pub fn SelectInput(comptime T: type) type {
                 const max_h = if (open_above) space_above else space_below;
                 const popup_y = if (open_above) anchor.y() - @min(dropdown_h, max_h) else anchor.y() + anchor.h();
 
-                _ = try ui.openRoot(self.key.indexed(3), anchor.x(), popup_y, .{
+                const list_id = try ui.openRoot(self.key.indexed(3), anchor.x(), popup_y, .{
                     .direction = .column,
                     .width = .fixed(anchor.w()),
                     .height = .{ .kind = .fit, .max = max_h },
@@ -275,6 +278,7 @@ pub fn SelectInput(comptime T: type) type {
                     .z_index = self.dropdown_z_index.index(),
                     .padding = .init(2, 0, 2, 0),
                 }, .{ .rect = self.option_style.toRect(&ui.theme) });
+                try ui.setAccessibility(list_id, .{ .role = .list_box, .parent = self.key.hash() });
 
                 for (self.labels, 0..) |option, i| {
                     const opt_key = self.key.indexed(4 + i);
@@ -291,11 +295,16 @@ pub fn SelectInput(comptime T: type) type {
                         .none;
 
                     {
-                        _ = try ui.open(opt_key, .{
+                        const option_id = try ui.open(opt_key, .{
                             .width = .grow(),
                             .padding = .init(7, 10, 7, 10),
                             .interactive = true,
                         }, opt_bg);
+                        try ui.setAccessibility(option_id, .{
+                            .role = .list_box_option,
+                            .name = option,
+                            .state = .{ .selected = is_selected },
+                        });
 
                         {
                             var opt_deco = try ui.textDecoration(option, size, self.font, false);

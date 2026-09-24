@@ -11,6 +11,7 @@ const Decoration = @import("../root.zig").Decoration;
 const Face = @import("text").Face;
 
 const Element = @import("layout").Element;
+const Accessibility = @import("../Accessibility.zig");
 const util = @import("util.zig");
 const edit = @import("text_edit.zig");
 
@@ -41,10 +42,12 @@ pub fn open(self: *const TextInput, frame: *Frame) !Element.Id {
     const is_focused = ui.focused(id);
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
+    const edit_state = try ui.state.getOrCreate(.text_input, ui.allocator, id);
+    try edit.processAccessibility(self.buf, frame, edit_state, id, self.bytes_max);
+
     if (is_focused) {
         ui.requestTextInput();
-        const s = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-        try edit.processInputEarly(self.buf, frame, s, false, self.bytes_max);
+        try edit.processInputEarly(self.buf, frame, edit_state, false, self.bytes_max);
     }
 
     const is_hovered = ui.hovering(id);
@@ -72,11 +75,6 @@ pub fn open(self: *const TextInput, frame: *Frame) !Element.Id {
         .alignment = .center,
         .padding = self.padding,
     }, decoration);
-    try ui.setAccessibility(element_id, .{
-        .role = .text_input,
-        .name = self.placeholder,
-        .state = .{ .value_text = self.buf.items },
-    });
     return element_id;
 }
 
@@ -157,6 +155,23 @@ pub fn close(self: *const TextInput, frame: *Frame) !void {
     }
 
     ui.close();
+    const text_run_id = self.key.indexed(Accessibility.text_run_index).hash();
+    const edit_state = ui.state.get(.text_input, id).?;
+    try ui.setAccessibility(id, .{
+        .role = .text_input,
+        .text_run_id = text_run_id,
+        .name = self.placeholder,
+        .state = .{
+            .value_text = self.buf.items,
+            .selection_anchor = edit.byteToCharacter(self.buf.items, edit_state.sel_anchor),
+            .selection_focus = edit.byteToCharacter(self.buf.items, edit_state.cursor),
+        },
+    });
+    try ui.setAccessibility(text_run_id, .{
+        .role = .text_run,
+        .parent = id,
+        .state = .{ .value_text = self.buf.items },
+    });
 }
 
 fn ensureCaretVisibleX(scroll: *State.Scroll, caret_x: f32, viewport_w: f32, content_w: f32) void {

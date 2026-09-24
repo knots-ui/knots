@@ -80,6 +80,10 @@ press_ancestors: std.ArrayList(Element.Id),
 hover_ancestors: std.ArrayList(Element.Id),
 focus_order: std.ArrayList(Element.Id),
 accessibility_nodes: std.ArrayList(Accessibility.Node),
+accessibility_children: std.ArrayList(Element.Id) = .empty,
+accessibility_node_indices: std.AutoHashMapUnmanaged(Element.Id, u32) = .empty,
+accessibility_actions: []const Accessibility.ActionRequest = &.{},
+accessibility_consumed: [Accessibility.actions_max]bool = @splat(false),
 hit_counter: u32,
 scroll_geoms: std.ArrayList(scrollbar.SlotGeom),
 clip_shapes: std.ArrayList(?Clip.Shape),
@@ -138,6 +142,8 @@ pub fn deinit(self: *UI) void {
     self.focus_order.deinit(self.allocator);
     self.freeAccessibilityNodes();
     self.accessibility_nodes.deinit(self.allocator);
+    self.accessibility_children.deinit(self.allocator);
+    self.accessibility_node_indices.deinit(self.allocator);
     self.scroll_geoms.deinit(self.allocator);
     self.clip_shapes.deinit(self.allocator);
     self.slot_clips.deinit(self.allocator);
@@ -307,6 +313,8 @@ pub fn reset(self: *UI) void {
     self.focus_order.clearRetainingCapacity();
     self.freeAccessibilityNodes();
     self.accessibility_nodes.clearRetainingCapacity();
+    self.accessibility_children.clearRetainingCapacity();
+    self.accessibility_node_indices.clearRetainingCapacity();
     self.hit_counter = 0;
     self.scroll_geoms.clearRetainingCapacity();
     self.slot_clips.clearRetainingCapacity();
@@ -390,6 +398,7 @@ pub fn resolve(self: *UI) !void {
     if (self.layout_ctx.root_slot == Element.INVALID_SLOT) {
         try self.layout_ctx.buildZOrder();
         self.updateStats();
+        try self.syncAccessibility();
         return;
     }
 
@@ -409,11 +418,14 @@ pub fn resolve(self: *UI) !void {
 
     try self.layout_ctx.buildZOrder();
     self.syncStateBounds();
-    self.syncAccessibility();
+    try self.syncAccessibility();
 }
 
 pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata) !void {
     if (id == Element.INVALID_ID) return;
+    if (id == Accessibility.root_id) return error.ReservedAccessibilityId;
+    const existing_index = self.accessibility_node_indices.get(id);
+    if (existing_index == null and self.accessibility_nodes.items.len >= Accessibility.nodes_max) return error.TooManyAccessibilityNodes;
 
     const name = try self.dupeAccessibilityText(meta.name);
     errdefer self.freeAccessibilityText(name);
@@ -423,21 +435,36 @@ pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata)
     }
     errdefer if (state.value_text) |value| self.freeAccessibilityText(value);
 
-    for (self.accessibility_nodes.items) |*node| {
-        if (node.id == id) {
-            self.freeAccessibilityNode(node);
-            node.role = meta.role;
-            node.name = name;
-            node.state = state;
-            return;
-        }
+    if (existing_index) |index| {
+        std.debug.assert(index < self.accessibility_nodes.items.len);
+        const node = &self.accessibility_nodes.items[index];
+        std.debug.assert(node.id == id);
+        self.freeAccessibilityNode(node);
+        node.role = meta.role;
+        node.parent = meta.parent orelse Element.INVALID_ID;
+        node.text_run_id = meta.text_run_id;
+        node.name = name;
+        node.state = state;
+        return;
     }
-    try self.accessibility_nodes.append(self.allocator, .{
+
+    const root_missing = self.accessibility_nodes.items.len == 0;
+    try self.accessibility_nodes.ensureUnusedCapacity(self.allocator, if (root_missing) 2 else 1);
+    try self.accessibility_node_indices.ensureUnusedCapacity(self.allocator, if (root_missing) 2 else 1);
+    if (root_missing) {
+        self.accessibility_nodes.appendAssumeCapacity(rootAccessibilityNode());
+        self.accessibility_node_indices.putAssumeCapacity(Accessibility.root_id, 0);
+    }
+    const index: u32 = @intCast(self.accessibility_nodes.items.len);
+    self.accessibility_nodes.appendAssumeCapacity(.{
         .id = id,
+        .parent = meta.parent orelse Element.INVALID_ID,
+        .text_run_id = meta.text_run_id,
         .role = meta.role,
         .name = name,
         .state = state,
     });
+    self.accessibility_node_indices.putAssumeCapacity(id, index);
 }
 
 /// The returned nodes and their text remain valid until the next `reset`.
@@ -445,8 +472,35 @@ pub fn accessibilitySnapshot(self: *const UI) []const Accessibility.Node {
     return self.accessibility_nodes.items;
 }
 
+pub fn semanticSnapshot(self: *const UI) Accessibility.Snapshot {
+    const nodes = self.accessibility_nodes.items;
+    return .{
+        .content_scale = self.content_scale,
+        .nodes = nodes,
+        .children = self.accessibility_children.items,
+        .focus = if (self.state.focused != Element.INVALID_ID and self.hasAccessibilityNode(self.state.focused)) self.state.focused else Accessibility.root_id,
+    };
+}
+
+fn hasAccessibilityNode(self: *const UI, id: Element.Id) bool {
+    return self.accessibility_node_indices.contains(id);
+}
+
+pub fn consumeAccessibilityAction(self: *UI, id: Element.Id, action: Accessibility.Action) ?Accessibility.ActionRequest {
+    std.debug.assert(self.accessibility_actions.len <= Accessibility.actions_max);
+    for (self.accessibility_actions, 0..) |request, index| {
+        if (self.accessibility_consumed[index]) continue;
+        if (request.id != id) continue;
+        if (request.action != action) continue;
+        self.accessibility_consumed[index] = true;
+        return request;
+    }
+    return null;
+}
+
 fn dupeAccessibilityText(self: *UI, content: []const u8) ![]const u8 {
     if (content.len == 0) return &.{};
+    _ = std.unicode.Utf8View.init(content) catch return error.InvalidAccessibilityText;
     return self.allocator.dupe(u8, content);
 }
 
@@ -457,6 +511,10 @@ fn freeAccessibilityText(self: *UI, content: []const u8) void {
 fn freeAccessibilityNode(self: *UI, node: *Accessibility.Node) void {
     self.freeAccessibilityText(node.name);
     if (node.state.value_text) |value| self.freeAccessibilityText(value);
+}
+
+fn rootAccessibilityNode() Accessibility.Node {
+    return .{ .id = Accessibility.root_id, .role = .generic };
 }
 
 fn freeAccessibilityNodes(self: *UI) void {
@@ -655,16 +713,94 @@ pub fn resolveWindow(self: *UI, input: input_types.Input, now_ms: i64, content_s
     if (self.input.mouseButton(.left).released and !self.input.mouseButton(.left).down) self.state.active = Element.INVALID_ID;
 }
 
-fn syncAccessibility(self: *UI) void {
-    for (self.accessibility_nodes.items) |*node| {
-        const slot = self.layout_ctx.slotForId(node.id) orelse continue;
-        const el = self.layout_ctx.pool.get(slot);
-        node.bounds = el.box;
-        node.state.focused = node.id == self.state.focused;
-        node.parent = if (el.parent == Element.INVALID_SLOT)
-            Element.INVALID_ID
-        else
-            self.layout_ctx.pool.get(el.parent).id;
+fn syncAccessibility(self: *UI) !void {
+    if (self.accessibility_nodes.items.len == 0) {
+        try self.accessibility_nodes.ensureUnusedCapacity(self.allocator, 1);
+        try self.accessibility_node_indices.ensureUnusedCapacity(self.allocator, 1);
+        self.accessibility_nodes.appendAssumeCapacity(rootAccessibilityNode());
+        self.accessibility_node_indices.putAssumeCapacity(Accessibility.root_id, 0);
+    }
+    const count: u32 = @intCast(self.accessibility_nodes.items.len);
+    if (count > Accessibility.nodes_max) return error.TooManyAccessibilityNodes;
+    self.accessibility_nodes.items[0].bounds = if (self.layout_ctx.root_slot == Element.INVALID_SLOT)
+        .zero
+    else
+        self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
+    std.debug.assert(self.accessibility_nodes.items[0].id == Accessibility.root_id);
+    std.debug.assert(self.accessibility_node_indices.get(Accessibility.root_id) != null);
+    for (self.accessibility_nodes.items[1..]) |*node| {
+        const slot = self.layout_ctx.slotForId(node.id);
+        if (slot) |element_slot| {
+            const element = self.layout_ctx.pool.get(element_slot);
+            node.bounds = element.box;
+            node.state.focused = node.id == self.state.focused;
+        }
+        if (node.parent == Element.INVALID_ID) {
+            node.parent = Accessibility.root_id;
+            if (slot) |element_slot| {
+                var parent_slot = self.layout_ctx.pool.get(element_slot).parent;
+                var traversed: u32 = 0;
+                const slot_count: u32 = @intCast(self.layout_ctx.pool.elements.items.len);
+                while (parent_slot != Element.INVALID_SLOT and traversed < slot_count) : (traversed += 1) {
+                    const parent = self.layout_ctx.pool.get(parent_slot);
+                    if (self.accessibility_node_indices.contains(parent.id)) {
+                        node.parent = parent.id;
+                        break;
+                    }
+                    parent_slot = parent.parent;
+                }
+                std.debug.assert(traversed <= slot_count);
+            }
+        } else {
+            const parent_index = self.accessibility_node_indices.get(node.parent) orelse return error.InvalidAccessibilityParent;
+            if (slot == null) node.bounds = self.accessibility_nodes.items[parent_index].bounds;
+        }
+        node.actions = .empty;
+        if (node.state.disabled) continue;
+        switch (node.role) {
+            .button, .checkbox, .radio, .list_box_option => {
+                node.actions.insert(.focus);
+                node.actions.insert(.click);
+            },
+            .slider => {
+                node.actions.insert(.focus);
+                node.actions.insert(.set_value);
+                node.actions.insert(.increment);
+                node.actions.insert(.decrement);
+            },
+            .text_input => {
+                node.actions.insert(.focus);
+                node.actions.insert(.set_value);
+                node.actions.insert(.replace_selected_text);
+                node.actions.insert(.set_text_selection);
+            },
+            .select => {
+                node.actions.insert(.focus);
+                node.actions.insert(.click);
+                node.actions.insert(.expand);
+                node.actions.insert(.collapse);
+            },
+            else => {},
+        }
+    }
+    const nodes = self.accessibility_nodes.items;
+    for (nodes[1..]) |node| {
+        const parent_index = self.accessibility_node_indices.get(node.parent) orelse unreachable;
+        nodes[parent_index].child_count += 1;
+    }
+    var offset: u32 = 0;
+    for (nodes) |*node| {
+        node.child_start = offset;
+        offset += node.child_count;
+    }
+    std.debug.assert(offset == count - 1);
+    try self.accessibility_children.resize(self.allocator, offset);
+    var cursors: [Accessibility.nodes_max]u32 = @splat(0);
+    for (nodes[1..]) |node| {
+        const parent_index = self.accessibility_node_indices.get(node.parent) orelse unreachable;
+        const child_index = nodes[parent_index].child_start + cursors[parent_index];
+        self.accessibility_children.items[child_index] = node.id;
+        cursors[parent_index] += 1;
     }
 }
 
@@ -1134,6 +1270,33 @@ test "scroll routing uses previous frame elements" {
 
     const box = child_box.?;
     try std.testing.expectApproxEqAbs(box.y(), -50.0, 0.001);
+}
+
+test "accessibility root stays first across frames" {
+    var ui = try UI.init(std.testing.allocator, .{});
+    defer ui.deinit();
+
+    try ui.resolve();
+    try std.testing.expectEqual(@as(usize, 1), ui.accessibility_nodes.items.len);
+    try std.testing.expect(ui.accessibility_node_indices.contains(Accessibility.root_id));
+
+    ui.reset();
+    try ui.setAccessibility(42, .{ .role = .button, .name = "First" });
+    try ui.setAccessibility(42, .{ .role = .button, .name = "Updated" });
+    try ui.resolve();
+
+    try std.testing.expectEqual(@as(usize, 2), ui.accessibility_nodes.items.len);
+    try std.testing.expectEqual(Accessibility.root_id, ui.accessibility_nodes.items[0].id);
+    try std.testing.expectEqual(@as(Element.Id, 42), ui.accessibility_nodes.items[1].id);
+    try std.testing.expectEqualStrings("Updated", ui.accessibility_nodes.items[1].name);
+
+    ui.reset();
+    try ui.setAccessibility(43, .{ .role = .button, .name = "Next frame" });
+    try ui.resolve();
+
+    try std.testing.expectEqual(@as(usize, 2), ui.accessibility_nodes.items.len);
+    try std.testing.expectEqual(Accessibility.root_id, ui.accessibility_nodes.items[0].id);
+    try std.testing.expectEqual(@as(Element.Id, 43), ui.accessibility_nodes.items[1].id);
 }
 
 test "anim returns target immediately on first touch" {

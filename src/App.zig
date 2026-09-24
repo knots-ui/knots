@@ -30,6 +30,7 @@ pub const Config = struct {
     arena_reset_mode: std.heap.ArenaAllocator.ResetMode = .retain_capacity,
     max_completions_recv: usize = 64,
     timer_clock: std.Io.Clock = .real,
+    accessibility: bool = true,
 };
 
 pub const OpenWindowConfig = struct {
@@ -89,6 +90,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
 
     const main_viewport = try Viewport.create(
         allocator,
+        io,
         .main,
         main_window,
         main_renderer,
@@ -96,6 +98,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
             .ui = cfg.ui,
             .arena_reset_mode = cfg.arena_reset_mode,
             .timer_clock = cfg.timer_clock,
+            .accessibility = cfg.accessibility,
         },
     );
 
@@ -159,6 +162,7 @@ pub fn start(self: *App, frame_cb: RenderFn) !void {
 
     while (self.main_viewport.window.isOpen()) {
         self.main_viewport.window.waitEvents(self.io);
+        self.scheduleAccessibility();
 
         try self.takeFrameEventError();
         try self.scheduleCompletions();
@@ -200,6 +204,7 @@ pub fn openWindow(self: *App, source_id: Viewport.Id, cfg: OpenWindowConfig, fra
             .ui = cfg.ui orelse source.ui_cfg,
             .arena_reset_mode = self.cfg.arena_reset_mode,
             .timer_clock = self.cfg.timer_clock,
+            .accessibility = self.cfg.accessibility,
         },
     );
 
@@ -328,6 +333,9 @@ fn renderFrame(
     self: *App,
     viewport: *Viewport,
 ) !void {
+    if (comptime !platform.is_browser_wasm) {
+        if (viewport.accessibility) |adapter| try adapter.drain(&viewport.ui_ctx);
+    }
     viewport.timer.tick(self.io);
 
     if (viewport.window.consumeResize()) |event| {
@@ -397,6 +405,9 @@ fn renderFrame(
     }
 
     const output = try viewport.ui_ctx.endFrame(&frame);
+    if (comptime !platform.is_browser_wasm) {
+        if (viewport.accessibility) |adapter| try adapter.publish(output.accessibility, viewport.window.isFocused());
+    }
 
     viewport.window.setCursorShape(
         output.cursor_shape,
@@ -474,6 +485,17 @@ fn renderFrame(
 
     if (output.redraw)
         viewport.window.requestFrame();
+}
+
+fn scheduleAccessibility(self: *App) void {
+    if (self.main_viewport.accessibility) |adapter| {
+        if (adapter.hasActions()) self.main_viewport.window.requestFrame();
+    }
+    for (self.secondary_viewports.items) |viewport| {
+        if (viewport.accessibility) |adapter| {
+            if (adapter.hasActions()) viewport.window.requestFrame();
+        }
+    }
 }
 
 fn stepFrame(self: *App, viewport: *Viewport) !void {

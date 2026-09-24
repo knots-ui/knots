@@ -113,7 +113,7 @@ pub fn openResponse(self: *const Button, frame: *Frame) !Response {
     if (!self.disabled) {
         const key_activate = ui.focused(rect) and
             (ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter) or ui.input.containsKey(.space));
-        clicked = ui.leftClicked(rect, .within) or key_activate;
+        clicked = ui.leftClicked(rect, .within) or key_activate or ui.consumeAccessibilityAction(rect, .click) != null;
         if (key_activate) ui.input.consumeKeyboard();
     }
 

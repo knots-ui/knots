@@ -2,6 +2,7 @@ const std = @import("std");
 const gpu = @import("gpu");
 const impl = @import("window_impl");
 const input = @import("input");
+const builtin = @import("builtin");
 
 const Key = input.Key;
 const Config = @import("root.zig").Config;
@@ -37,6 +38,7 @@ canvas_selector: ?[:0]const u8,
 content_scale: f32 = 1.0,
 cursor_shape: CursorShape = .default,
 frame_handler: ?FrameHandler = null,
+accessibility: ?*if (builtin.target.cpu.arch.isWasm()) void else @import("native_accessibility") = null,
 input_dirty: bool = false,
 
 const Window = @This();
@@ -242,7 +244,7 @@ pub fn pushChar(self: *Window, codepoint: u21) void {
 pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {
     self.mods = mods;
     const translated = std.enums.fromInt(Key, key) orelse return;
-    const index = @intFromEnum(translated);
+    const index = @backingInt(translated);
     if (index >= 0 and index < key_count) {
         self.key_down[@intCast(index)] = action != .release;
     }
@@ -307,7 +309,7 @@ pub fn setCursorPos(self: *Window, pos: [2]f64) void {
 }
 
 pub fn setMouseButton(self: *Window, button: MouseButton, down: bool, pos: [2]f64) void {
-    const state = &self.mouse.buttons[@intFromEnum(button)];
+    const state = &self.mouse.buttons[@backingInt(button)];
     if (down == state.down) return;
 
     self.setCursorPos(pos);

@@ -89,11 +89,12 @@ pub fn RadioButton(comptime T: type) type {
 
             const key_activate = ui.focused(id) and
                 (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
-            const activate = ui.leftClicked(id, .within) or key_activate;
+            const activate = ui.leftClicked(id, .within) or key_activate or ui.consumeAccessibilityAction(id, .click) != null;
             if (activate) {
                 if (!std.meta.eql(self.selected.*, self.value)) {
                     self.selected.* = self.value;
                 }
+                try ui.setAccessibility(id, .{ .role = .radio, .name = self.label orelse &.{}, .state = .{ .checked = true } });
                 if (key_activate) ui.input.consumeKeyboard();
             }
 

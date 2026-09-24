@@ -5,6 +5,7 @@ const text = @import("text");
 const UI = @import("UI.zig");
 const Frame = @import("Frame.zig");
 const StateBridge = @import("StateBridge.zig");
+const Accessibility = @import("Accessibility.zig");
 
 const theme_state_key = StateBridge.key("knots.ui.theme");
 
@@ -30,6 +31,10 @@ atlas_id: u32,
 glyph_revision_emitted: u64,
 region_router: @import("Regions.zig").Router = .{},
 region_identities: [Frame.modules_max]u64 = @splat(0),
+accessibility_pending: std.ArrayList(Accessibility.ActionRequest) = .empty,
+accessibility_frame: std.ArrayList(Accessibility.ActionRequest) = .empty,
+semantic_revision: u64 = 0,
+semantic_digest: u64 = 0,
 
 pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
     var ui = try UI.init(allocator, cfg.ui);
@@ -54,6 +59,10 @@ pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
 
 pub fn deinit(self: *Context) void {
     std.debug.assert(!self.frameIsActive());
+    self.clearAccessibilityActions(&self.accessibility_pending);
+    self.clearAccessibilityActions(&self.accessibility_frame);
+    self.accessibility_pending.deinit(self.allocator);
+    self.accessibility_frame.deinit(self.allocator);
     self.packet_commands.deinit(self.allocator);
     self.overlay_commands.deinit(self.allocator);
     self.state_bridge.deinit();
@@ -84,7 +93,24 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
     }
     try self.ui.state.importBridge(&self.state_bridge);
     try self.ui.resolveWindow(input.input, input.now_ms, input.content_scale);
+    const previous_nodes = self.ui.accessibilitySnapshot();
+    var focused_action: ?@import("layout").Element.Id = null;
+    for (self.accessibility_pending.items) |request| {
+        if (request.action != .focus) continue;
+        for (previous_nodes) |node| {
+            if (node.id != request.id) continue;
+            if (node.state.disabled) break;
+            if (!node.actions.contains(.focus)) break;
+            focused_action = request.id;
+            break;
+        }
+    }
     self.ui.reset();
+    self.clearAccessibilityActions(&self.accessibility_frame);
+    std.mem.swap(std.ArrayList(Accessibility.ActionRequest), &self.accessibility_frame, &self.accessibility_pending);
+    self.ui.accessibility_actions = self.accessibility_frame.items;
+    self.ui.accessibility_consumed = @splat(false);
+    if (focused_action) |id| self.ui.state.focused = id;
     self.frame_state = .init(
         &self.ui,
         self.frame_arena.allocator(),
@@ -100,6 +126,25 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
     };
 }
 
+/// The value is copied, so callers may release their action data on return.
+pub fn enqueueAccessibilityAction(self: *Context, request: Accessibility.ActionRequest) !void {
+    if (request.id == Accessibility.root_id or request.id == UI.INVALID_ID) return error.InvalidAccessibilityTarget;
+    if (self.accessibility_pending.items.len == Accessibility.actions_max) return error.TooManyAccessibilityActions;
+    var owned = request;
+    if (request.value_text) |value| {
+        if (value.len > Accessibility.text_bytes_max) return error.AccessibilityTextTooLong;
+        _ = std.unicode.Utf8View.init(value) catch return error.InvalidAccessibilityText;
+        owned.value_text = try self.allocator.dupe(u8, value);
+    }
+    errdefer if (owned.value_text) |value| self.allocator.free(value);
+    try self.accessibility_pending.append(self.allocator, owned);
+}
+
+fn clearAccessibilityActions(self: *Context, actions: *std.ArrayList(Accessibility.ActionRequest)) void {
+    for (actions.items) |request| if (request.value_text) |value| self.allocator.free(value);
+    actions.clearRetainingCapacity();
+}
+
 /// Finish one frame for every backend. Output is borrowed until the next
 /// beginFrame attempt or Context.deinit; failure also releases the active frame.
 pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
@@ -109,6 +154,12 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     errdefer self.frame_state.?.active = false;
     try self.ui.endFrame();
     try self.ui.resolve();
+    const digest = semanticDigest(self.ui.semanticSnapshot());
+    if (self.semantic_revision == 0 or digest != self.semantic_digest) {
+        if (self.semantic_revision == std.math.maxInt(u64)) return error.AccessibilityRevisionExhausted;
+        self.semantic_revision += 1;
+        self.semantic_digest = digest;
+    }
     try frame.commitState();
     try self.state_bridge.write(@import("Theme.zig"), theme_state_key, self.ui.theme);
     self.draw_list.reset();
@@ -167,6 +218,11 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     }
     return .{
         .contributions = contributions.items,
+        .accessibility = blk: {
+            var snapshot = self.ui.semanticSnapshot();
+            snapshot.revision = self.semantic_revision;
+            break :blk snapshot;
+        },
         .packet = packet,
         .host_overlay = if (overlay_packet.commands().len > 0) overlay_packet else null,
         .cursor_shape = self.ui.cursor_shape,
@@ -179,6 +235,51 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
         .clipboard_write = self.frame_state.?.effects.clipboard_write,
         .state = &.{},
     };
+}
+
+fn semanticDigest(snapshot: Accessibility.Snapshot) u64 {
+    var digest = std.hash.Wyhash.init(0);
+    digest.update(std.mem.asBytes(&snapshot.content_scale));
+    digest.update(std.mem.asBytes(&snapshot.focus));
+    for (snapshot.nodes) |node| {
+        digest.update(std.mem.asBytes(&node.id));
+        digest.update(std.mem.asBytes(&node.parent));
+        hashOptional(&digest, node.text_run_id);
+        digest.update(std.mem.asBytes(&node.role));
+        const name_length: u32 = @intCast(node.name.len);
+        digest.update(std.mem.asBytes(&name_length));
+        digest.update(node.name);
+        digest.update(std.mem.asBytes(&node.bounds.v));
+        digest.update(std.mem.asBytes(&node.child_count));
+        digest.update(std.mem.asBytes(&node.state.disabled));
+        digest.update(std.mem.asBytes(&node.state.focused));
+        digest.update(std.mem.asBytes(&node.state.multiline));
+        hashOptional(&digest, node.state.checked);
+        hashOptional(&digest, node.state.selected);
+        hashOptional(&digest, node.state.expanded);
+        const has_value_text = node.state.value_text != null;
+        digest.update(std.mem.asBytes(&has_value_text));
+        if (node.state.value_text) |value| {
+            const length: u32 = @intCast(value.len);
+            digest.update(std.mem.asBytes(&length));
+            digest.update(value);
+        }
+        hashOptional(&digest, node.state.value_number);
+        hashOptional(&digest, node.state.min);
+        hashOptional(&digest, node.state.max);
+        hashOptional(&digest, node.state.selection_anchor);
+        hashOptional(&digest, node.state.selection_focus);
+        const actions = node.actions.bits;
+        digest.update(std.mem.asBytes(&actions));
+    }
+    digest.update(std.mem.sliceAsBytes(snapshot.children));
+    return digest.final();
+}
+
+fn hashOptional(digest: *std.hash.Wyhash, value: anytype) void {
+    const present = value != null;
+    digest.update(std.mem.asBytes(&present));
+    if (value) |item| digest.update(std.mem.asBytes(&item));
 }
 
 pub fn loadState(self: *Context, values: []const StateBridge.Value) !void {
