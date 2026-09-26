@@ -1,3 +1,4 @@
+const std = @import("std");
 const Element = @import("layout").Element;
 const math = @import("math");
 
@@ -90,4 +91,11 @@ pub const Node = struct {
     actions: std.EnumSet(Action) = .empty,
 };
 
-const std = @import("std");
+pub const root_node: Node = .{ .id = root_id, .role = .generic };
+
+pub fn freeNodes(allocator: std.mem.Allocator, nodes: []Node) void {
+    for (nodes) |node| {
+        if (node.name.len > 0) allocator.free(node.name);
+        if (node.state.value_text) |value| if (value.len > 0) allocator.free(value);
+    }
+}

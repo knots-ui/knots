@@ -5,9 +5,7 @@ const math = @import("math");
 
 const Element = layout.Element;
 const std = @import("std");
-const types = @import("render_types");
 const render = @import("render");
-const DrawList = render.DrawList;
 const Clip = render.Clip;
 
 const State = @import("State.zig");
@@ -21,11 +19,8 @@ const Key = @import("Key.zig");
 const style = @import("style");
 const Theme = style.Theme;
 const FontSize = style.FontSize;
-const Radius = style.Radius;
-const BorderWidth = style.BorderWidth;
 const Layer = layout.Layer;
 const scrollbar = @import("scrollbar.zig");
-const canvas_tessellator = @import("canvas_tessellator.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -144,7 +139,7 @@ pub fn deinit(self: *UI) void {
     self.press_ancestors.deinit(self.allocator);
     self.hover_ancestors.deinit(self.allocator);
     self.focus_order.deinit(self.allocator);
-    self.freeAccessibilityNodes();
+    Accessibility.freeNodes(self.allocator, self.accessibility_nodes.items);
     self.accessibility_nodes.deinit(self.allocator);
     self.accessibility_children.deinit(self.allocator);
     self.accessibility_node_indices.deinit(self.allocator);
@@ -385,28 +380,6 @@ pub fn currentSlot(self: *UI) Element.Slot {
     return stack[stack.len - 1];
 }
 
-pub fn reset(self: *UI) void {
-    self.layout_ctx.reset();
-    self.decorations.clearRetainingCapacity();
-    self.contents.clearRetainingCapacity();
-    self.clip_shapes.clearRetainingCapacity();
-    self.hit_records.clearRetainingCapacity();
-    self.focus_order.clearRetainingCapacity();
-    self.freeAccessibilityNodes();
-    self.accessibility_nodes.clearRetainingCapacity();
-    self.accessibility_children.clearRetainingCapacity();
-    self.accessibility_node_indices.clearRetainingCapacity();
-    self.hit_counter = 0;
-    self.scroll_geoms.clearRetainingCapacity();
-    self.slot_clips.clearRetainingCapacity();
-    self.child_clips.clearRetainingCapacity();
-    self.clip_nodes.clearRetainingCapacity();
-    self.input_scopes.resetFrame();
-    self.anim_active = false;
-    self.text_input_requested = false;
-    self.cursor_shape = .default;
-}
-
 pub fn requestCursor(self: *UI, shape: input_types.CursorShape) void {
     self.cursor_shape = shape;
 }
@@ -475,33 +448,6 @@ fn sampleAnim(s: *const State.Anim, now_ms: i64) AnimSample {
     };
 }
 
-pub fn resolve(self: *UI) !void {
-    if (self.layout_ctx.root_slot == Element.INVALID_SLOT) {
-        try self.layout_ctx.buildZOrder();
-        self.updateStats();
-        try self.syncAccessibility();
-        return;
-    }
-
-    const scroll: layout.Context.ScrollLookup = .{
-        .ctx = @ptrCast(&self.state),
-        .getFn = @ptrCast(&State.getScroll),
-    };
-
-    self.layout_ctx.computeSizes();
-    try self.layout_ctx.computeLayout(scroll, self.theme.scrollbar_thickness);
-
-    // After a first layout pass, recompute intrinsic_h for every wrap-text element using its just-assigned box width.
-    if (try self.reflowWrappedText()) {
-        self.layout_ctx.computeSizes();
-        try self.layout_ctx.computeLayout(scroll, self.theme.scrollbar_thickness);
-    }
-
-    try self.layout_ctx.buildZOrder();
-    self.syncStateBounds();
-    try self.syncAccessibility();
-}
-
 pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata) !void {
     if (id == Element.INVALID_ID) return;
     if (id == Accessibility.root_id) return error.ReservedAccessibilityId;
@@ -533,7 +479,7 @@ pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata)
     try self.accessibility_nodes.ensureUnusedCapacity(self.allocator, if (root_missing) 2 else 1);
     try self.accessibility_node_indices.ensureUnusedCapacity(self.allocator, if (root_missing) 2 else 1);
     if (root_missing) {
-        self.accessibility_nodes.appendAssumeCapacity(rootAccessibilityNode());
+        self.accessibility_nodes.appendAssumeCapacity(Accessibility.root_node);
         self.accessibility_node_indices.putAssumeCapacity(Accessibility.root_id, 0);
     }
     const index: u32 = @intCast(self.accessibility_nodes.items.len);
@@ -546,20 +492,6 @@ pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata)
         .state = state,
     });
     self.accessibility_node_indices.putAssumeCapacity(id, index);
-}
-
-pub fn semanticSnapshot(self: *const UI) Accessibility.Snapshot {
-    const nodes = self.accessibility_nodes.items;
-    return .{
-        .content_scale = self.content_scale,
-        .nodes = nodes,
-        .children = self.accessibility_children.items,
-        .focus = if (self.state.focused != Element.INVALID_ID and self.hasAccessibilityNode(self.state.focused)) self.state.focused else Accessibility.root_id,
-    };
-}
-
-fn hasAccessibilityNode(self: *const UI, id: Element.Id) bool {
-    return self.accessibility_node_indices.contains(id);
 }
 
 pub fn consumeAccessibilityAction(self: *UI, id: Element.Id, action: Accessibility.Action) ?Accessibility.ActionRequest {
@@ -585,74 +517,7 @@ fn freeAccessibilityText(self: *UI, content: []const u8) void {
 }
 
 fn freeAccessibilityNode(self: *UI, node: *Accessibility.Node) void {
-    self.freeAccessibilityText(node.name);
-    if (node.state.value_text) |value| self.freeAccessibilityText(value);
-}
-
-fn rootAccessibilityNode() Accessibility.Node {
-    return .{ .id = Accessibility.root_id, .role = .generic };
-}
-
-fn freeAccessibilityNodes(self: *UI) void {
-    for (self.accessibility_nodes.items) |*node| self.freeAccessibilityNode(node);
-}
-
-/// Returns true if any height changed, in which case the caller should re-run layout so ancestors fit the new heights.
-fn reflowWrappedText(self: *UI) !bool {
-    var changed = false;
-    for (self.decorations.items, 0..) |dec, slot| {
-        if (dec != .text) continue;
-        const t = dec.text;
-        if (!t.wrap or t.content.len == 0) continue;
-
-        const el = self.layout_ctx.pool.get(@intCast(slot));
-        const wrap_px = el.box.w() * self.content_scale;
-        if (wrap_px <= 0) continue;
-
-        const face = try self.font.getFace(t.font);
-        const shaped = try face.shapeWrapped(t.content, t.size * self.content_scale, wrap_px);
-        const new_h = shaped.height / self.content_scale;
-        if (new_h != el.intrinsic_h) {
-            el.intrinsic_h = new_h;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
-fn syncStateBounds(self: *UI) void {
-    if (self.layout_ctx.root_slot == Element.INVALID_SLOT) return;
-    const root_box = self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
-    for (self.layout_ctx.pool.elements.items) |el| {
-        if (self.state.get(.text_select, el.id)) |s| s.box = el.box;
-        if (self.state.get(.slider, el.id)) |s| s.bounds = el.box;
-        if (self.state.get(.measured, el.id)) |s| {
-            s.box = el.box;
-            s.width = el.box.w();
-            s.height = el.box.h();
-        }
-        if (self.state.get(.resize, el.id)) |s| s.box = el.box;
-        if (self.state.get(.select_input, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
-        }
-        if (self.state.get(.color_picker, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
-        }
-        if (self.state.get(.context_menu, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
-        }
-        if (self.state.get(.menu_button, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
-        }
-        if (self.state.get(.tooltip, el.id)) |s| {
-            s.anchor_box = el.box;
-            s.viewport_box = root_box;
-        }
-    }
+    Accessibility.freeNodes(self.allocator, node[0..1]);
 }
 
 pub fn hovering(self: *UI, id: Element.Id) bool {
@@ -694,14 +559,6 @@ pub fn isFocusedWithin(self: *UI, ancestor_id: Element.Id) bool {
     return self.isDescendantOrSelf(self.state.focused, ancestor_id);
 }
 
-fn currentMouseHit(self: *UI) Element.Id {
-    return self.mouseHit(self.input.mouse_pos);
-}
-
-fn mouseHit(self: *UI, pos: [2]f64) Element.Id {
-    return self.hitTarget(.{ @floatCast(pos[0]), @floatCast(pos[1]) });
-}
-
 fn isDescendantOrSelf(self: *UI, descendant_id: Element.Id, ancestor_id: Element.Id) bool {
     if (descendant_id == Element.INVALID_ID) return false;
     if (descendant_id == ancestor_id) return true;
@@ -716,281 +573,6 @@ fn matchesHitTarget(hit: Element.Id, ancestors: []const Element.Id, id: Element.
         .within => std.mem.indexOfScalar(Element.Id, ancestors, id) != null,
         .root => ancestors.len > 0 and ancestors[ancestors.len - 1] == id,
     };
-}
-
-fn captureHitAncestors(allocator: Allocator, layout_ctx: *layout.Context, id: Element.Id, out: *std.ArrayList(Element.Id)) !void {
-    out.clearRetainingCapacity();
-    var slot = layout_ctx.slotForId(id) orelse return;
-    while (slot != Element.INVALID_SLOT) {
-        const el = layout_ctx.pool.get(slot);
-        try out.append(allocator, el.id);
-        slot = el.parent;
-    }
-}
-
-pub fn resolveWindow(self: *UI, input: input_types.Input, now_ms: i64, content_scale: f32) !void {
-    self.content_scale = content_scale;
-    self.state.selection_text = &.{};
-    self.input.collect(input, now_ms);
-
-    if (self.input.focus_lost or self.input.pointer_cancelled) {
-        self.state.active = Element.INVALID_ID;
-        self.state.press_origin = Element.INVALID_ID;
-        self.press_ancestors.clearRetainingCapacity();
-        self.state.press_drag = false;
-    }
-
-    if (self.layout_ctx.has_scroll) try scrollbar.route(self);
-
-    if (self.input_scopes.hasActive()) {
-        if (!self.inputScopeAllowsId(self.state.hovered)) self.state.hovered = Element.INVALID_ID;
-        if (!self.inputScopeAllowsId(self.state.focused)) self.state.focused = Element.INVALID_ID;
-        if (!self.inputScopeAllowsId(self.state.active)) self.state.active = Element.INVALID_ID;
-        if (!self.inputScopeAllowsId(self.state.press_origin)) {
-            self.state.press_origin = Element.INVALID_ID;
-            self.press_ancestors.clearRetainingCapacity();
-        }
-    }
-
-    if (self.input.containsKey(.tab)) {
-        self.advanceFocus(self.input.shift_held);
-        self.input.consumeKeyboard();
-    }
-
-    self.state.hovered = self.currentMouseHit();
-    try captureHitAncestors(self.allocator, &self.layout_ctx, self.state.hovered, &self.hover_ancestors);
-
-    if (self.input.mouseButton(.left).pressed) {
-        const press_pos = self.input.mouseButton(.left).pressed_pos orelse self.input.mouse_pos;
-        const press_hit = self.mouseHit(press_pos);
-        try captureHitAncestors(self.allocator, &self.layout_ctx, press_hit, &self.press_ancestors);
-        self.state.active = press_hit;
-        self.state.focused = press_hit;
-        self.state.press_origin = press_hit;
-        self.state.press_pos = press_pos;
-        self.state.press_drag = false;
-
-        self.state.forEach(.text_select, press_hit, clearOtherTextSelect);
-    }
-    if (self.input.mouseButton(.left).down and !self.state.press_drag) {
-        const dx = self.input.mouse_pos[0] - self.state.press_pos[0];
-        const dy = self.input.mouse_pos[1] - self.state.press_pos[1];
-        if (dx * dx + dy * dy > press_drag_threshold_sq) self.state.press_drag = true;
-    }
-    if (self.input.mouseButton(.left).released and !self.input.mouseButton(.left).down) self.state.active = Element.INVALID_ID;
-}
-
-fn syncAccessibility(self: *UI) !void {
-    if (self.accessibility_nodes.items.len == 0) {
-        try self.accessibility_nodes.ensureUnusedCapacity(self.allocator, 1);
-        try self.accessibility_node_indices.ensureUnusedCapacity(self.allocator, 1);
-        self.accessibility_nodes.appendAssumeCapacity(rootAccessibilityNode());
-        self.accessibility_node_indices.putAssumeCapacity(Accessibility.root_id, 0);
-    }
-    const count: u32 = @intCast(self.accessibility_nodes.items.len);
-    if (count > Accessibility.nodes_max) return error.TooManyAccessibilityNodes;
-    self.accessibility_nodes.items[0].bounds = if (self.layout_ctx.root_slot == Element.INVALID_SLOT)
-        .zero
-    else
-        self.layout_ctx.pool.get(self.layout_ctx.root_slot).box;
-    std.debug.assert(self.accessibility_nodes.items[0].id == Accessibility.root_id);
-    std.debug.assert(self.accessibility_node_indices.get(Accessibility.root_id) != null);
-    for (self.accessibility_nodes.items[1..]) |*node| {
-        const slot = self.layout_ctx.slotForId(node.id);
-        if (slot) |element_slot| {
-            const element = self.layout_ctx.pool.get(element_slot);
-            node.bounds = element.box;
-            node.state.focused = node.id == self.state.focused;
-        }
-        if (node.parent == Element.INVALID_ID) {
-            node.parent = Accessibility.root_id;
-            if (slot) |element_slot| {
-                var parent_slot = self.layout_ctx.pool.get(element_slot).parent;
-                var traversed: u32 = 0;
-                const slot_count: u32 = @intCast(self.layout_ctx.pool.elements.items.len);
-                while (parent_slot != Element.INVALID_SLOT and traversed < slot_count) : (traversed += 1) {
-                    const parent = self.layout_ctx.pool.get(parent_slot);
-                    if (self.accessibility_node_indices.contains(parent.id)) {
-                        node.parent = parent.id;
-                        break;
-                    }
-                    parent_slot = parent.parent;
-                }
-                std.debug.assert(traversed <= slot_count);
-            }
-        } else {
-            const parent_index = self.accessibility_node_indices.get(node.parent) orelse return error.InvalidAccessibilityParent;
-            if (slot == null) node.bounds = self.accessibility_nodes.items[parent_index].bounds;
-        }
-        node.actions = .empty;
-        if (node.state.disabled) continue;
-        switch (node.role) {
-            .button, .checkbox, .radio, .list_box_option => {
-                node.actions.insert(.focus);
-                node.actions.insert(.click);
-            },
-            .slider => {
-                node.actions.insert(.focus);
-                node.actions.insert(.set_value);
-                node.actions.insert(.increment);
-                node.actions.insert(.decrement);
-            },
-            .text_input => {
-                node.actions.insert(.focus);
-                node.actions.insert(.set_value);
-                node.actions.insert(.replace_selected_text);
-                node.actions.insert(.set_text_selection);
-            },
-            .select => {
-                node.actions.insert(.focus);
-                node.actions.insert(.click);
-                node.actions.insert(.expand);
-                node.actions.insert(.collapse);
-            },
-            else => {},
-        }
-    }
-    const nodes = self.accessibility_nodes.items;
-    for (nodes[1..]) |node| {
-        const parent_index = self.accessibility_node_indices.get(node.parent) orelse unreachable;
-        nodes[parent_index].child_count += 1;
-    }
-    var offset: u32 = 0;
-    for (nodes) |*node| {
-        node.child_start = offset;
-        offset += node.child_count;
-    }
-    std.debug.assert(offset == count - 1);
-    try self.accessibility_children.resize(self.allocator, offset);
-    var cursors: [Accessibility.nodes_max]u32 = @splat(0);
-    for (nodes[1..]) |node| {
-        const parent_index = self.accessibility_node_indices.get(node.parent) orelse unreachable;
-        const child_index = nodes[parent_index].child_start + cursors[parent_index];
-        self.accessibility_children.items[child_index] = node.id;
-        cursors[parent_index] += 1;
-    }
-}
-
-fn advanceFocus(self: *UI, backward: bool) void {
-    const order = self.focus_order.items;
-    if (order.len == 0) {
-        self.state.focused = Element.INVALID_ID;
-        self.state.active = Element.INVALID_ID;
-        return;
-    }
-    const front_floating = if (self.input_scopes.hasActive()) null else self.state.frontFloatingWindow();
-
-    var current_index: ?usize = null;
-    for (order, 0..) |id, i| {
-        if (id == self.state.focused) {
-            current_index = i;
-            break;
-        }
-    }
-
-    const start = if (current_index) |i|
-        if (backward) (i + order.len - 1) % order.len else (i + 1) % order.len
-    else if (backward)
-        order.len - 1
-    else
-        0;
-
-    var offset: usize = 0;
-    while (offset < order.len) : (offset += 1) {
-        const idx = if (backward)
-            (start + order.len - offset) % order.len
-        else
-            (start + offset) % order.len;
-        const id = order[idx];
-        if (!self.inputScopeAllowsId(id)) continue;
-        if (front_floating) |root_id| {
-            if (!self.isDescendantOrSelf(id, root_id)) continue;
-        }
-
-        self.state.focused = id;
-        self.state.active = Element.INVALID_ID;
-        return;
-    }
-
-    self.state.focused = Element.INVALID_ID;
-    self.state.active = Element.INVALID_ID;
-}
-
-/// Advance the per widget state TTL clock. Call once per frame after the
-/// users frame callback has had a chance to touch its state, otherwise
-/// entries lose a frame of TTL grace before the sweep sees them.
-pub fn endFrame(self: *UI) !void {
-    try self.state.endFrame();
-    self.input_scopes.resolveActive();
-}
-
-const press_drag_threshold_sq: f64 = 9.0;
-
-fn clearOtherTextSelect(hovered: Element.Id, id: Element.Id, s: *State.TextSelect) void {
-    if (id == hovered) return;
-    s.anchor_byte = 0;
-    s.cursor_byte = 0;
-    s.dragging = false;
-}
-
-pub fn appendHit(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: Layer, input_scope: Element.Id) !void {
-    try self.hit_records.append(self.allocator, .{
-        .id = id,
-        .bounds = bounds,
-        .clip = clip,
-        .layer = layer,
-        .input_scope = input_scope,
-        .insertion_order = self.hit_counter,
-    });
-    self.hit_counter += 1;
-}
-
-pub fn resolveHit(self: *UI) bool {
-    const best_id = self.currentMouseHit();
-    const changed = self.state.hovered != best_id;
-    self.state.hovered = best_id;
-    self.updateStats();
-    return changed;
-}
-
-pub fn hitLayerAt(self: *UI, point: math.Vec2) ?Layer {
-    var best: ?HitRecord = null;
-    for (self.hit_records.items) |record| {
-        if (!record.bounds.contains(point)) continue;
-        if (!Clip.contains(record.clip, self.clip_nodes.items, point)) continue;
-        if (!self.input_scopes.allows(record.input_scope)) continue;
-        if (best) |previous| {
-            if (previous.layer.above(record.layer)) continue;
-            if (previous.layer.eql(record.layer)) {
-                if (previous.insertion_order > record.insertion_order) continue;
-            }
-        }
-        best = record;
-    }
-    return if (best) |record| record.layer else null;
-}
-
-fn hitTarget(self: *UI, p: math.Vec2) Element.Id {
-    var best_id: Element.Id = Element.INVALID_ID;
-    var best_layer: Layer = Layer.base;
-    var best_order: u32 = 0;
-
-    for (self.hit_records.items) |rec| {
-        if (!rec.bounds.contains(p)) continue;
-        if (!Clip.contains(rec.clip, self.clip_nodes.items, p)) continue;
-        if (!self.input_scopes.allows(rec.input_scope)) continue;
-
-        if (best_id == Element.INVALID_ID or
-            rec.layer.above(best_layer) or
-            (rec.layer.eql(best_layer) and rec.insertion_order > best_order))
-        {
-            best_id = rec.id;
-            best_layer = rec.layer;
-            best_order = rec.insertion_order;
-        }
-    }
-
-    return best_id;
 }
 
 fn inputScopeAllowsId(self: *UI, id: Element.Id) bool {
@@ -1015,351 +597,6 @@ fn inputScopeForId(self: *UI, id: Element.Id) ?Element.Id {
     }
 
     return null;
-}
-
-fn updateStats(self: *UI) void {
-    self.last_stats = .{
-        .elements = self.layout_ctx.pool.elements.items.len,
-        .hit_records = self.hit_records.items.len,
-        .scroll_containers = self.layout_ctx.scroll_slots.items.len,
-        .decorations = self.decorations.items.len,
-        .layers = self.layout_ctx.z_used.count(),
-    };
-}
-
-pub fn tessellate(self: *UI, allocator: Allocator, draw_list: *DrawList) !void {
-    defer self.font.endFrame();
-
-    try self.buildClipStates();
-    try draw_list.clip_nodes.appendSlice(draw_list.allocator, self.clip_nodes.items);
-
-    var it = self.layout_ctx.z_used.iterator(.{});
-    while (it.next()) |z| {
-        const layer = Layer.fromIndex(z);
-        draw_list.setLayer(layer.index());
-        try self.tessellateLayer(allocator, draw_list, self.layout_ctx.zSlots(layer.index()), layer);
-    }
-}
-
-fn buildClipStates(self: *UI) !void {
-    const elements = self.layout_ctx.pool.elements.items;
-
-    self.slot_clips.clearRetainingCapacity();
-    self.child_clips.clearRetainingCapacity();
-    self.clip_nodes.clearRetainingCapacity();
-
-    try self.slot_clips.resize(self.allocator, elements.len);
-    try self.child_clips.resize(self.allocator, elements.len);
-    try self.clip_nodes.append(self.allocator, Clip.Node.empty);
-
-    for (elements, 0..) |*el, idx| {
-        const parent_clip = if (el.parent != Element.INVALID_SLOT)
-            self.child_clips.items[el.parent]
-        else
-            Clip.State{};
-
-        self.slot_clips.items[idx] = parent_clip;
-        self.child_clips.items[idx] = try self.childClip(@intCast(idx), parent_clip);
-    }
-}
-
-fn childClip(self: *UI, slot: Element.Slot, parent_clip: Clip.State) !Clip.State {
-    const el = &self.layout_ctx.pool.elements.items[slot];
-    if (el.overflow == .visible) return parent_clip;
-
-    var clip_rect = el.box;
-    var radii: math.Vec4 = @splat(0);
-    var has_rounding = false;
-
-    if (self.clip_shapes.items[slot]) |shape| {
-        clip_rect = .init(
-            el.box.x() + shape.border_width[3],
-            el.box.y() + shape.border_width[0],
-            @max(0, el.box.w() - shape.border_width[3] - shape.border_width[1]),
-            @max(0, el.box.h() - shape.border_width[0] - shape.border_width[2]),
-        );
-        radii = .{
-            @max(0, shape.corner_radius[0] - @max(shape.border_width[0], shape.border_width[3])),
-            @max(0, shape.corner_radius[1] - @max(shape.border_width[0], shape.border_width[1])),
-            @max(0, shape.corner_radius[2] - @max(shape.border_width[2], shape.border_width[1])),
-            @max(0, shape.corner_radius[3] - @max(shape.border_width[2], shape.border_width[3])),
-        };
-        has_rounding = !math.isZero(radii);
-    }
-
-    var out = parent_clip;
-    out.scissor = if (parent_clip.scissor) |scissor| scissor.intersect(clip_rect) else clip_rect;
-
-    if (has_rounding and !clip_rect.isEmpty()) {
-        if (Clip.depth(self.clip_nodes.items, out.node) >= Clip.MAX_DEPTH) return error.ClipStackTooDeep;
-        const node_index: u32 = @intCast(self.clip_nodes.items.len);
-        try self.clip_nodes.append(self.allocator, .{
-            .rect = clip_rect.v,
-            .radii = radii,
-            .parent = out.node,
-            ._pad = .{ 0, 0, 0 },
-        });
-        out.node = node_index;
-    }
-
-    return out;
-}
-
-fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots: []const Element.Slot, layer: Layer) !void {
-    const content_scale = self.content_scale;
-    const elements = self.layout_ctx.pool.elements.items;
-
-    for (slots) |slot| {
-        const el = &elements[slot];
-
-        const clip = self.slot_clips.items[slot];
-        const clipped_out = if (clip.scissor) |c| !c.overlaps(el.box) else false;
-        if (clipped_out) continue;
-
-        if (el.overflow.isScroll()) try scrollbar.recordForTessellate(self, slot, clip, layer);
-
-        if (el.interactive) try self.appendHit(el.id, el.box, clip, layer, el.input_scope);
-
-        switch (self.decorations.items[slot]) {
-            .none => {},
-            .rect => |r| {
-                const inst = types.Instance{
-                    .pos = .{ el.box.x(), el.box.y() },
-                    .size = .{ el.box.w(), el.box.h() },
-                    .uv0 = .{ 0, 0 },
-                    .uv1 = .{ 0, 0 },
-                    .color = r.color,
-                    .border_color = r.border_color,
-                    .corner_radius = r.corner_radius.value,
-                    .border_width = r.border_width.value,
-                    .prim_type = 0.0,
-                };
-                try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
-            },
-            .text => |t| if (t.content.len > 0) {
-                const face = try self.font.getFace(t.font);
-                const wrap_px: f32 = if (t.wrap) @max(0, el.box.w() * content_scale) else 0;
-                const shaped = try face.shapeWrapped(t.content, t.size * content_scale, wrap_px);
-                if (shaped.lines.len > 0) {
-                    const ascender = shaped.ascender / content_scale;
-                    const size_logical = t.size;
-
-                    if (size_logical <= 0) continue;
-                    const inv_size = 1.0 / size_logical;
-
-                    var total_glyphs: usize = 0;
-                    for (shaped.lines) |ln| total_glyphs += ln.glyphs.len;
-                    if (total_glyphs == 0) continue;
-
-                    const batch = (try draw_list.beginTextBatch(total_glyphs, clip)).?;
-
-                    for (shaped.lines) |line| {
-                        const baseline = el.box.y() + ascender + line.y / content_scale;
-                        for (line.glyphs) |gl| {
-                            const rec = gl.record;
-                            if (rec.is_empty) continue;
-
-                            const origin_x = el.box.x() + gl.x / content_scale;
-
-                            if (clip.scissor) |c| {
-                                const dilation_margin = 2.0 / content_scale;
-                                const glyph_bounds = math.Rect.fromMinMax(
-                                    .{ origin_x + rec.bounds_em_min[0] * size_logical, baseline - rec.bounds_em_max[1] * size_logical },
-                                    .{ origin_x + rec.bounds_em_max[0] * size_logical, baseline - rec.bounds_em_min[1] * size_logical },
-                                ).expand(dilation_margin);
-                                if (!c.overlaps(glyph_bounds)) continue;
-                            }
-
-                            const tex_z_bits: u32 =
-                                @as(u32, rec.glyph_location_x) |
-                                (@as(u32, rec.glyph_location_y) << 16);
-                            const tex_w_bits: u32 =
-                                @as(u32, rec.band_x_max) |
-                                (@as(u32, rec.band_y_max) << 16);
-                            const tex_z: f32 = @bitCast(tex_z_bits);
-                            const tex_w: f32 = @bitCast(tex_w_bits);
-
-                            const bnd = [4]f32{
-                                rec.band_scale[0],  rec.band_scale[1],
-                                rec.band_offset[0], rec.band_offset[1],
-                            };
-
-                            try draw_list.pushTextInstance(batch, .{
-                                .bounds = .{ rec.bounds_em_min[0], rec.bounds_em_max[1], rec.bounds_em_max[0], rec.bounds_em_min[1] },
-                                .origin_size = .{ origin_x, baseline, size_logical, inv_size },
-                                .glyph = .{ tex_z, tex_w },
-                                .bnd = bnd,
-                                .col = t.color,
-                            });
-                        }
-                    }
-                }
-            },
-            .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
-            .gpu_canvas => |canvas| {
-                try draw_list.pushCustomDraw(&canvas, el.box, clip);
-            },
-            .image => |img| {
-                const zero4 = [4]f32{ 0, 0, 0, 0 };
-                const inst = types.Instance{
-                    .pos = .{ el.box.x(), el.box.y() },
-                    .size = .{ el.box.w(), el.box.h() },
-                    .uv0 = .{ 0, 0 },
-                    .uv1 = .{ 1, 1 },
-                    .color = img.tint,
-                    .border_color = zero4,
-                    .corner_radius = Radius.zero.value,
-                    .border_width = BorderWidth.zero.value,
-                    .prim_type = if (img.@"opaque") 4.0 else 2.0,
-                };
-                try draw_list.pushInstances(&[_]types.Instance{inst}, img.source, clip);
-            },
-            .range => |r| try renderRange(draw_list, el.box, r, clip),
-        }
-    }
-
-    try scrollbar.render(self, draw_list, layer);
-}
-
-fn renderRange(draw_list: *DrawList, box: math.Rect, r: Decoration.Range, clip: Clip.State) !void {
-    const bx = box.x();
-    const by = box.y();
-    const bw = box.w();
-    const bh = box.h();
-    const th = @max(0, @min(r.track_height orelse bh, bh));
-    const ty = by + (bh - th) * 0.5;
-    const progress = std.math.clamp(r.progress, 0.0, 1.0);
-
-    const track = solidRectInstance(bx, ty, bw, th, r.track_color, r.corner_radius);
-    try draw_list.pushInstances(&[_]types.Instance{track}, .atlas, clip);
-
-    if (progress > 0) {
-        const fill = solidRectInstance(bx, ty, bw * progress, th, r.fill_color, r.corner_radius);
-        try draw_list.pushInstances(&[_]types.Instance{fill}, .atlas, clip);
-    }
-
-    if (r.halo_radius > 0 and r.halo_color[3] > 0) {
-        const hr = r.halo_radius;
-        const cx = bx + bw * progress;
-        const cy = by + bh * 0.5;
-        const halo = solidRectInstance(cx - hr, cy - hr, hr * 2, hr * 2, r.halo_color, Radius.all(hr));
-        try draw_list.pushInstances(&[_]types.Instance{halo}, .atlas, clip);
-    }
-
-    if (r.knob_radius > 0) {
-        const kr = r.knob_radius;
-        const cx = bx + bw * progress;
-        const cy = by + bh * 0.5;
-        const knob = solidRectInstance(cx - kr, cy - kr, kr * 2, kr * 2, r.knob_color, Radius.all(kr));
-        try draw_list.pushInstances(&[_]types.Instance{knob}, .atlas, clip);
-    }
-}
-
-inline fn solidRectInstance(x: f32, y: f32, w: f32, h: f32, color: [4]f32, corner_radius: Radius) types.Instance {
-    return .{
-        .pos = .{ x, y },
-        .size = .{ w, h },
-        .uv0 = .{ 0, 0 },
-        .uv1 = .{ 0, 0 },
-        .color = color,
-        .border_color = .{ 0, 0, 0, 0 },
-        .corner_radius = corner_radius.value,
-        .border_width = BorderWidth.zero.value,
-        .prim_type = 0.0,
-    };
-}
-
-test "scroll routing uses previous frame elements" {
-    const allocator = std.testing.allocator;
-    var ui = try UI.init(allocator, .{});
-    defer ui.deinit();
-
-    {
-        _ = try ui.open(Key.str("root"), .{
-            .width = .fixed(300),
-            .height = .fixed(200),
-            .direction = .column,
-            .overflow = .scroll_y,
-        }, .none);
-        {
-            _ = try ui.open(Key.str("child"), .{
-                .width = .grow(),
-                .height = .fixed(500),
-            }, .none);
-            ui.close();
-        }
-        ui.close();
-
-        try ui.resolve();
-    }
-
-    try ui.resolveWindow(.{
-        .pos = .{ 150, 100 },
-        .scroll = .{ .pixel = .{ 0, 50 } },
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    }, 0, 0);
-    ui.reset();
-
-    {
-        _ = try ui.open(Key.str("root"), .{
-            .width = .fixed(300),
-            .height = .fixed(200),
-            .direction = .column,
-            .overflow = .scroll_y,
-        }, .none);
-        {
-            _ = try ui.open(Key.str("child"), .{
-                .width = .grow(),
-                .height = .fixed(500),
-            }, .none);
-            ui.close();
-        }
-        ui.close();
-
-        try ui.resolve();
-    }
-
-    const child_id = Key.str("child").hash();
-    var child_box: ?math.Rect = null;
-    for (ui.layout_ctx.pool.elements.items) |el| {
-        if (el.id == child_id) {
-            child_box = el.box;
-            break;
-        }
-    }
-
-    const box = child_box.?;
-    try std.testing.expectApproxEqAbs(box.y(), -50.0, 0.001);
-}
-
-test "accessibility root stays first across frames" {
-    var ui = try UI.init(std.testing.allocator, .{});
-    defer ui.deinit();
-
-    try ui.resolve();
-    try std.testing.expectEqual(@as(usize, 1), ui.accessibility_nodes.items.len);
-    try std.testing.expect(ui.accessibility_node_indices.contains(Accessibility.root_id));
-
-    ui.reset();
-    try ui.setAccessibility(42, .{ .role = .button, .name = "First" });
-    try ui.setAccessibility(42, .{ .role = .button, .name = "Updated" });
-    try ui.resolve();
-
-    try std.testing.expectEqual(@as(usize, 2), ui.accessibility_nodes.items.len);
-    try std.testing.expectEqual(Accessibility.root_id, ui.accessibility_nodes.items[0].id);
-    try std.testing.expectEqual(@as(Element.Id, 42), ui.accessibility_nodes.items[1].id);
-    try std.testing.expectEqualStrings("Updated", ui.accessibility_nodes.items[1].name);
-
-    ui.reset();
-    try ui.setAccessibility(43, .{ .role = .button, .name = "Next frame" });
-    try ui.resolve();
-
-    try std.testing.expectEqual(@as(usize, 2), ui.accessibility_nodes.items.len);
-    try std.testing.expectEqual(Accessibility.root_id, ui.accessibility_nodes.items[0].id);
-    try std.testing.expectEqual(@as(Element.Id, 43), ui.accessibility_nodes.items[1].id);
 }
 
 test "anim returns target immediately on first touch" {
@@ -1418,24 +655,6 @@ test "anim retarget samples elapsed progress before interruption" {
     const reversing = ui.anim(1, "hover", 0.0, .{ .duration_ms = 200 });
     try std.testing.expect(reversing < reversed_start);
     try std.testing.expect(reversing > 0.0);
-}
-
-test "resolveHit reports hover changes" {
-    const allocator = std.testing.allocator;
-    var ui = try UI.init(allocator, .{});
-    defer ui.deinit();
-
-    try ui.appendHit(42, .init(0, 0, 100, 100), .{}, Layer.base, Element.INVALID_ID);
-
-    ui.input.mouse_pos = .{ 10, 10 };
-    try std.testing.expect(ui.resolveHit());
-    try std.testing.expectEqual(@as(Element.Id, 42), ui.state.hovered);
-
-    try std.testing.expect(!ui.resolveHit());
-
-    ui.input.mouse_pos = .{ 200, 200 };
-    try std.testing.expect(ui.resolveHit());
-    try std.testing.expectEqual(Element.INVALID_ID, ui.state.hovered);
 }
 
 test "anim settles and clears dirty flag" {

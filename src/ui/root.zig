@@ -17,14 +17,13 @@ pub const BorderWidth = style.BorderWidth;
 pub const FontSize = style.FontSize;
 pub const Tone = style.Tone;
 pub const animation = @import("animation.zig");
-pub const scrollbar = @import("scrollbar.zig");
 
 test {
     _ = State;
     _ = StateBridge;
     _ = UI;
-    _ = scrollbar;
     _ = Context;
+    _ = @import("scrollbar.zig");
     _ = component;
 }
 

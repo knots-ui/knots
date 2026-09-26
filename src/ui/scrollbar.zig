@@ -14,7 +14,7 @@ const BorderWidth = @import("style").BorderWidth;
 const Layer = @import("layout").Layer;
 
 const THUMB_ID_SALT: Element.Id = 0x5C205C205C205C20;
-const WHEEL_LOCK_IDLE_MS: i64 = 120;
+pub const WHEEL_LOCK_IDLE_MS: i64 = 120;
 const WHEEL_LOCK_MIN_DELTA: f32 = 0.005;
 
 pub const Geom = struct {
@@ -34,7 +34,7 @@ pub const SlotGeom = struct {
     geom: Geom,
 };
 
-fn idFor(container_id: Element.Id) Element.Id {
+pub fn idFor(container_id: Element.Id) Element.Id {
     return container_id ^ THUMB_ID_SALT;
 }
 
@@ -310,7 +310,6 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
             };
             try draw_list.pushInstances(&[_]types.Instance{thumb_inst}, .atlas, sg.parent_clip);
 
-            try ui.appendHit(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
         }
 
         // Corner fill when both bars are present.
@@ -332,7 +331,6 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
     }
 }
 
-const Key = @import("Key.zig");
 const testing = std.testing;
 
 fn testScrollElement(overflow: Element.Overflow, box_w: f32, box_h: f32, content_w: f32, content_h: f32) Element {
@@ -345,62 +343,6 @@ fn testScrollElement(overflow: Element.Overflow, box_w: f32, box_h: f32, content
     el.content_w = content_w;
     el.content_h = content_h;
     return el;
-}
-
-fn buildTwoAxisScrollTree(u: *UI) !void {
-    _ = try u.open(.str("root"), .{
-        .width = .fixed(300),
-        .height = .fixed(200),
-        .direction = .column,
-        .overflow = .scroll,
-    }, .none);
-    {
-        _ = try u.open(.str("child"), .{
-            .width = .fixed(600),
-            .height = .fixed(800),
-        }, .none);
-        u.close();
-    }
-    u.close();
-}
-
-fn buildScrollYTree(u: *UI) !void {
-    _ = try u.open(.str("root"), .{
-        .width = .fixed(300),
-        .height = .fixed(200),
-        .direction = .column,
-        .overflow = .scroll_y,
-    }, .none);
-    {
-        _ = try u.open(.str("child"), .{
-            .width = .grow(),
-            .height = .fixed(1000),
-        }, .none);
-        u.close();
-    }
-    u.close();
-}
-
-fn wheelInput(delta: math.Vec2) input_types.Input {
-    return .{
-        .pos = .{ 50, 50 },
-        .scroll = .{ .pixel = delta },
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    };
-}
-
-fn scrollInput(scroll: input_types.ScrollInput) input_types.Input {
-    return .{
-        .pos = .{ 50, 50 },
-        .scroll = scroll,
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    };
 }
 
 test "scroll overflow only renders axes that independently overflow" {
@@ -423,188 +365,4 @@ test "scroll overflow only renders axes that independently overflow" {
     try testing.expect(both_metrics.has_y);
     try testing.expectApproxEqAbs(108, both_metrics.max_offset[0], 0.001);
     try testing.expectApproxEqAbs(228, both_metrics.max_offset[1], 0.001);
-}
-
-test "two axis wheel scroll locks one axis per gesture" {
-    const allocator = testing.allocator;
-    var ui = try UI.init(allocator, .{});
-    defer ui.deinit();
-
-    try buildTwoAxisScrollTree(&ui);
-    try ui.resolve();
-
-    try ui.resolveWindow(wheelInput(.{ 40, 5 }), 0, 0);
-    try ui.resolveWindow(wheelInput(.{ 2, 50 }), WHEEL_LOCK_IDLE_MS - 1, 0);
-
-    const s = ui.state.get(.scroll, Key.str("root").hash()).?;
-    try testing.expectEqual(State.Scroll.Axis.x, s.wheel_axis);
-    try testing.expectApproxEqAbs(42, s.offset[0], 0.001);
-    try testing.expectApproxEqAbs(0, s.offset[1], 0.001);
-    try ui.resolveWindow(wheelInput(.{ 2, 50 }), WHEEL_LOCK_IDLE_MS * 2, 0);
-
-    try testing.expectEqual(State.Scroll.Axis.y, s.wheel_axis);
-    try testing.expectApproxEqAbs(42, s.offset[0], 0.001);
-    try testing.expectApproxEqAbs(50, s.offset[1], 0.001);
-}
-
-test "pixel wheel scroll is independent of content scale" {
-    const allocator = testing.allocator;
-
-    var ui1 = try UI.init(allocator, .{});
-    defer ui1.deinit();
-    try buildScrollYTree(&ui1);
-    try ui1.resolve();
-    try ui1.resolveWindow(wheelInput(.{ 0, 25 }), 0, 1);
-
-    var ui2 = try UI.init(allocator, .{});
-    defer ui2.deinit();
-    try buildScrollYTree(&ui2);
-    try ui2.resolve();
-    try ui2.resolveWindow(wheelInput(.{ 0, 25 }), 0, 2);
-
-    const root_id = Key.str("root").hash();
-    try testing.expectApproxEqAbs(ui1.state.get(.scroll, root_id).?.offset[1], ui2.state.get(.scroll, root_id).?.offset[1], 0.001);
-    try testing.expectApproxEqAbs(25, ui1.state.get(.scroll, root_id).?.offset[1], 0.001);
-}
-
-test "scrollbar drag moves scroll offset proportionally" {
-    const allocator = testing.allocator;
-    var ui = try UI.init(allocator, .{});
-    defer ui.deinit();
-
-    const root_key = Key.str("root");
-
-    const buildTree = struct {
-        fn run(u: *UI) !void {
-            _ = try u.open(.str("root"), .{
-                .width = .fixed(300),
-                .height = .fixed(200),
-                .direction = .column,
-                .overflow = .scroll_y,
-            }, .none);
-            {
-                _ = try u.open(.str("child"), .{
-                    .width = .grow(),
-                    .height = .fixed(1000),
-                }, .none);
-                u.close();
-            }
-            u.close();
-        }
-    }.run;
-
-    try buildTree(&ui);
-    try ui.resolve();
-
-    const root_id = root_key.hash();
-    var root_el: ?*const Element = null;
-    for (ui.layout_ctx.pool.elements.items) |*el| {
-        if (el.id == root_id) {
-            root_el = el;
-            break;
-        }
-    }
-
-    const geom = compute(root_el.?, .{ 0, 0 }, &ui.theme).?;
-    const bar = geom.bars[1].?;
-    const thumb_top_y = bar.thumb.y();
-
-    try ui.resolveWindow(.{
-        .pos = .{ bar.thumb.x() + 1, thumb_top_y + 4 },
-        .mouse = blk: {
-            var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
-            buttons[@backingInt(input_types.MouseButton.left)].down = true;
-            break :blk buttons;
-        },
-        .scroll = .{},
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    }, 0, 0);
-    ui.reset();
-    try buildTree(&ui);
-    try ui.resolve();
-
-    const s_after_press = ui.state.get(.scroll, root_id).?;
-    try testing.expectEqual(State.Scroll.Axis.y, s_after_press.drag_axis);
-    try testing.expectApproxEqAbs(4, s_after_press.drag_grab, 0.001);
-
-    const drag_target_y = thumb_top_y + 30;
-    try ui.resolveWindow(.{
-        .pos = .{ bar.thumb.x() + 1, drag_target_y },
-        .mouse = blk: {
-            var buttons: [input_types.mouse_button_count]input_types.MouseButtonState = @splat(.{});
-            buttons[@backingInt(input_types.MouseButton.left)].down = true;
-            break :blk buttons;
-        },
-        .scroll = .{},
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    }, 0, 0);
-
-    const free = bar.track.h() - bar.thumb.h();
-    const max_off: f32 = 1000 - 200;
-    const expected_t = (drag_target_y - 4 - bar.track.y()) / free;
-    const expected_offset = expected_t * max_off;
-
-    const s_after_drag = ui.state.get(.scroll, root_id).?;
-    try testing.expectApproxEqAbs(expected_offset, s_after_drag.offset[1], 0.5);
-
-    try ui.resolveWindow(.{
-        .pos = .{ bar.thumb.x() + 1, drag_target_y },
-        .scroll = .{},
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    }, 0, 0);
-
-    const s_after_release = ui.state.get(.scroll, root_id).?;
-    try testing.expectEqual(State.Scroll.Axis.none, s_after_release.drag_axis);
-}
-
-test "wheel scroll over container updates offset" {
-    const allocator = testing.allocator;
-    var ui = try UI.init(allocator, .{});
-    defer ui.deinit();
-
-    const root_key = Key.str("root");
-
-    const buildTree = struct {
-        fn run(u: *UI) !void {
-            _ = try u.open(.str("root"), .{
-                .width = .fixed(300),
-                .height = .fixed(200),
-                .direction = .column,
-                .overflow = .scroll_y,
-            }, .none);
-            {
-                _ = try u.open(.str("child"), .{
-                    .width = .grow(),
-                    .height = .fixed(1000),
-                }, .none);
-                u.close();
-            }
-            u.close();
-        }
-    }.run;
-
-    try buildTree(&ui);
-    try ui.resolve();
-
-    try ui.resolveWindow(.{
-        .pos = .{ 50, 50 },
-        .scroll = .{ .pixel = .{ 0, 25 } },
-        .chars = &.{},
-        .shift_held = false,
-        .ctrl_held = false,
-        .super_held = false,
-    }, 0, 0);
-
-    const root_id = root_key.hash();
-    const s = ui.state.get(.scroll, root_id).?;
-    try testing.expectApproxEqAbs(25, s.offset[1], 0.001);
 }
