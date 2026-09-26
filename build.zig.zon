@@ -8,8 +8,8 @@
             .hash = "pack-0.0.2-gq153kgtAAA6u9mi4oXfGC9kFf3pw3s_ttxRWjHW0TaM",
         },
         .celer = .{
-            .url = "git+https://codeberg.org/shahwali/celer.git#48971a27478d079832eb5e1ea60dba723cda5c17",
-            .hash = "celer-0.0.1-qPUU5GhRAACwlHFWZRqrr6Mp4WOUVM4-Ba88aFQleR-L",
+            .url = "git+https://codeberg.org/shahwali/celer.git#709c6b43eb3951b5b52bd0063e7f53d81dcad898",
+            .hash = "celer-0.0.2-qPUU5MNRAADkwaZT2ybwnvJnKON3FsGHistDLq7I4VDh",
         },
         .wgpu = .{
             .url = "git+https://codeberg.org/shahwali/wgpu-zig#0cb8b016b5116a7dc801d86c9158fc2242e448a8",

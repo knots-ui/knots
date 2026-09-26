@@ -8,18 +8,23 @@ const headers: []const std.http.Header = &.{
     .{ .name = "cross-origin-embedder-policy", .value = "require-corp" },
 };
 
-var directory_path: []const u8 = "";
-var hmr_directory_path: []const u8 = "";
-var host_module_path: []const u8 = "";
+pub const Config = struct {
+    web_directory: ?[]const u8,
+    hmr_directory: []const u8,
+    host_module_path: ?[]const u8,
+    port: u16,
+};
+
+var config: ?Config = null;
 var events_state: ?*Events = null;
 var server_io: ?std.Io = null;
 
-const Events = struct {
+pub const Events = struct {
     condition: std.Io.Condition = .init,
     mutex: std.Io.Mutex = .init,
     revision: u64 = 1,
 
-    fn publish(events: *Events, io: std.Io) void {
+    pub fn publish(events: *Events, io: std.Io) void {
         events.mutex.lockUncancelable(io);
         events.revision +%= 1;
         if (events.revision == 0) events.revision = 1;
@@ -29,61 +34,45 @@ const Events = struct {
     }
 };
 
-pub fn main(init: std.process.Init) !void {
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 5) return error.ExpectedDirectoryHmrDirectoryPortAndHostModule;
-    const port = try std.fmt.parseInt(u16, args[3], 10);
-
-    directory_path = args[1];
-    hmr_directory_path = args[2];
-    host_module_path = args[4];
-    std.debug.assert(directory_path.len > 0);
-    std.debug.assert(hmr_directory_path.len > 0);
-    std.debug.assert(host_module_path.len > 0);
-
-    var events: Events = .{};
-    events_state = &events;
+pub fn serve(io: std.Io, allocator: std.mem.Allocator, configuration: Config, events: *Events) !void {
+    std.debug.assert(configuration.port > 0);
+    std.debug.assert(configuration.hmr_directory.len > 0);
+    if (configuration.web_directory) |directory| {
+        std.debug.assert(directory.len > 0);
+        std.debug.assert(configuration.host_module_path != null);
+    } else {
+        std.debug.assert(configuration.host_module_path == null);
+    }
+    if (configuration.host_module_path) |path| std.debug.assert(path.len > 0);
+    std.debug.assert(config == null);
+    std.debug.assert(events_state == null);
+    std.debug.assert(server_io == null);
+    config = configuration;
+    events_state = events;
+    defer config = null;
     defer events_state = null;
-    server_io = init.io;
+    server_io = io;
     defer server_io = null;
-    var tasks: std.Io.Group = .init;
-    defer tasks.cancel(init.io);
-    try tasks.concurrent(init.io, readEvents, .{ init.io, &events });
 
     var server = try celer.Server.init(.{ .route_fn = route }, .{
-        .port = port,
+        .port = configuration.port,
         .host = .localhost,
         .read_buffer_size = 16 * 1024,
         .write_buffer_size = 16 * 1024,
         .kernel_backlog = 128,
         .before_fn = null,
         .ws_handler = null,
-    }, init.gpa);
+    }, allocator);
     defer server.deinit();
-    std.log.info("event=web_server_ready url=http://localhost:{d}", .{port});
-    try server.start(init.io, init.gpa);
-}
-
-fn readEvents(io: std.Io, events: *Events) void {
-    var buffer: [64]u8 = undefined;
-    var reader = std.Io.File.stdin().readerStreaming(io, &buffer);
-    const expected = "change\n";
-    while (true) {
-        var index: usize = 0;
-        while (index < expected.len) : (index += 1) {
-            const byte = reader.interface.takeByte() catch return;
-            if (byte != expected[index]) return;
-        }
-        std.debug.assert(index == expected.len);
-        events.publish(io);
-    }
+    std.log.info("event=http_server_starting url=http://127.0.0.1:{d}", .{configuration.port});
+    try server.start(io, allocator);
 }
 
 fn route(server: *celer.Server, allocator: std.mem.Allocator, request: *celer.Request) !void {
+    const configuration = config orelse return error.HttpServerNotConfigured;
     std.debug.assert(events_state != null);
     std.debug.assert(server_io != null);
-    std.debug.assert(directory_path.len > 0);
-    std.debug.assert(hmr_directory_path.len > 0);
+    std.debug.assert(configuration.hmr_directory.len > 0);
     std.debug.assert(server.cfg.port > 0);
 
     switch (request.req.head.method) {
@@ -104,28 +93,33 @@ fn route(server: *celer.Server, allocator: std.mem.Allocator, request: *celer.Re
         return;
     }
     if (std.mem.eql(u8, target, "/hmr")) {
-        try serveFile(allocator, server_io.?, request, hmr_directory_path, "/");
+        try serveFile(allocator, server_io.?, request, configuration.hmr_directory, "/");
         return;
     }
     if (std.mem.startsWith(u8, target, "/hmr/")) {
-        try serveFile(allocator, server_io.?, request, hmr_directory_path, target[4..]);
+        try serveFile(allocator, server_io.?, request, configuration.hmr_directory, target[4..]);
         return;
     }
-    if (std.mem.eql(u8, request_target, host_module_path)) {
-        const location = try std.fmt.allocPrint(allocator, "{s}?knots-hmr", .{host_module_path});
-        const redirect_headers: []const std.http.Header = &.{.{ .name = "location", .value = location }};
-        try request.respond(.{
-            .body = "",
-            .options = .{ .status = .temporary_redirect, .keep_alive = request.req.head.keep_alive, .extra_headers = redirect_headers },
-        });
+    if (configuration.host_module_path) |host_module_path| {
+        if (std.mem.eql(u8, request_target, host_module_path)) {
+            const location = try std.fmt.allocPrint(allocator, "{s}?knots-hmr", .{host_module_path});
+            const redirect_headers: []const std.http.Header = &.{.{ .name = "location", .value = location }};
+            try request.respond(.{
+                .body = "",
+                .options = .{ .status = .temporary_redirect, .keep_alive = request.req.head.keep_alive, .extra_headers = redirect_headers },
+            });
+            return;
+        }
+    }
+    if (configuration.web_directory) |directory| {
+        try serveFile(allocator, server_io.?, request, directory, target);
         return;
     }
-    try serveFile(allocator, server_io.?, request, directory_path, target);
+    try request.respond(.{ .body = "Not found.\n", .options = .{ .status = .not_found, .extra_headers = headers } });
 }
 
 fn serveEvents(io: std.Io, request: *celer.Request, events: *Events) !void {
     std.debug.assert(server_io != null);
-    std.debug.assert(events.revision > 0);
     var buffer: [256]u8 = undefined;
     const response_headers: []const std.http.Header = &.{
         .{ .name = "cache-control", .value = "no-cache" },
@@ -140,12 +134,15 @@ fn serveEvents(io: std.Io, request: *celer.Request, events: *Events) !void {
         while (events.revision == revision) {
             events.condition.waitTimeout(io, &events.mutex, .{ .duration = .{ .raw = std.Io.Duration.fromSeconds(15), .clock = .awake } }) catch |err| switch (err) {
                 error.Timeout => break,
-                error.Canceled => return err,
+                error.Canceled => {
+                    events.mutex.unlock(io);
+                    return err;
+                },
             };
         }
         const next_revision = events.revision;
         events.mutex.unlock(io);
-        if (next_revision > revision) {
+        if (next_revision != revision) {
             revision = next_revision;
             try body.writer.print("event: change\ndata: {d}\n\n", .{revision});
         } else {

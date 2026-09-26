@@ -4,16 +4,22 @@ const Protocol = @import("Protocol.zig");
 const Status = @import("Status.zig");
 const Artifact = @import("Artifact.zig");
 const Log = @import("Log.zig");
+const HTTPServer = @import("HTTPServer.zig");
+const HTTPClient = @import("HTTPClient.zig");
 const Watch = @import("watch");
 
 pub const std_options: std.Options = .{ .logFn = log };
 
 const application_check_interval_ms: u64 = 1_000;
+const http_server_start_attempts: u32 = 100;
+const http_server_start_delay_ms: u64 = 50;
 const build_stream_max: usize = 256 * 1024;
 
 comptime {
     std.debug.assert(application_check_interval_ms > 0);
     std.debug.assert(application_check_interval_ms <= 1_000);
+    std.debug.assert(http_server_start_attempts > 0);
+    std.debug.assert(http_server_start_delay_ms > 0);
 }
 
 const Configuration = struct {
@@ -27,19 +33,11 @@ const BuildPhase = enum { initial, reload };
 const Application = struct {
     done: std.atomic.Value(bool) = .init(false),
     failed: std.atomic.Value(bool) = .init(false),
-    events: bool,
-    input: ?std.Io.File = null,
-    mutex: std.Io.Mutex = .init,
+};
 
-    fn notify(state: *Application, io: std.Io) void {
-        std.debug.assert(state.events);
-        state.mutex.lockUncancelable(io);
-        defer state.mutex.unlock(io);
-        const input = state.input orelse return;
-        input.writeStreamingAll(io, "change\n") catch |err| {
-            std.log.warn("event=application_notification_failed error={s}", .{@errorName(err)});
-        };
-    }
+const HttpServerState = struct {
+    done: std.atomic.Value(bool) = .init(false),
+    failed: std.atomic.Value(bool) = .init(false),
 };
 
 const BuildResult = struct {
@@ -58,10 +56,16 @@ pub fn main(init: std.process.Init) !void {
         return error.ExpectedConfiguration;
     }
 
-    try std.Io.Dir.cwd().createDirPath(init.io, args[5]);
-    const prefix = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[5], allocator);
+    try std.Io.Dir.cwd().createDirPath(init.io, args[4]);
+    const prefix = try std.Io.Dir.cwd().realPathFileAlloc(init.io, args[4], allocator);
     try std.Io.Dir.cwd().createDirPath(init.io, try std.fs.path.join(allocator, &.{ prefix, "hmr" }));
     const status_path = try std.fs.path.resolve(allocator, &.{ prefix, "hmr/status.json" });
+    const port = try std.fmt.parseInt(u16, args[5], 10);
+    if (port == 0) return error.InvalidHttpServerPort;
+    const browser_host = std.mem.eql(u8, args[6], "browser");
+    if (!browser_host) {
+        if (!std.mem.eql(u8, args[6], "native")) return error.ExpectedRunnerMode;
+    }
 
     const lock_path = try std.fs.path.join(allocator, &.{ prefix, "hmr/server.lock" });
     const lock = try std.Io.Dir.cwd().createFile(init.io, lock_path, .{ .truncate = false });
@@ -75,11 +79,6 @@ pub fn main(init: std.process.Init) !void {
 
     const config_bytes = try std.Io.Dir.cwd().readFileAlloc(init.io, args[1], allocator, .limited(Protocol.bytes_max));
     const config = try std.json.parseFromSlice(Configuration, allocator, config_bytes, .{ .allocate = .alloc_always });
-
-    const application_events = std.mem.eql(u8, args[6], "events");
-    if (!application_events) {
-        if (!std.mem.eql(u8, args[6], "no-events")) return error.ExpectedApplicationEventMode;
-    }
 
     var separator: usize = 7;
     while (separator < args.len) : (separator += 1) {
@@ -96,8 +95,20 @@ pub fn main(init: std.process.Init) !void {
     try build.appendSlice(allocator, args[7..separator]);
 
     var app: std.ArrayList([]const u8) = .empty;
-    try app.append(allocator, args[4]);
-    try app.appendSlice(allocator, args[separator + 1 ..]);
+    const runner_arguments = args[separator + 1 ..];
+    var web_directory: ?[]const u8 = null;
+    var host_module_path: ?[]const u8 = null;
+    if (browser_host) {
+        if (runner_arguments.len != 2) return error.ExpectedWebDirectoryAndHostModule;
+        web_directory = runner_arguments[0];
+        host_module_path = runner_arguments[1];
+    } else {
+        if (runner_arguments.len == 0) return error.ExpectedApplicationExecutable;
+        try app.appendSlice(allocator, runner_arguments);
+    }
+    const server_url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}", .{port});
+    if (!browser_host) try init.environ_map.put("KNOTS_HMR_URL", server_url);
+
     if (@import("builtin").os.tag != .windows) {
         const action: std.posix.Sigaction = .{ .handler = .{ .handler = signal }, .mask = std.posix.sigemptyset(), .flags = 0 };
         std.posix.sigaction(.INT, &action, null);
@@ -129,20 +140,36 @@ pub fn main(init: std.process.Init) !void {
         try writeReadyStatus(arena.allocator(), init.io, status_path, .initial);
     }
 
-    const manifest_path = try std.fs.path.resolve(allocator, &.{ prefix, "hmr/manifest.json" });
-    try init.environ_map.put("KNOTS_HMR_MANIFEST", manifest_path);
-    try init.environ_map.put("KNOTS_HMR_STATUS", status_path);
     std.log.info("event=server_ready modules={d}", .{initial_module_count});
 
-    var state: Application = .{ .events = application_events };
+    var events: HTTPServer.Events = .{};
+    var http_state: HttpServerState = .{};
+    var application_state: Application = .{};
+    const hmr_directory = try std.fs.path.join(allocator, &.{ prefix, "hmr" });
+    const http_config: HTTPServer.Config = .{
+        .web_directory = web_directory,
+        .hmr_directory = hmr_directory,
+        .host_module_path = host_module_path,
+        .port = port,
+    };
     var watcher = try Watch.init(init.io, init.gpa, &interrupted, config.value.watch_root);
     defer watcher.deinit();
     var children: std.Io.Group = .init;
     defer children.cancel(init.io);
-    try children.concurrent(init.io, runApplication, .{ init.io, app.items, init.environ_map, &state });
+    try children.concurrent(init.io, runHttpServer, .{ init.io, init.gpa, http_config, &events, &http_state });
+    try waitForHttpServer(allocator, init.io, server_url, &http_state);
+    std.log.info("event=http_server_ready url={s}", .{server_url});
+    if (!browser_host) {
+        try children.concurrent(init.io, runApplication, .{ init.io, app.items, init.environ_map, &application_state });
+    }
     while (!interrupted.load(.acquire)) {
-        if (state.done.load(.acquire)) {
-            if (state.failed.load(.acquire)) {
+        if (http_state.done.load(.acquire)) {
+            const reason = if (http_state.failed.load(.acquire)) "http_server_failed" else "http_server_stopped";
+            std.log.err("event=server_stopped reason={s}", .{reason});
+            return error.HttpServerFailed;
+        }
+        if (!browser_host and application_state.done.load(.acquire)) {
+            if (application_state.failed.load(.acquire)) {
                 std.log.err("event=server_stopped reason=application_failed", .{});
                 return error.ApplicationFailed;
             }
@@ -174,14 +201,14 @@ pub fn main(init: std.process.Init) !void {
             writeErrorStatus(arena.allocator(), init.io, status_path, Status.kind_error, "reload", message) catch |status_err| {
                 std.log.err("event=status_write_failed phase=reload error={s}", .{@errorName(status_err)});
             };
-            if (state.events) state.notify(init.io);
+            events.publish(init.io);
             continue;
         };
         if (!result.term.success()) {
             writeBuildErrorStatus(arena.allocator(), init.io, status_path, .reload, result.diagnostics) catch |err| {
                 std.log.err("event=status_write_failed phase=reload error={s}", .{@errorName(err)});
             };
-            if (state.events) state.notify(init.io);
+            events.publish(init.io);
             continue;
         }
         const publication_started_at = std.Io.Clock.awake.now(init.io);
@@ -191,13 +218,13 @@ pub fn main(init: std.process.Init) !void {
             writeErrorStatus(arena.allocator(), init.io, status_path, Status.kind_error, "reload", message) catch |status_err| {
                 std.log.err("event=status_write_failed phase=reload error={s}", .{@errorName(status_err)});
             };
-            if (state.events) state.notify(init.io);
+            events.publish(init.io);
             continue;
         };
         writeReadyStatus(arena.allocator(), init.io, status_path, .reload) catch |err| {
             std.log.err("event=status_write_failed phase=reload error={s}", .{@errorName(err)});
         };
-        if (state.events) state.notify(init.io);
+        events.publish(init.io);
     }
 
     std.log.info("event=server_stopped reason=signal", .{});
@@ -207,36 +234,55 @@ fn signal(_: std.posix.SIG) callconv(.c) void {
     interrupted.store(true, .release);
 }
 
+fn runHttpServer(io: std.Io, allocator: std.mem.Allocator, config: HTTPServer.Config, events: *HTTPServer.Events, state: *HttpServerState) void {
+    defer state.done.store(true, .release);
+    HTTPServer.serve(io, allocator, config, events) catch |err| {
+        if (err == error.Canceled) return;
+        std.log.err("event=http_server_failed error={s}", .{@errorName(err)});
+        state.failed.store(true, .release);
+        return;
+    };
+    std.log.err("event=http_server_failed reason=server_stopped", .{});
+    state.failed.store(true, .release);
+}
+
+fn waitForHttpServer(allocator: std.mem.Allocator, io: std.Io, server_url: []const u8, state: *const HttpServerState) !void {
+    std.debug.assert(server_url.len > 0);
+    var attempt: u32 = 0;
+    while (attempt < http_server_start_attempts) : (attempt += 1) {
+        if (state.done.load(.acquire)) return error.HttpServerFailed;
+
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const bytes = HTTPClient.get(arena.allocator(), io, server_url, "/hmr/status.json", Status.bytes_max) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
+            try std.Io.sleep(io, .fromMilliseconds(http_server_start_delay_ms), .awake);
+            continue;
+        };
+        const parsed = std.json.parseFromSlice(Status.Value, arena.allocator(), bytes, .{ .allocate = .alloc_always, .ignore_unknown_fields = false, .max_value_len = Status.bytes_max }) catch {
+            try std.Io.sleep(io, .fromMilliseconds(http_server_start_delay_ms), .awake);
+            continue;
+        };
+        if (Status.valid(&parsed.value)) {
+            if (std.mem.eql(u8, parsed.value.kind, Status.kind_ready)) return;
+        }
+        try std.Io.sleep(io, .fromMilliseconds(http_server_start_delay_ms), .awake);
+    }
+    return error.HttpServerStartTimeout;
+}
+
 fn runApplication(io: std.Io, args: []const []const u8, environment: *const std.process.Environ.Map, state: *Application) void {
     defer state.done.store(true, .release);
 
     std.debug.assert(args.len > 0);
     const started_at = std.Io.Clock.awake.now(io);
 
-    var child = std.process.spawn(io, .{ .argv = args, .environ_map = environment, .stdin = if (state.events) .pipe else .inherit, .stdout = .inherit, .stderr = .inherit, .expand_arg0 = .no_expand }) catch |err| {
+    var child = std.process.spawn(io, .{ .argv = args, .environ_map = environment, .stdin = .inherit, .stdout = .inherit, .stderr = .inherit, .expand_arg0 = .no_expand }) catch |err| {
         std.log.err("event=application_start_failed error={s} duration_ms={d}", .{ @errorName(err), Log.elapsedMilliseconds(io, started_at) });
         state.failed.store(true, .release);
         return;
     };
     defer child.kill(io);
-    if (state.events) {
-        state.mutex.lockUncancelable(io);
-        std.debug.assert(state.input == null);
-        std.debug.assert(child.stdin != null);
-        state.input = child.stdin;
-        child.stdin = null;
-        state.mutex.unlock(io);
-    } else {
-        std.debug.assert(state.input == null);
-        std.debug.assert(child.stdin == null);
-    }
-    defer if (state.events) {
-        state.mutex.lockUncancelable(io);
-        const input = state.input.?;
-        state.input = null;
-        input.close(io);
-        state.mutex.unlock(io);
-    };
     const id = child.id;
     const result = child.wait(io) catch |err| {
         child.id = id;

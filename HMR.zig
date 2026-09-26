@@ -14,7 +14,7 @@ pub const DevOptions = struct {
     application_arguments: []const []const u8 = &.{},
     web_dir: []const u8 = "web",
     web_host_js_name: []const u8 = "knots.js",
-    web_port: u16 = 8000,
+    port: u16 = 8000,
     web_wasm_name: []const u8 = "app.wasm",
 };
 
@@ -186,12 +186,6 @@ pub fn init(b: *std.Build, executable: *std.Build.Step.Compile, options: Options
             .{ .name = "math", .module = options.knots.module("math") },
         },
     });
-    if (!browser_host)
-        runtime.addImport("watch", options.knots.builder.dependency("watch", .{
-            .target = host_target,
-            .optimize = executable.root_module.optimize.?,
-        }).module("watch"));
-
     if (wasmtime) |dependency|
         runtime.addImport("wasmtime", dependency.module("wasmtime"));
 
@@ -235,12 +229,6 @@ pub fn init(b: *std.Build, executable: *std.Build.Step.Compile, options: Options
     });
     if (wasmtime) |dependency|
         test_module.addImport("wasmtime", dependency.module("wasmtime"));
-
-    if (!browser_host)
-        test_module.addImport("watch", options.knots.builder.dependency("watch", .{
-            .target = host_target,
-            .optimize = .debug,
-        }).module("watch"));
 
     test_module.addOptions("runtime_options", runtime_options);
     test_module.addAnonymousImport("fixture_wasm", .{ .root_source_file = fixture.getEmittedBin() });
@@ -310,6 +298,7 @@ fn injectRuntime(self: *const HMR, executable: *std.Build.Step.Compile, runtime:
 
 pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
     const b = self.builder;
+    if (options.port == 0) @panic("HMR server port must be nonzero");
 
     const server = b.addExecutable(.{
         .name = "knots-hmr-server",
@@ -324,15 +313,7 @@ pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
         const web_threads = self.options.knots.builder.named_lazy_paths.contains("web-worker-js");
         web_build.configureExecutable(b, self.executable.root_module, self.executable, web_threads, .{});
     }
-    const web_server = b.addExecutable(.{
-        .name = "knots-hmr-web-server",
-        .root_module = b.createModule(.{
-            .root_source_file = self.options.knots.path("src/hmr/WebServer.zig"),
-            .target = b.graph.host,
-            .optimize = .debug,
-        }),
-    });
-    web_server.root_module.addImport("celer", self.options.knots.builder.dependency("celer", .{
+    server.root_module.addImport("celer", self.options.knots.builder.dependency("celer", .{
         .target = b.graph.host,
         .optimize = .debug,
     }).module("celer"));
@@ -343,7 +324,6 @@ pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
 
     const check = b.step("hmr-check", "Compile HMR host, server and module artifacts");
     check.dependOn(&server.step);
-    if (browser_host) check.dependOn(&web_server.step);
     check.dependOn(&self.executable.step);
     check.dependOn(self.artifacts);
 
@@ -359,12 +339,9 @@ pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
     run.addFileArg(self.configuration);
     run.addFileArg(.zig_exe);
     run.addFileArg(options.build_file orelse b.path("build.zig"));
-    if (browser_host)
-        run.addFileArg(web_server.getEmittedBin())
-    else
-        run.addFileArg(self.executable.getEmittedBin());
     run.addDirectoryArg(b.graph.path(.install_prefix, ""));
-    run.addArg(if (browser_host) "events" else "no-events");
+    run.addArg(b.fmt("{d}", .{options.port}));
+    run.addArg(if (browser_host) "browser" else "native");
 
     for (b.user_input_options.keys(), b.user_input_options.values()) |key, value| {
         switch (value) {
@@ -378,10 +355,9 @@ pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
     run.addArg("--");
     if (browser_host) {
         run.addDirectoryArg(b.graph.path(.install_prefix, options.web_dir));
-        run.addDirectoryArg(b.graph.path(.install_prefix, "hmr"));
-        run.addArg(b.fmt("{d}", .{options.web_port}));
         run.addArg(b.fmt("/{s}", .{options.web_host_js_name}));
     } else {
+        run.addFileArg(self.executable.getEmittedBin());
         run.addArgs(options.application_arguments);
     }
     run.addPassthruArgs();

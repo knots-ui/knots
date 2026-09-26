@@ -11,16 +11,11 @@ const Instance = if (!reloadable) void else if (browser_host) @import("Browser.z
 const support = @import("hmr");
 const Status = @import("hmr").Status;
 const Log = @import("Log.zig");
-const Watch = if (reloadable and !browser_host) @import("watch") else void;
+const HTTPClient = @import("HTTPClient.zig");
 
+const server_url_environment_name = "KNOTS_HMR_URL";
 const manifest_environment_name = "KNOTS_HMR_MANIFEST";
 const status_environment_name = "KNOTS_HMR_STATUS";
-const watch_wait_ms: u64 = 1_000;
-
-comptime {
-    std.debug.assert(watch_wait_ms > 0);
-    std.debug.assert(watch_wait_ms <= 1_000);
-}
 
 const Native = if (reloadable)
     void
@@ -49,6 +44,7 @@ const Module = struct {
 
 allocator: std.mem.Allocator,
 io: std.Io,
+server_url: []const u8,
 manifest_path: []const u8,
 status_path: []const u8,
 modules: std.ArrayList(Module) = .empty,
@@ -69,20 +65,23 @@ browser_revision: u32 = 0,
 
 const Runtime = @This();
 
-pub const Wake = struct {
-    context: *anyopaque,
-    notify: *const fn (*anyopaque) void,
-};
+pub const Wake = HTTPClient.Wake;
 
-/// Create the runtime using the server-provided manifest location.
+/// Create the runtime using the server-provided local HTTP endpoint.
 pub fn create(allocator: std.mem.Allocator, io: std.Io, environment_map: anytype) !*Runtime {
     const self = try allocator.create(Runtime);
-    self.* = .{ .allocator = allocator, .io = io, .arena = .init(allocator), .manifest_path = "", .status_path = "" };
+    self.* = .{ .allocator = allocator, .io = io, .arena = .init(allocator), .server_url = "", .manifest_path = "", .status_path = "" };
     errdefer self.destroy();
 
     if (reloadable and !browser_host) {
-        self.manifest_path = try manifestPath(self.allocator, environment_map);
-        self.status_path = try statusPath(self.allocator, environment_map);
+        if (environment_map.get(server_url_environment_name)) |value| {
+            self.server_url = try normalizeServerUrl(self.allocator, value);
+        } else if (@import("builtin").is_test) {
+            self.manifest_path = try manifestPath(self.allocator, environment_map);
+            self.status_path = try statusPath(self.allocator, environment_map);
+        } else {
+            return error.HmrServerUrlMissing;
+        }
     }
 
     if (!reloadable) {
@@ -118,6 +117,18 @@ fn statusPath(allocator: std.mem.Allocator, environment_map: anytype) ![]const u
     return result;
 }
 
+fn normalizeServerUrl(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    std.debug.assert(value.len > 0);
+    if (value.len > 256) return error.HmrServerUrlTooLong;
+    if (!std.mem.startsWith(u8, value, "http://127.0.0.1:")) return error.InvalidHmrServerUrl;
+    const normalized = std.mem.trimEnd(u8, value, "/");
+    if (normalized.len == 0) return error.InvalidHmrServerUrl;
+    const port_text = normalized["http://127.0.0.1:".len..];
+    const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidHmrServerUrl;
+    if (port == 0) return error.InvalidHmrServerUrl;
+    return allocator.dupe(u8, normalized);
+}
+
 pub fn destroy(self: *Runtime) void {
     self.stopWatching();
     for (self.modules.items) |*module| {
@@ -125,17 +136,17 @@ pub fn destroy(self: *Runtime) void {
     }
     self.modules.deinit(self.allocator);
     if (reloadable and !browser_host) {
+        if (self.server_url.len > 0) {
+            self.allocator.free(self.server_url);
+        }
         if (self.manifest_path.len > 0) {
             self.allocator.free(self.manifest_path);
-        } else {
-            std.debug.assert(self.manifest_path.len == 0);
         }
         if (self.status_path.len > 0) {
             self.allocator.free(self.status_path);
-        } else {
-            std.debug.assert(self.status_path.len == 0);
         }
     } else {
+        std.debug.assert(self.server_url.len == 0);
         std.debug.assert(self.manifest_path.len == 0);
         std.debug.assert(self.status_path.len == 0);
         if (!reloadable) std.debug.assert(self.hmr_error == null);
@@ -159,14 +170,13 @@ pub fn startWatching(self: *Runtime, wake: Wake) !void {
         wake.notify(wake.context);
         return;
     }
-    self.watch_group.concurrent(self.io, watchTask, .{
-        self.io,
-        self.allocator,
-        self.manifest_path,
-        self.status_path,
-        &self.manifest_dirty,
-        wake,
-    }) catch |err| {
+    self.manifest_dirty.store(true, .release);
+    wake.notify(wake.context);
+    if (self.server_url.len == 0) {
+        std.debug.assert(builtin.is_test);
+        return;
+    }
+    self.watch_group.concurrent(self.io, HTTPClient.watch, .{ self.io, self.allocator, self.server_url, &self.manifest_dirty, wake }) catch |err| {
         self.watching = false;
         return err;
     };
@@ -178,43 +188,11 @@ fn stopWatching(self: *Runtime) void {
         self.watching = false;
         return;
     }
-    self.watch_group.cancel(self.io);
-    self.watch_group.await(self.io) catch {};
-    self.watching = false;
-}
-
-fn watchTask(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    manifest_path: []const u8,
-    status_path: []const u8,
-    manifest_dirty: *std.atomic.Value(bool),
-    wake: Wake,
-) std.Io.Cancelable!void {
-    const manifest_directory = std.fs.path.dirname(manifest_path) orelse unreachable;
-    std.debug.assert(manifest_directory.len > 0);
-    std.debug.assert(status_path.len > 0);
-    var should_stop: std.atomic.Value(bool) = .init(false);
-    var watcher = Watch.init(io, allocator, &should_stop, manifest_directory) catch |err| {
-        std.log.err(
-            "ts={f} component=hmr-runtime event=watch_start_failed error={s} action=disable_live_reload",
-            .{ Log.timestamp(io), @errorName(err) },
-        );
-        return;
-    };
-    defer watcher.deinit();
-
-    manifest_dirty.store(true, .release);
-    wake.notify(wake.context);
-    while (true) {
-        try std.Io.checkCancel(io);
-        if (watcher.wait(watch_wait_ms) == .dirty) {
-            manifest_dirty.store(true, .release);
-            wake.notify(wake.context);
-        } else if (manifest_dirty.load(.acquire)) {
-            wake.notify(wake.context);
-        }
+    if (self.server_url.len > 0) {
+        self.watch_group.cancel(self.io);
+        self.watch_group.await(self.io) catch {};
     }
+    self.watching = false;
 }
 
 fn destroyModule(self: *Runtime, module: *Module) void {
@@ -339,11 +317,16 @@ fn update(self: *Runtime) !void {
 }
 
 fn refreshStatus(self: *Runtime) !void {
-    std.debug.assert(self.status_path.len > 0);
     const allocator = self.arena.allocator();
-    const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, self.status_path, allocator, .limited(Status.bytes_max)) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
+    const bytes = if (self.server_url.len > 0)
+        try HTTPClient.get(allocator, self.io, self.server_url, "/hmr/status.json", Status.bytes_max)
+    else blk: {
+        std.debug.assert(builtin.is_test);
+        std.debug.assert(self.status_path.len > 0);
+        break :blk std.Io.Dir.cwd().readFileAlloc(self.io, self.status_path, allocator, .limited(Status.bytes_max)) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
     };
     try self.refreshStatusBytes(bytes);
 }
@@ -384,9 +367,15 @@ fn clearHmrError(self: *Runtime) void {
 
 fn refresh(self: *Runtime) !void {
     const allocator = self.arena.allocator();
-    const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, self.manifest_path, allocator, .limited(Protocol.bytes_max)) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
+    const bytes = if (self.server_url.len > 0)
+        try HTTPClient.get(allocator, self.io, self.server_url, "/hmr/manifest.json", Protocol.bytes_max)
+    else blk: {
+        std.debug.assert(builtin.is_test);
+        std.debug.assert(self.manifest_path.len > 0);
+        break :blk std.Io.Dir.cwd().readFileAlloc(self.io, self.manifest_path, allocator, .limited(Protocol.bytes_max)) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
     };
     try self.refreshBytes(bytes);
 }
@@ -406,6 +395,10 @@ fn refreshBytes(self: *Runtime, bytes: []const u8) !void {
     for (manifest.value.modules, 0..) |entry, index| {
         if (!Protocol.validId(entry.id)) return error.InvalidModuleId;
         if (entry.hash.len != 64) return error.InvalidHash;
+        for (entry.hash) |byte| {
+            const hexadecimal = (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f');
+            if (!hexadecimal) return error.InvalidHash;
+        }
         for (manifest.value.modules[0..index]) |previous| {
             if (std.mem.eql(u8, previous.id, entry.id)) return error.DuplicateModuleId;
         }
@@ -544,7 +537,14 @@ fn prepare(self: *Runtime, entry: *const Protocol.Entry) !Module {
     var instance = if (comptime browser_host) blk: {
         break :blk try Instance.init(entry.id, entry.hash);
     } else blk: {
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(self.io, entry.path, self.arena.allocator(), .limited(32 * 1024 * 1024));
+        const allocator = self.arena.allocator();
+        const bytes = if (self.server_url.len > 0) http_bytes: {
+            const path = try std.fmt.allocPrint(allocator, "/hmr/artifacts/{s}.wasm", .{entry.hash});
+            break :http_bytes try HTTPClient.get(allocator, self.io, self.server_url, path, 32 * 1024 * 1024);
+        } else file_bytes: {
+            std.debug.assert(builtin.is_test);
+            break :file_bytes try std.Io.Dir.cwd().readFileAlloc(self.io, entry.path, allocator, .limited(32 * 1024 * 1024));
+        };
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
         if (!std.mem.eql(u8, entry.hash, &std.fmt.bytesToHex(digest, .lower))) return error.HashMismatch;
