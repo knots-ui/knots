@@ -17,41 +17,33 @@ fn body(app: *knots.App, frame: *ui.Frame) !void {
     const self = Self.of(app);
     const arena = frame.arena();
 
-    const row = Rect{ .width = .grow(), .dir = .row, .gap = 12, .@"align" = .center, .key = .src(@src()) };
+    const row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .gap = 12, .@"align" = .center } };
     _ = try row.open(frame);
     if ((try frame.interact(Button{
         .key = .src(@src()),
-        .width = .fixed(140),
-        .height = .fixed(34),
-        .style = .{ .color = .primary, .corner_radius = .sm },
-        .hover_anim = .{},
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "sleep x10" },
+        .label = "sleep x10",
+        .style = &.{ .width = .fixed(140), .height = .fixed(34) },
     })).clicked) try sleep10(self, app, frame);
     try frame.e(.{
         Text{
             .content = try std.fmt.allocPrint(arena, "pending: {d}", .{self.demo_state.pending_async}),
-            .size = .sm,
-            .color = if (self.demo_state.pending_async > 0) .warning else .dimmed,
             .key = .src(@src()),
+            .style = &.{ .font_size = .sm, .foreground = if (self.demo_state.pending_async > 0) .warning else .dimmed },
         },
         Text{
             .content = try std.fmt.allocPrint(arena, "wakeups received: {d}", .{self.demo_state.counter}),
-            .size = .sm,
-            .color = .dimmed,
             .key = .src(@src()),
+            .style = &.{ .font_size = .sm, .foreground = .dimmed },
         },
     });
     try row.close(frame);
 
-    try frame.e(Spacer{ .height = .fixed(16), .key = .src(@src()) });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(16) } });
 
     try frame.e(Text{
         .content = "each task sleeps 0..10 seconds. Wakeups land back on the main loop without blocking the UI.",
-        .size = .xs,
-        .color = .dimmed,
         .key = .src(@src()),
+        .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
 }
 

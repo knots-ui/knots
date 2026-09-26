@@ -3,23 +3,39 @@ const std = @import("std");
 const Element = @import("layout").Element;
 const Frame = @import("../root.zig").Frame;
 const ui_mod = @import("../root.zig");
-const Color = ui_mod.Color;
 const Key = ui_mod.Key;
-const Radius = ui_mod.Radius;
+const Style = ui_mod.Style;
 const animation = ui_mod.animation;
 
 value: *f32,
 min: f32 = 0,
 max: f32 = 1,
 steps: f32 = 0,
-width: Element.sizing.Axis = .grow(),
-track_height: f32 = 4,
-track_color: Color.Input = .toned,
-fill_color: Color.Input = .highlighted,
-corner_radius: Radius.Input = .{ .fixed = 2 },
-knob_radius: f32 = 7,
-knob_color: Color.Input = .accented,
 key: Key,
+style: *const Style = &.{},
+parts: Parts = .{},
+
+/// Style scopes drawn inside the single range decoration.
+pub const Parts = struct {
+    /// `height`, `background`, `radius`.
+    track: *const Style = &.{},
+    /// `background`; shares the track radius.
+    fill: *const Style = &.{},
+    /// `width` (diameter) and `background`.
+    thumb: *const Style = &.{},
+};
+
+pub const base = struct {
+    /// Height defaults to fit the track and the thumb.
+    pub const root: Style = .{ .width = .grow() };
+    pub const track: Style = .{ .height = .fixed(4), .background = .toned, .radius = .{ .fixed = 2 } };
+    pub const fill: Style = .{ .background = .highlighted };
+    pub const thumb: Style = .{ .width = .fixed(14), .background = .accented };
+};
+
+const TRACK_INDEX: usize = 1;
+const FILL_INDEX: usize = 2;
+const THUMB_INDEX: usize = 3;
 
 const SliderInput = @This();
 
@@ -109,32 +125,36 @@ fn openResponse(self: *const SliderInput, frame: *Frame) !Response {
     const hover_t = ui.anim(id, "hover", if (is_hovered) 1.0 else 0.0, opts);
     const drag_t = ui.anim(id, "drag", if (is_dragging) 1.0 else 0.0, opts);
 
+    const st = ui.states(id, .{});
+    const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, st, null);
+    const track = ui.resolveStyle(self.key.indexed(TRACK_INDEX).hash(), .{ .base = &base.track, .user = self.parts.track }, st, null);
+    const fill = ui.resolveStyle(self.key.indexed(FILL_INDEX).hash(), .{ .base = &base.fill, .user = self.parts.fill }, st, null);
+    const thumb = ui.resolveStyle(self.key.indexed(THUMB_INDEX).hash(), .{ .base = &base.thumb, .user = self.parts.thumb }, st, null);
+
+    const track_height = fixedOr(track.layout.height, 4);
+    const knob_radius = fixedOr(thumb.layout.width, 14) * 0.5;
     const knob_scale = 1.0 + 0.15 * hover_t + 0.20 * drag_t;
-    const effective_knob_radius = self.knob_radius * knob_scale;
+    const effective_knob_radius = knob_radius * knob_scale;
 
     const halo_alpha = 0.25 * hover_t + 0.40 * drag_t;
-    const halo_r = self.knob_radius * (1.8 + 0.4 * drag_t);
-    const base_knob_color = self.knob_color.resolve(&ui.theme);
-    const halo_color: [4]f32 = .{ base_knob_color[0], base_knob_color[1], base_knob_color[2], halo_alpha };
+    const halo_r = knob_radius * (1.8 + 0.4 * drag_t);
+    const knob_color = thumb.surface.color;
+    const halo_color: [4]f32 = .{ knob_color[0], knob_color[1], knob_color[2], halo_alpha * knob_color[3] };
 
-    const element_height = @max(self.track_height, self.knob_radius * 2);
+    var config = root.element(.{ .interactive = true, .focusable = true });
+    if (config.height.kind == .fit) config.height = .fixed(@max(track_height, knob_radius * 2));
 
-    const element_id = try ui.open(self.key, .{
-        .width = self.width,
-        .height = .fixed(element_height),
-        .interactive = true,
-        .focusable = true,
-    }, .{ .range = .{
+    const element_id = try ui.openWith(self.key, config, .{ .range = .{
         .progress = progress,
-        .track_color = self.track_color.resolve(&ui.theme),
-        .fill_color = self.fill_color.resolve(&ui.theme),
-        .corner_radius = self.corner_radius.resolve(&ui.theme),
-        .track_height = self.track_height,
+        .track_color = track.surface.color,
+        .fill_color = fill.surface.color,
+        .corner_radius = track.surface.corner_radius,
+        .track_height = track_height,
         .knob_radius = effective_knob_radius,
-        .knob_color = base_knob_color,
+        .knob_color = knob_color,
         .halo_radius = if (halo_alpha > 0.001) halo_r else 0,
         .halo_color = halo_color,
-    } });
+    } }, .{ .content = root.content });
     try ui.setAccessibility(element_id, .{
         .role = .slider,
         .state = .{
@@ -148,6 +168,10 @@ fn openResponse(self: *const SliderInput, frame: *Frame) !Response {
 
 pub fn close(_: *const SliderInput, frame: *Frame) !void {
     frame.ui().close();
+}
+
+fn fixedOr(axis: Element.sizing.Axis, fallback: f32) f32 {
+    return if (axis.kind == .fixed) axis.value else fallback;
 }
 
 fn steppedValue(self: *const SliderInput, value: f32) f32 {

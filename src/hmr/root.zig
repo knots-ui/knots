@@ -44,12 +44,14 @@ pub const Guest = struct {
         defer context.deinit();
         const root: ui.component.Rect = .{
             .key = .str("knots.module.root"),
-            .width = .fixed(@floatFromInt(request.frame.logical_extent.width)),
-            .height = .fixed(@floatFromInt(request.frame.logical_extent.height)),
-            .padding = .init(12, 12, 12, 12),
-            .dir = .column,
-            .overflow = .scroll,
-            .style = .{ .color = .elevated },
+            .style = &.{
+                .width = .fixed(@floatFromInt(request.frame.logical_extent.width)),
+                .height = .fixed(@floatFromInt(request.frame.logical_extent.height)),
+                .padding = .all(12),
+                .direction = .column,
+                .overflow = .scroll,
+                .background = .elevated,
+            },
         };
         _ = try root.open(&context);
         self.main(&context) catch |err| {

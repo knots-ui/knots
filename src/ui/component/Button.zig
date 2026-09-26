@@ -1,46 +1,34 @@
-const std = @import("std");
-
-const math = @import("math");
-
 const ui_mod = @import("../root.zig");
-const Size = ui_mod.Size;
 const Key = ui_mod.Key;
-const Color = ui_mod.Color;
-const BorderWidth = ui_mod.BorderWidth;
-
-const UI = ui_mod.UI;
 const Style = ui_mod.Style;
-const animation = ui_mod.animation;
 const Element = @import("layout").Element;
 const Frame = ui_mod.Frame;
 
-const Text = @import("Text.zig");
-
-const default_brighten: f32 = 0.15;
-
-pub const HoverAnim = struct {
-    opts: animation.Options = .{ .duration_ms = 100 },
-    brighten: f32 = default_brighten,
-};
-
-@"align": Element.Align = .start,
-justify: Element.Justify = .start,
-width: Element.sizing.Axis = .fit(),
-height: Element.sizing.Axis = .fit(),
-padding: Element.Padding = .init(0, 0, 0, 0),
-style: Style = .{},
-hover_style: ?Style.Override = null,
-disabled_style: ?Style.Override = null,
-hover_anim: ?HoverAnim = null,
+label: ?[]const u8 = null,
 disabled: bool = false,
 key: Key,
-text: ?ButtonText = null,
+style: *const Style = &.{},
+parts: Parts = .{},
 
-pub const ButtonText = struct {
-    content: []const u8,
-    font: ?[]const u8 = null,
-    size: Size.Input = .sm,
-    color: ?Color.Input = null,
+pub const Parts = struct {
+    label: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{
+        .direction = .row,
+        .@"align" = .center,
+        .justify = .center,
+        .padding = .xy(12, 6),
+        .background = .accent,
+        .foreground = .on_accent,
+        .radius = .sm,
+        .hover = &.{ .state_layer = 0.15 },
+        .active = &.{ .state_layer = 0.25 },
+        .disabled = &.{ .opacity = 0.5 },
+        .transition = .{ .duration_ms = 100 },
+    };
+    pub const label: Style = .{};
 };
 
 const Button = @This();
@@ -64,76 +52,31 @@ pub fn open(self: *const Button, frame: *Frame) !Element.Id {
 pub fn openResponse(self: *const Button, frame: *Frame) !Response {
     const ui = frame.ui();
     const id = self.key.hash();
-    const is_hovered = !self.disabled and ui.hovering(id);
-    const effective_style = if (self.disabled)
-        if (self.disabled_style) |ds| self.style.merge(ds) else self.style
-    else
-        self.style;
+    const st = ui.states(id, .{ .disabled = self.disabled });
 
-    const t: f32 = if (self.hover_anim) |ha|
-        ui.anim(id, "hover", if (is_hovered) 1.0 else 0.0, ha.opts)
-    else if (is_hovered) 1.0 else 0.0;
-
-    var deco_rect = effective_style.toRect(&ui.theme);
-    if (!self.disabled) {
-        if (self.hover_style) |hs| {
-            const hover_rect = self.style.merge(hs).toRect(&ui.theme);
-            deco_rect.color = math.lerp(@as(math.Vec4, deco_rect.color), @as(math.Vec4, hover_rect.color), t);
-            deco_rect.corner_radius = .lerp(deco_rect.corner_radius, hover_rect.corner_radius, t);
-            deco_rect.border_width = BorderWidth.lerp(deco_rect.border_width, hover_rect.border_width, t);
-            deco_rect.border_color = math.lerp(@as(math.Vec4, deco_rect.border_color), @as(math.Vec4, hover_rect.border_color), t);
-        } else if (t > 0.0) {
-            const brighten = if (self.hover_anim) |ha| ha.brighten else default_brighten;
-            const f = t * brighten;
-            deco_rect.color = .{
-                deco_rect.color[0] + (1.0 - deco_rect.color[0]) * f,
-                deco_rect.color[1] + (1.0 - deco_rect.color[1]) * f,
-                deco_rect.color[2] + (1.0 - deco_rect.color[2]) * f,
-                deco_rect.color[3],
-            };
-        }
-    }
-
-    const rect = try ui.open(self.key, .{
-        .alignment = self.@"align",
-        .justify = self.justify,
-        .width = self.width,
-        .height = self.height,
-        .padding = self.padding,
+    const root = try ui.openStyled(self.key, .{ .base = &base.root, .user = self.style }, st, .{
         .interactive = !self.disabled,
         .focusable = !self.disabled,
-    }, .{ .rect = deco_rect });
-    try ui.setAccessibility(rect, .{
+    });
+    try ui.setAccessibility(root.id, .{
         .role = .button,
-        .name = if (self.text) |t_| t_.content else &.{},
+        .name = self.label orelse &.{},
         .state = .{ .disabled = self.disabled },
     });
 
     var clicked = false;
     if (!self.disabled) {
-        const key_activate = ui.focused(rect) and
+        const key_activate = ui.focused(root.id) and
             (ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter) or ui.input.containsKey(.space));
-        clicked = ui.leftClicked(rect, .within) or key_activate or ui.consumeAccessibilityAction(rect, .click) != null;
+        clicked = ui.leftClicked(root.id, .within) or key_activate or ui.consumeAccessibilityAction(root.id, .click) != null;
         if (key_activate) ui.input.consumeKeyboard();
     }
 
-    if (self.text) |text| {
-        const text_color: Color.Input =
-            effective_style.color.onColor() orelse
-            text.color orelse .text;
-        const txt = Text{
-            .content = text.content,
-            .font = text.font,
-            .key = self.key.indexed(1),
-            .selectable = false,
-            .size = text.size,
-            .color = text_color,
-        };
-        _ = try txt.open(frame);
-        try txt.close(frame);
+    if (self.label) |label| {
+        _ = try ui.styledText(self.key.indexed(1), label, .{ .base = &base.label, .user = self.parts.label }, st);
     }
 
-    return .{ .id = rect, .clicked = clicked, .hovered = is_hovered };
+    return .{ .id = root.id, .clicked = clicked, .hovered = st.hover };
 }
 
 pub fn close(_: *const Button, frame: *Frame) !void {

@@ -9,15 +9,15 @@ pub fn panel(
     body: *const fn (*knots.App, *ui.Frame) anyerror!void,
 ) !void {
     const wrap = Rect{
-        .width = .grow(),
-        .height = .grow(),
-        .padding = .init(16, 16, 16, 16),
-        .dir = .column,
-        .overflow = .scroll,
         .key = .str("panel:" ++ title),
-        .style = .{
-            .color = .elevated,
-            .corner_radius = .lg,
+        .style = &.{
+            .width = .grow(),
+            .height = .grow(),
+            .padding = .all(16),
+            .direction = .column,
+            .overflow = .scroll,
+            .background = .elevated,
+            .radius = .lg,
             .border_width = .all(1),
             .border_color = .toned,
         },

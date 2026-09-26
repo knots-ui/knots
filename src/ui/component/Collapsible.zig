@@ -11,7 +11,12 @@ animation: ui.animation.Options = .{
     .duration_ms = 250,
     .ease = .ease_out_cubic,
 },
-width: Element.sizing.Axis = .grow(),
+/// `width` of the clipped content.
+style: *const ui.Style = &.{},
+
+pub const base = struct {
+    pub const root: ui.Style = .{ .width = .grow() };
+};
 
 const Collapsible = @This();
 
@@ -32,13 +37,15 @@ pub fn openContent(self: *const Collapsible, frame: *Frame) !bool {
     const clip_height: Element.sizing.Axis =
         if (need_remeasure) .fit() else .fixed(h);
 
-    _ = try frame.ui().open(clip_key, .{
-        .width = self.width,
+    const resolved = frame.ui().resolveStyle(clip_key.hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
+    const width = resolved.layout.width;
+    _ = try frame.ui().openWith(clip_key, .{
+        .width = width,
         .height = clip_height,
         .direction = .column,
         .overflow = .hidden,
-    }, .none);
-    _ = try frame.ui().open(measure_key, .{ .width = self.width }, .none);
+    }, .none, .{ .content = resolved.content });
+    _ = try frame.ui().open(measure_key, .{ .width = width }, .none);
     return true;
 }
 

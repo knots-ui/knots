@@ -23,7 +23,7 @@ var allocator: ?std.mem.Allocator = null;
 
 pub fn main(app: *knots.Frame) !void {
     allocator = app.ui().allocator;
-    const root = Rect{ .width = .grow(), .dir = .column, .gap = 16, .key = .src(@src()) };
+    const root = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .column, .gap = 16 } };
     _ = try root.open(app);
     try fixedWidthSection(app);
     try growWidthSection(app);
@@ -35,9 +35,8 @@ pub fn main(app: *knots.Frame) !void {
 fn caption(app: *ui.Frame, comptime label: []const u8, key: ui.Key) !void {
     try app.e(Text{
         .content = label,
-        .size = .xs,
-        .color = .dimmed,
         .key = key,
+        .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
 }
 
@@ -45,16 +44,13 @@ fn fixedWidthSection(app: *ui.Frame) !void {
     try caption(app, "fixed(220) container, text wraps inside a narrow column", .src(@src()));
     try app.e(.{
         Rect{
-            .width = .fixed(220),
-            .padding = .init(10, 10, 10, 10),
-            .style = .{ .color = .muted, .corner_radius = .sm },
             .key = .src(@src()),
+            .style = &.{ .width = .fixed(220), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
         },
         .{Text{
             .content = lorem,
-            .wrap = true,
-            .width = .grow(),
             .key = .src(@src()),
+            .style = &.{ .wrap = true, .width = .grow() },
         }},
     });
 }
@@ -62,32 +58,26 @@ fn fixedWidthSection(app: *ui.Frame) !void {
 fn growWidthSection(app: *ui.Frame) !void {
     try caption(app, "grow() in a row, text reflows when the window resizes", .src(@src()));
     try app.e(.{
-        Rect{ .width = .grow(), .gap = 12, .key = .src(@src()) },
+        Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 12 } },
         .{
             Rect{
-                .width = .grow(),
-                .padding = .init(10, 10, 10, 10),
-                .style = .{ .color = .muted, .corner_radius = .sm },
                 .key = .src(@src()),
+                .style = &.{ .width = .grow(), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
             },
             Rect{
-                .width = .fixed(120),
-                .padding = .init(10, 10, 10, 10),
-                .style = .{ .color = .accented, .corner_radius = .sm },
                 .key = .src(@src()),
+                .style = &.{ .width = .fixed(120), .padding = .init(10, 10, 10, 10), .background = .accented, .radius = .sm },
             },
         },
     });
 
     try app.e(.{
-        Rect{ .width = .grow(), .gap = 12, .key = .src(@src()) },
+        Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 12 } },
         .{
             growParagraph,
             Rect{
-                .width = .fixed(120),
-                .height = .fixed(60),
-                .style = .{ .color = .accented, .corner_radius = .sm },
                 .key = .src(@src()),
+                .style = &.{ .width = .fixed(120), .height = .fixed(60), .background = .accented, .radius = .sm },
             },
         },
     });
@@ -96,16 +86,13 @@ fn growWidthSection(app: *ui.Frame) !void {
 fn growParagraph(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .padding = .init(10, 10, 10, 10),
-            .style = .{ .color = .muted, .corner_radius = .sm },
             .key = .src(@src()),
+            .style = &.{ .width = .grow(), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
         },
         .{Text{
             .content = lorem,
-            .wrap = true,
-            .width = .grow(),
             .key = .src(@src()),
+            .style = &.{ .wrap = true, .width = .grow() },
         }},
     });
 }
@@ -114,16 +101,13 @@ fn newlinesSection(app: *ui.Frame) !void {
     try caption(app, "hard \\n breaks combined with soft wrap", .src(@src()));
     try app.e(.{
         Rect{
-            .width = .fixed(320),
-            .padding = .init(10, 10, 10, 10),
-            .style = .{ .color = .muted, .corner_radius = .sm },
             .key = .src(@src()),
+            .style = &.{ .width = .fixed(320), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
         },
         .{Text{
             .content = with_newlines,
-            .wrap = true,
-            .width = .grow(),
             .key = .src(@src()),
+            .style = &.{ .wrap = true, .width = .grow() },
         }},
     });
 }
@@ -134,8 +118,7 @@ fn multiLineInputSection(app: *ui.Frame) !void {
         .key = .src(@src()),
         .buf = &notes,
         .placeholder = "type a multi-line note... drag the bottom edge to grow it",
-        .width = .fixed(360),
-        .height = .fixed(96),
+        .style = &.{ .width = .fixed(360), .height = .fixed(96) },
     });
 }
 

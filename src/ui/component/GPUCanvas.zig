@@ -1,26 +1,28 @@
 //! Reserve a UI region for a renderer-specific callback carried by the render contract.
-const Frame = @import("../root.zig").Frame;
+const ui_mod = @import("../root.zig");
+const Frame = ui_mod.Frame;
+const Key = ui_mod.Key;
+const Style = ui_mod.Style;
 
 const render = @import("render");
-const Element = @import("../root.zig").layout.Element;
-const Key = @import("../root.zig").Key;
+const Element = @import("layout").Element;
 
-width: Element.sizing.Axis = .grow(),
-height: Element.sizing.Axis = .grow(),
-interactive: bool = false,
 paint: render.PaintCallback,
+interactive: bool = false,
 key: Key,
+style: *const Style = &.{},
+
+pub const base = struct {
+    pub const root: Style = .{ .width = .grow(), .height = .grow(), .overflow = .hidden };
+};
 
 const GPUCanvas = @This();
 
 pub fn open(self: *const GPUCanvas, frame: *Frame) !Element.Id {
     self.paint.validate();
-    return frame.ui().open(self.key, .{
-        .width = self.width,
-        .height = self.height,
-        .overflow = .hidden,
-        .interactive = self.interactive,
-    }, .none);
+    const ui = frame.ui();
+    const resolved = ui.resolveStyle(self.key.hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
+    return ui.openWith(self.key, resolved.element(.{ .interactive = self.interactive }), .none, .{ .content = resolved.content });
 }
 
 pub fn close(self: *const GPUCanvas, frame: *Frame) !void {

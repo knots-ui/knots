@@ -1,46 +1,49 @@
-const Frame = @import("../root.zig").Frame;
-const UI = @import("../root.zig").UI;
-const State = @import("../root.zig").State;
-const Color = @import("../root.zig").Color;
+const ui_mod = @import("../root.zig");
+const Frame = ui_mod.Frame;
+const UI = ui_mod.UI;
+const State = ui_mod.State;
+const Style = ui_mod.Style;
+const Key = ui_mod.Key;
 const Element = @import("layout").Element;
-const Size = @import("../root.zig").Size;
-const Key = @import("../root.zig").Key;
 const util = @import("util.zig");
 
-width: Element.sizing.Axis = .fit(),
-height: Element.sizing.Axis = .fit(),
-size: Size.Input = .sm,
 content: []const u8,
-color: Color.Input = .text,
-font: ?[]const u8 = null,
 selectable: bool = true,
-wrap: bool = false,
-highlight_color: Color.Input = .primary,
 key: Key,
+/// Font, size, foreground and wrap are inherited from the parent when unset.
+style: *const Style = &.{},
+parts: Parts = .{},
+
+pub const Parts = struct {
+    selection: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{};
+    pub const selection: Style = .{ .background = .accent, .opacity = 0.4 };
+};
 
 const Text = @This();
 
 const BODY_INDEX: usize = 1; // text decoration
+const SELECTION_INDEX: usize = 2; // selection style scope
 const SPANS_BASE: usize = 16; // selection line overlays start here, one per line
+
+fn resolve(self: *const Text, ui: *UI) Style.Resolved {
+    return ui.resolveStyle(self.key.hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
+}
 
 pub fn open(self: *const Text, frame: *Frame) !Element.Id {
     const ui = frame.ui();
+    const resolved = self.resolve(ui);
     if (!self.selectable) {
-        var decoration = try ui.textDecoration(self.content, self.size.resolve(), self.font, self.wrap);
-        decoration.text.color = self.color.resolve(&ui.theme);
-        const id = try ui.open(self.key, .{
-            .width = self.width,
-            .height = self.height,
-        }, decoration);
+        const decoration = try ui.textDecorationStyled(self.content, &resolved);
+        const id = try ui.openWith(self.key, resolved.element(.{}), decoration, .{ .content = resolved.content });
         try ui.setAccessibility(id, .{ .role = .text_run, .state = .{ .value_text = self.content } });
         return id;
     }
 
-    const id = try ui.open(self.key, .{
-        .width = self.width,
-        .height = self.height,
-        .interactive = true,
-    }, .none);
+    const id = try ui.openWith(self.key, resolved.element(.{ .interactive = true }), .none, .{ .content = resolved.content });
     try ui.setAccessibility(id, .{ .role = .text_run, .state = .{ .value_text = self.content } });
     return id;
 }
@@ -63,26 +66,27 @@ pub fn close(self: *const Text, frame: *Frame) !void {
     const need_hit_test = (press_here or is_drag) and s.box.w() > 0 and s.box.h() > 0;
     const has_prior_selection = @min(s.anchor_byte, len) != @min(s.cursor_byte, len);
 
+    // Resolved again inside our own slot: the recorded content is authoritative.
+    var resolved = self.resolve(ui);
+    resolved.content = ui.contents.items[ui.currentSlot()];
     if (need_hit_test or has_prior_selection) {
-        try self.closeSlow(ui, s, need_hit_test, press_here);
+        try self.closeSlow(ui, s, &resolved, need_hit_test, press_here);
         return;
     }
 
-    var deco = try ui.textDecoration(self.content, self.size.resolve(), self.font, self.wrap);
-    deco.text.color = self.color.resolve(&ui.theme);
-    const inner_w: Element.sizing.Axis = if (self.wrap) .grow() else .fit();
+    const deco = try ui.textDecorationStyled(self.content, &resolved);
+    const inner_w: Element.sizing.Axis = if (resolved.wrap) .grow() else .fit();
     _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = inner_w, .height = .fit() }, deco);
     ui.close();
 
     ui.close();
 }
 
-fn closeSlow(self: *const Text, ui: *UI, s: *State.TextSelect, need_hit_test: bool, press_here: bool) !void {
+fn closeSlow(self: *const Text, ui: *UI, s: *State.TextSelect, resolved: *const Style.Resolved, need_hit_test: bool, press_here: bool) !void {
     const scale = ui.content_scale;
-    const face = try ui.font.getFace(self.font);
-    const size = self.size.resolve();
-    const wrap_px: f32 = if (self.wrap) @max(0, s.box.w() * scale) else 0;
-    const shaped = try face.shapeWrapped(self.content, size.value * scale, wrap_px);
+    const face = try ui.font.getFace(resolved.content.font);
+    const wrap_px: f32 = if (resolved.wrap) @max(0, s.box.w() * scale) else 0;
+    const shaped = try face.shapeWrapped(self.content, resolved.content.font_size * scale, wrap_px);
     const line_h = shaped.line_height / scale;
 
     if (need_hit_test) {
@@ -108,21 +112,20 @@ fn closeSlow(self: *const Text, ui: *UI, s: *State.TextSelect, need_hit_test: bo
     if (sel_lo != sel_hi) {
         ui.state.selection_text = self.content[sel_lo..sel_hi];
 
-        var hc = self.highlight_color.resolve(&ui.theme);
-        hc[3] = 0.4;
+        const selection_key = self.key.indexed(SELECTION_INDEX);
+        const selection = ui.resolveStyle(selection_key.hash(), .{ .base = &base.selection, .user = self.parts.selection }, .{}, null);
 
         const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
         defer ui.allocator.free(spans);
 
         for (spans, 0..) |sp, i| {
-            _ = try ui.openAt(self.key.indexed(SPANS_BASE + i), sp.x, sp.y, sp.w, line_h, .{}, .{ .rect = .{ .color = hc } });
+            _ = try ui.open(self.key.indexed(SPANS_BASE + i), .at(sp.x, sp.y, sp.w, line_h), .{ .rect = selection.surface });
             ui.close();
         }
     }
 
-    var deco = try ui.textDecoration(self.content, size, self.font, self.wrap);
-    deco.text.color = self.color.resolve(&ui.theme);
-    const inner_w: Element.sizing.Axis = if (self.wrap) .grow() else .fit();
+    const deco = try ui.textDecorationStyled(self.content, resolved);
+    const inner_w: Element.sizing.Axis = if (resolved.wrap) .grow() else .fit();
     _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = inner_w, .height = .fit() }, deco);
     ui.close();
 

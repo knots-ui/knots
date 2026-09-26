@@ -5,8 +5,8 @@ const DrawList = render.DrawList;
 const Clip = render.Clip;
 
 const Decoration = @import("decoration.zig").Decoration;
-const Radius = @import("Radius.zig");
-const BorderWidth = @import("BorderWidth.zig");
+const Radius = @import("style").Radius;
+const BorderWidth = @import("style").BorderWidth;
 
 const zero2 = [2]f32{ 0, 0 };
 const zero4 = [4]f32{ 0, 0, 0, 0 };

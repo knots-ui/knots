@@ -68,12 +68,10 @@ pub fn main(init: std.process.Init) !void {
 
         try frame.e(ui.component.Rect{
             .key = .src(@src()),
-            .width = .fixed(240),
-            .height = .fixed(100),
-            .style = .{ .color = .{ .color = .{ .value = .{ 0.2, 0.4, 0.8, 1 } } } },
+            .style = &.{ .width = .fixed(240), .height = .fixed(100), .background = .{ .color = .{ .value = .{ 0.2, 0.4, 0.8, 1 } } } },
         });
 
-        const response = try frame.interact(ui.component.Button{ .key = .src(@src()), .text = .{ .content = "Close" } });
+        const response = try frame.interact(ui.component.Button{ .key = .src(@src()), .label = "Close" });
         if (response.clicked) frame.requestClose();
 
         const output = try context_ui.endFrame(&frame);

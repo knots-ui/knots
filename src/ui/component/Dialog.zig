@@ -3,9 +3,7 @@ const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("../root.zig");
 
-const Color = ui_mod.Color;
 const Key = ui_mod.Key;
-const Layer = ui_mod.Layer;
 const Style = ui_mod.Style;
 
 pub const CloseReason = enum {
@@ -18,20 +16,40 @@ key: Key,
 
 close_on_escape: bool = true,
 close_on_backdrop_press: bool = true,
-z_index: Layer = .modal,
-margin: f32 = 24,
 
-width: Element.sizing.Axis = .{ .kind = .fit, .max = 640 },
-height: Element.sizing.Axis = .fit(),
-padding: Element.Padding = .init(16, 16, 16, 16),
-gap: f32 = 0,
-dir: Element.Direction = .column,
-panel_style: Style = .{ .color = .elevated, .corner_radius = .md, .border_color = .toned, .border_width = .all(1) },
-backdrop_color: Color.Input = .{ .color = .{ .value = .{ 0, 0, 0, 0.45 } } },
+/// The panel: hosts the children.
+style: *const Style = &.{},
+parts: Parts = .{},
+
+pub const Parts = struct {
+    /// Covers the viewport: `background`, `padding` (margin around the panel), `layer`.
+    backdrop: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{
+        .width = .{ .kind = .fit, .max = 640 },
+        .direction = .column,
+        .padding = .all(16),
+        .overflow = .scroll_y,
+        .background = .elevated,
+        .foreground = .text,
+        .radius = .md,
+        .border_width = .all(1),
+        .border_color = .toned,
+    };
+    pub const backdrop: Style = .{
+        .direction = .layer,
+        .@"align" = .center,
+        .justify = .center,
+        .padding = .all(24),
+        .layer = .modal,
+        .background = .{ .color = .{ .value = .{ 0, 0, 0, 0.45 } } },
+    };
+};
 
 const Dialog = @This();
 
-const BACKDROP_INDEX: usize = 1;
 const PANEL_INDEX: usize = 2;
 
 pub fn open(self: *const Dialog, frame: *Frame) !Element.Id {
@@ -42,41 +60,22 @@ pub fn open(self: *const Dialog, frame: *Frame) !Element.Id {
     const size = input.logical_extent;
     const viewport_w: f32 = @floatFromInt(size.width);
     const viewport_h: f32 = @floatFromInt(size.height);
-    const panel_max_w = @max(0, viewport_w - self.margin * 2);
-    const panel_max_h = @max(0, viewport_h - self.margin * 2);
 
-    const root_id = try ui.openRoot(self.key, 0, 0, .{
-        .width = .fixed(viewport_w),
-        .height = .fixed(viewport_h),
-        .direction = .layer,
-        .alignment = .center,
-        .justify = .center,
-        .z_index = self.z_index.index(),
-    }, .none);
+    const backdrop = ui.resolveStyle(self.key.hash(), .{ .base = &base.backdrop, .user = self.parts.backdrop }, .{}, null);
+    var root_config = backdrop.element(.{ .interactive = true });
+    root_config.width = .fixed(viewport_w);
+    root_config.height = .fixed(viewport_h);
+    const root_id = try ui.openResolved(self.key, &backdrop, root_config, .{ 0, 0 });
     try ui.beginInputScope(root_id, .modal);
 
-    _ = try ui.open(self.key.indexed(BACKDROP_INDEX), .{
-        .width = .grow(),
-        .height = .grow(),
-        .position = .absolute,
-        .interactive = true,
-    }, .{ .rect = .{
-        .color = self.backdrop_color.resolve(&ui.theme),
-        .corner_radius = .zero,
-        .border_width = .zero,
-        .border_color = .{ 0, 0, 0, 0 },
-    } });
-    ui.close();
-
-    const panel_id = try ui.open(self.key.indexed(PANEL_INDEX), .{
-        .width = clampAxisToMax(self.width, panel_max_w),
-        .height = clampAxisToMax(self.height, panel_max_h),
-        .direction = self.dir,
-        .padding = self.padding,
-        .gap = self.gap,
-        .overflow = .scroll_y,
-        .interactive = true,
-    }, .{ .rect = self.panel_style.toRect(&ui.theme) });
+    const margin = backdrop.layout.padding;
+    const panel_max_w = @max(0, viewport_w - margin.left() - margin.right());
+    const panel_max_h = @max(0, viewport_h - margin.top() - margin.bottom());
+    const panel = ui.resolveStyle(self.key.indexed(PANEL_INDEX).hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
+    var panel_config = panel.element(.{ .interactive = true });
+    panel_config.width = clampAxisToMax(panel_config.width, panel_max_w);
+    panel_config.height = clampAxisToMax(panel_config.height, panel_max_h);
+    const panel_id = try ui.openResolved(self.key.indexed(PANEL_INDEX), &panel, panel_config, null);
     try ui.setAccessibility(panel_id, .{
         .role = .dialog,
         .state = .{ .expanded = true },
@@ -96,8 +95,7 @@ pub fn closeResponse(self: *const Dialog, frame: *Frame) !?CloseReason {
 
     var response: ?CloseReason = null;
     if (ui.isActiveScope(root_id)) {
-        const backdrop_id = self.key.indexed(BACKDROP_INDEX).hash();
-        if (self.close_on_backdrop_press and ui.leftPressed(backdrop_id, .exact)) {
+        if (self.close_on_backdrop_press and ui.leftPressed(root_id, .exact)) {
             response = self.requestClose(frame, .backdrop);
         } else if (self.close_on_escape and ui.input.containsKey(.escape)) {
             response = self.requestClose(frame, .escape);

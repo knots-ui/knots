@@ -33,11 +33,8 @@ const entries = blk: {
 pub fn main(app: *knots.Frame) !void {
     const theme_index = try app.bindState(u32, "playground.theme.index", 1);
     const root = Rect{
-        .width = .grow(),
-        .height = .fixed(800),
-        .dir = .column,
-        .gap = 12,
         .key = .src(@src()),
+        .style = &.{ .width = .grow(), .height = .fixed(800), .direction = .column, .gap = 12 },
     };
     _ = try root.open(app);
     inline for (0..entries.len) |index| {
@@ -53,50 +50,33 @@ fn Slot(comptime idx: u32) type {
             const is_active = theme_index.* == idx;
 
             const cell = Rect{
-                .width = .grow(),
-                .height = .grow(),
                 .key = .str("theme.cell:" ++ entry.name),
-                .dir = .column,
+                .style = &.{ .width = .grow(), .height = .grow(), .direction = .column },
             };
             _ = try cell.open(app);
             const button = Button{
-                .width = .grow(),
-                .height = .grow(),
-                .padding = .init(12, 12, 12, 12),
                 .key = .str("theme.swatch:" ++ entry.name),
-                .style = .{
-                    .color = .{ .color = entry.theme.elevated },
-                    .corner_radius = .md,
-                    .border_width = if (is_active) .all(2) else .all(1),
-                    .border_color = if (is_active)
-                        .{ .color = entry.theme.primary }
-                    else
-                        .{ .color = entry.theme.toned },
-                },
-                .hover_anim = .{},
+                .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(12, 12, 12, 12), .background = .{ .color = entry.theme.elevated }, .radius = .md, .border_width = if (is_active) .all(2) else .all(1), .border_color = if (is_active)
+                    .{ .color = entry.theme.primary }
+                else
+                    .{ .color = entry.theme.toned } },
             };
             const response = try button.openResponse(app);
             try app.e(.{
                 Rect{
-                    .@"align" = .center,
-                    .justify = .space_between,
                     .key = .str("theme.button.container:" ++ entry.name),
-                    .dir = .column,
+                    .style = &.{ .@"align" = .center, .justify = .space_between, .direction = .column },
                 },
                 .{
                     Text{
                         .content = entry.name,
-                        .size = .md,
-                        .color = .{ .color = entry.theme.text },
                         .selectable = false,
                         .key = .str("theme.label:" ++ entry.name),
+                        .style = &.{ .font_size = .md, .foreground = .{ .color = entry.theme.text } },
                     },
                     Rect{
-                        .width = .grow(),
-                        .height = .fixed(20),
-                        .dir = .row,
-                        .gap = 4,
                         .key = .str("theme.row:" ++ entry.name),
+                        .style = &.{ .width = .grow(), .height = .fixed(20), .direction = .row, .gap = 4 },
                     },
                     .{
                         chip(entry.theme.primary, "p", entry.name),
@@ -119,14 +99,10 @@ fn Slot(comptime idx: u32) type {
     };
 }
 
-fn chip(color: ui.Color, comptime tag: []const u8, comptime theme_name: []const u8) Rect {
+/// Returned to the caller: comptime arguments keep the style literal static.
+fn chip(comptime color: ui.Color, comptime tag: []const u8, comptime theme_name: []const u8) Rect {
     return Rect{
-        .width = .fixed(20),
-        .height = .fixed(20),
         .key = .str("theme.chip:" ++ theme_name ++ ":" ++ tag),
-        .style = .{
-            .color = .{ .color = color },
-            .corner_radius = .sm,
-        },
+        .style = comptime &.{ .width = .fixed(20), .height = .fixed(20), .background = .{ .color = color }, .radius = .sm },
     };
 }

@@ -266,21 +266,44 @@ fn renderErrorOverlay(self: *Runtime, frame: *ui.Frame) !void {
         .key = .str("hmr.error.overlay"),
         .close_on_escape = false,
         .close_on_backdrop_press = false,
-        // The host overlay packet is composed after every module contribution.
-        .z_index = ui.Layer.fromIndex(ui.Frame.host_overlay_layer_min),
-        .width = .{ .kind = .fit, .min = 640, .max = 960 },
-        .height = .{ .kind = .fit, .max = 720 },
-        .panel_style = .{ .color = .elevated, .corner_radius = .lg, .border_color = .@"error", .border_width = .all(2) },
-        .backdrop_color = .{ .color = .{ .value = .{ 0, 0, 0, 0.62 } } },
+        .style = &.{
+            .width = .{ .kind = .fit, .min = 640, .max = 960 },
+            .height = .{ .kind = .fit, .max = 720 },
+            .radius = .lg,
+            .border_color = .@"error",
+            .border_width = .all(2),
+        },
+        .parts = .{
+            .backdrop = &.{
+                // The host overlay packet is composed after every module contribution.
+                .layer = .{ .z = ui.Frame.host_overlay_layer_min },
+                .background = .{ .color = .{ .value = .{ 0, 0, 0, 0.62 } } },
+            },
+        },
     };
     _ = try dialog.open(frame);
     const title = switch (self.hmr_error_kind) {
         .compile => "HMR build failed",
         .update => "HMR update failed",
     };
-    try frame.e(ui.component.Text{ .content = title, .size = .lg, .color = .@"error", .selectable = false, .key = .str("hmr.error.overlay.title") });
-    try frame.e(ui.component.Text{ .content = "The last working version is still running. Fix the error and save to retry.", .width = .grow(), .wrap = true, .selectable = false, .key = .str("hmr.error.overlay.reason") });
-    try frame.e(ui.component.Text{ .content = message, .width = .grow(), .wrap = true, .size = .xs, .selectable = false, .key = .str("hmr.error.overlay.details") });
+    try frame.e(ui.component.Text{
+        .content = title,
+        .style = &.{ .font_size = .lg, .foreground = .@"error" },
+        .selectable = false,
+        .key = .str("hmr.error.overlay.title"),
+    });
+    try frame.e(ui.component.Text{
+        .content = "The last working version is still running. Fix the error and save to retry.",
+        .style = &.{ .width = .grow(), .wrap = true },
+        .selectable = false,
+        .key = .str("hmr.error.overlay.reason"),
+    });
+    try frame.e(ui.component.Text{
+        .content = message,
+        .style = &.{ .width = .grow(), .wrap = true, .font_size = .xs },
+        .selectable = false,
+        .key = .str("hmr.error.overlay.details"),
+    });
     try dialog.close(frame);
 }
 
@@ -640,18 +663,23 @@ fn renderFailure(self: *Runtime, module: *Module, failure: Failure, input: *cons
     const title = try std.fmt.allocPrint(error_frame.arena(), "HMR module failed: {s}", .{module.id});
     const reason = try std.fmt.allocPrint(error_frame.arena(), "Could not {s} the module: {s}", .{ failure.operation, failure.error_name });
     const panel: ui.component.Rect = .{
-        .width = .fixed(@floatFromInt(input.logical_extent.width)),
-        .height = .fixed(@floatFromInt(input.logical_extent.height)),
-        .padding = .init(16, 16, 16, 16),
-        .dir = .column,
-        .gap = 8,
-        .style = .{ .color = .elevated, .corner_radius = .lg, .border_width = .all(1), .border_color = .@"error" },
+        .style = &.{
+            .width = .fixed(@floatFromInt(input.logical_extent.width)),
+            .height = .fixed(@floatFromInt(input.logical_extent.height)),
+            .padding = .all(16),
+            .direction = .column,
+            .gap = 8,
+            .background = .elevated,
+            .radius = .lg,
+            .border_width = .all(1),
+            .border_color = .@"error",
+        },
         .key = .str("hmr.error.panel"),
     };
     _ = try panel.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = title, .size = .lg, .color = .@"error", .selectable = false, .key = .str("hmr.error.title") });
-    try error_frame.e(ui.component.Text{ .content = reason, .width = .grow(), .wrap = true, .selectable = false, .key = .str("hmr.error.reason") });
-    try error_frame.e(ui.component.Text{ .content = "Fix the module and save to retry.", .width = .grow(), .color = .dimmed, .selectable = false, .key = .str("hmr.error.action") });
+    try error_frame.e(ui.component.Text{ .content = title, .style = &.{ .font_size = .lg, .foreground = .@"error" }, .selectable = false, .key = .str("hmr.error.title") });
+    try error_frame.e(ui.component.Text{ .content = reason, .style = &.{ .width = .grow(), .wrap = true }, .selectable = false, .key = .str("hmr.error.reason") });
+    try error_frame.e(ui.component.Text{ .content = "Fix the module and save to retry.", .style = &.{ .width = .grow(), .foreground = .dimmed }, .selectable = false, .key = .str("hmr.error.action") });
     try panel.close(&error_frame);
     const output = try context.endFrame(&error_frame);
     return .{ .packet = try support.Panels.place(allocator, self.allocator, &module.resources, &output.packet, rectangle) };
@@ -670,28 +698,36 @@ fn renderHmrError(self: *Runtime, module: *Module, message: []const u8, input: *
         .update => "HMR update failed",
     };
     const panel: ui.component.Rect = .{
-        .width = .fixed(@floatFromInt(input.logical_extent.width)),
-        .height = .fixed(@floatFromInt(input.logical_extent.height)),
-        .padding = .init(16, 16, 16, 16),
-        .dir = .column,
-        .gap = 8,
-        .style = .{ .color = .elevated, .corner_radius = .lg, .border_width = .all(1), .border_color = .@"error" },
+        .style = &.{
+            .width = .fixed(@floatFromInt(input.logical_extent.width)),
+            .height = .fixed(@floatFromInt(input.logical_extent.height)),
+            .padding = .all(16),
+            .direction = .column,
+            .gap = 8,
+            .background = .elevated,
+            .radius = .lg,
+            .border_width = .all(1),
+            .border_color = .@"error",
+        },
         .key = .str("hmr.error.panel"),
     };
     _ = try panel.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = title, .size = .lg, .color = .@"error", .selectable = false, .key = .str("hmr.error.title") });
-    try error_frame.e(ui.component.Text{ .content = "The last working version is still running. Fix the error and save to retry.", .width = .grow(), .wrap = true, .selectable = false, .key = .str("hmr.error.reason") });
+    try error_frame.e(ui.component.Text{ .content = title, .style = &.{ .font_size = .lg, .foreground = .@"error" }, .selectable = false, .key = .str("hmr.error.title") });
+    try error_frame.e(ui.component.Text{ .content = "The last working version is still running. Fix the error and save to retry.", .style = &.{ .width = .grow(), .wrap = true }, .selectable = false, .key = .str("hmr.error.reason") });
     const diagnostics: ui.component.Rect = .{
-        .width = .grow(),
-        .height = .grow(),
-        .padding = .init(8, 8, 8, 8),
-        .overflow = .scroll_y,
-        .dir = .column,
-        .style = .{ .color = .bg, .corner_radius = .sm },
+        .style = &.{
+            .width = .grow(),
+            .height = .grow(),
+            .padding = .all(8),
+            .overflow = .scroll_y,
+            .direction = .column,
+            .background = .bg,
+            .radius = .sm,
+        },
         .key = .str("hmr.error.diagnostics"),
     };
     _ = try diagnostics.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = message, .width = .grow(), .wrap = true, .size = .xs, .selectable = false, .key = .str("hmr.error.details") });
+    try error_frame.e(ui.component.Text{ .content = message, .style = &.{ .width = .grow(), .wrap = true, .font_size = .xs }, .selectable = false, .key = .str("hmr.error.details") });
     try diagnostics.close(&error_frame);
     try panel.close(&error_frame);
     const output = try context.endFrame(&error_frame);

@@ -317,6 +317,16 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "math", .module = math_mod }},
     });
 
+    const style_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/style/root.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = layout_mod },
+            .{ .name = "math", .module = math_mod },
+        },
+    });
+
     var state_bridge_config = b.addOptions();
     state_bridge_config.addOption(bool, "host_graph_enabled", true);
     const ui_mod = b.addModule("ui", .{
@@ -325,6 +335,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/ui/root.zig"),
         .imports = &.{
             .{ .name = "layout", .module = layout_mod },
+            .{ .name = "style", .module = style_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "input", .module = input_mod },
             .{ .name = "render_types", .module = render_types_mod },
@@ -385,6 +396,7 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{ .root_module = mod });
     const native_accessibility_tests = if (native_accessibility_mod) |native_accessibility| b.addTest(.{ .root_module = native_accessibility }) else null;
     const layout_tests = b.addTest(.{ .root_module = layout_mod });
+    const style_tests = b.addTest(.{ .root_module = style_mod });
     const ui_tests = b.addTest(.{ .root_module = ui_mod });
     const text_tests = b.addTest(.{ .root_module = text_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
@@ -424,6 +436,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     if (native_accessibility_tests) |tests| test_step.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(&b.addRunArtifact(layout_tests).step);
+    test_step.dependOn(&b.addRunArtifact(style_tests).step);
     test_step.dependOn(&b.addRunArtifact(ui_tests).step);
     test_step.dependOn(&b.addRunArtifact(text_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
@@ -606,6 +619,15 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
         .optimize = optimize,
         .imports = &.{.{ .name = "math", .module = math }},
     });
+    const style = b.createModule(.{
+        .root_source_file = b.path("src/style/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "layout", .module = layout },
+            .{ .name = "math", .module = math },
+        },
+    });
     const truetype = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
     const text = b.createModule(.{
         .root_source_file = b.path("src/text/root.zig"),
@@ -637,6 +659,7 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
             .{ .name = "input", .module = input },
             .{ .name = "render_types", .module = types },
             .{ .name = "layout", .module = layout },
+            .{ .name = "style", .module = style },
             .{ .name = "render", .module = render },
             .{ .name = "text", .module = text },
             .{ .name = "signal", .module = signal },

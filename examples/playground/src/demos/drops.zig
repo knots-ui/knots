@@ -25,48 +25,37 @@ pub fn main(app: *knots.Frame) !void {
         app.requestRedraw();
     }
 
-    const row = Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) };
+    const row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 8, .@"align" = .center } };
     _ = try row.open(app);
     if ((try app.interact(Button{
-        .height = .fixed(28),
-        .width = .fixed(80),
-        .style = .{ .color = .@"error", .corner_radius = .sm },
-        .hover_anim = .{},
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "clear" },
+        .label = "clear",
+        .style = &.{ .height = .fixed(28), .width = .fixed(80), .tone = .@"error" },
     })).clicked) clear(app);
     try app.e(.{
         Text{
             .content = try std.fmt.allocPrint(arena, "{d} paths", .{dropped_paths.items.len}),
-            .size = .sm,
-            .color = .dimmed,
             .key = .src(@src()),
+            .style = &.{ .font_size = .sm, .foreground = .dimmed },
         },
     });
     try row.close(app);
 
-    try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
     if (dropped_paths.items.len == 0) {
         try app.e(Text{
             .content = "no drops yet - try dragging a file onto the window.",
-            .size = .sm,
-            .color = .dimmed,
             .key = .src(@src()),
+            .style = &.{ .font_size = .sm, .foreground = .dimmed },
         });
         return;
     }
 
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .padding = .init(8, 8, 8, 8),
             .key = .src(@src()),
-            .style = .{ .color = .muted, .corner_radius = .sm, .border_width = .all(1), .border_color = .toned },
-            .dir = .column,
-            .gap = 4,
+            .style = &.{ .width = .grow(), .padding = .init(8, 8, 8, 8), .background = .muted, .radius = .sm, .border_width = .all(1), .border_color = .toned, .direction = .column, .gap = 4 },
         },
         .{
             For([]const u8){
@@ -80,17 +69,13 @@ pub fn main(app: *knots.Frame) !void {
 fn renderItem(app: *ui.Frame, path: []const u8, i: usize) !void {
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .height = .fixed(24),
-            .padding = .init(0, 8, 0, 8),
-            .@"align" = .center,
             .key = ui.Key.src(@src()).indexed(i),
-            .style = .{ .color = .elevated, .corner_radius = .sm },
+            .style = &.{ .width = .grow(), .height = .fixed(24), .padding = .init(0, 8, 0, 8), .@"align" = .center, .background = .elevated, .radius = .sm },
         },
         .{Text{
             .content = path,
-            .size = .sm,
             .key = ui.Key.src(@src()).indexed(i),
+            .style = &.{ .font_size = .sm },
         }},
     });
 }

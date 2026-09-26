@@ -21,6 +21,7 @@
     .toned = .{ .hex = "#52525a" },
     .dimmed = .{ .hex = "#9a9aa3" },
     .radius = 6,
+    .font_size = .{ 12, 16, 20, 24, 28 },
     .scrollbar_thickness = 8,
     .scrollbar_min_thumb = 24,
     .scrollbar_track_color = .{ .hex = "#2a2a2f80" },

@@ -12,6 +12,19 @@ const Menu = MenuButton(ButtonMenu);
 var counter: isize = 0;
 var menu_button_last_action: []const u8 = "none";
 
+/// Reusable styles are plain `Style` constants; `with` derives variants at comptime.
+const small: ui.Style = .{ .width = .fixed(80), .height = .fixed(32) };
+const menu_item: ui.Style = .{
+    .width = .grow(),
+    .height = .fixed(30),
+    .padding = .xy(10, 0),
+    .justify = .start,
+    .background = .transparent,
+    .foreground = .text,
+    .font_size = .sm,
+    .hover = &.{ .background = .muted, .state_layer = 0 },
+};
+
 pub fn main(app: *knots.Frame) !void {
     const arena = app.arena();
 
@@ -24,84 +37,52 @@ pub fn main(app: *knots.Frame) !void {
             .content = try std.fmt.allocPrint(arena, "menu action: {s}", .{menu_button_last_action}),
             .key = .src(@src()),
         },
-        Spacer{ .height = .fixed(12), .key = .src(@src()) },
+        Spacer{ .style = &.{ .height = .fixed(12) }, .key = .src(@src()) },
     });
     const actions = Rect{
-        .width = .grow(),
-        .dir = .column,
-        .gap = 8,
         .key = .src(@src()),
-        .overflow = .scroll,
-        .padding = .init(8, 8, 8, 8),
+        .style = &.{ .width = .grow(), .direction = .column, .gap = 8, .overflow = .scroll, .padding = .all(8) },
     };
     _ = try actions.open(app);
+    // `tone` rebinds the accent: background, hover layer and label contrast follow.
     if ((try app.interact(Button{
-        .height = .fixed(32),
-        .width = .fixed(80),
-        .style = .{ .color = .success, .corner_radius = .sm },
-        .hover_anim = .{},
+        .label = "+1",
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "+1" },
+        .style = &comptime small.with(.{ .tone = .success }),
     })).clicked) increment(app);
     if ((try app.interact(Button{
-        .height = .fixed(32),
-        .width = .fixed(80),
-        .style = .{ .color = .@"error", .corner_radius = .sm },
-        .hover_anim = .{},
+        .label = "-1",
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "-1" },
+        .style = &comptime small.with(.{ .tone = .@"error" }),
     })).clicked) decrement(app);
     if ((try app.interact(Button{
-        .height = .fixed(32),
-        .width = .fixed(80),
-        .style = .{ .color = .primary, .corner_radius = .{ .fixed = 16 } },
-        .hover_anim = .{},
+        .label = "reset",
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "reset" },
+        .style = &comptime small.with(.{ .radius = .{ .fixed = 16 } }),
     })).clicked) reset(app);
+    // A partial override keeps Button's centering, transition and hover feedback.
     if ((try app.interact(Button{
-        .height = .fixed(32),
-        .width = .fixed(80),
-        .style = .{
-            .color = .{ .color = .rgba(0, 0, 0, 0) },
-            .corner_radius = .sm,
+        .label = "ghost",
+        .key = .src(@src()),
+        .style = &comptime small.with(.{
+            .background = .transparent,
+            .foreground = .text,
             .border_width = .all(1),
             .border_color = .dimmed,
-        },
-        .hover_style = .{ .border_color = .primary },
-        .hover_anim = .{},
-        .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "ghost" },
+            .hover = &.{ .border_color = .accent },
+        }),
     })).clicked) increment(app);
     try app.e(Menu{
         .key = .str("buttons.menu"),
         .menu = .{},
-        .height = .fixed(32),
-        .width = .fixed(96),
-        .padding = .init(0, 12, 0, 12),
-        .style = .{ .color = .primary, .corner_radius = .sm },
-        .hover_anim = .{},
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "menu" },
+        .label = "menu",
+        .style = &.{ .width = .fixed(96), .height = .fixed(32) },
     });
     _ = try app.interact(Button{
-        .height = .fixed(32),
-        .width = .fixed(80),
+        .label = "disabled",
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "disabled" },
         .disabled = true,
-        .disabled_style = .{ .color = .muted, .corner_radius = .md },
+        .style = &small,
     });
     try actions.close(app);
 }
@@ -133,17 +114,7 @@ const ButtonMenu = struct {
 };
 
 fn menuAction(comptime label: []const u8, key: ui.Key) Button {
-    return Button{
-        .key = key,
-        .width = .grow(),
-        .height = .fixed(30),
-        .padding = .init(0, 10, 0, 10),
-        .justify = .start,
-        .@"align" = .center,
-        .style = .{ .color = .elevated, .corner_radius = .sm },
-        .hover_style = .{ .color = .muted },
-        .text = .{ .content = label, .size = .sm, .color = .text },
-    };
+    return Button{ .key = key, .label = label, .style = &menu_item };
 }
 
 fn increment(app: *ui.Frame) void {

@@ -4,10 +4,7 @@ const Frame = @import("../root.zig").Frame;
 const UI = @import("../root.zig").UI;
 const State = @import("../root.zig").State;
 const Style = @import("../root.zig").Style;
-const Color = @import("../root.zig").Color;
-const Size = @import("../root.zig").Size;
 const Key = @import("../root.zig").Key;
-const Radius = @import("../root.zig").Radius;
 const Decoration = @import("../root.zig").Decoration;
 const Face = @import("text").Face;
 
@@ -25,19 +22,47 @@ const GRIP_HIT_H: f32 = 10;
 const GRIP_W: f32 = 40;
 const GRIP_H: f32 = 5;
 
-width: Element.sizing.Axis = .grow(),
-height: Element.sizing.Axis = .fixed(96),
-size: Size.Input = .sm,
 buf: *std.ArrayList(u8),
 placeholder: []const u8 = "",
 bytes_max: u32 = Face.text_bytes_max,
-color: Color.Input = .text,
-placeholder_color: Color.Input = .dimmed,
-style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
-hover_style: ?Style.Override = .{ .border_color = .dimmed },
-focused_style: Style = .{ .color = .elevated, .border_color = .primary, .border_width = .all(1) },
-padding: Element.Padding = .init(6, 10, 6, 10),
 key: Key,
+style: *const Style = &.{},
+parts: Parts = .{},
+
+pub const Parts = struct {
+    placeholder: *const Style = &.{},
+    /// `background` colors the caret.
+    caret: *const Style = &.{},
+    selection: *const Style = &.{},
+    /// Resize grip: `width`, `height`, `background`, `radius`, `opacity`.
+    thumb: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{
+        .width = .grow(),
+        .height = .fixed(96),
+        .padding = .init(6, 10, 6, 10),
+        .overflow = .scroll_y,
+        .background = .elevated,
+        .border_width = .all(1),
+        .border_color = .toned,
+        .hover = &.{ .border_color = .dimmed },
+        .focus = &.{ .border_color = .accent },
+    };
+    pub const placeholder: Style = .{ .foreground = .dimmed, .width = .grow(), .wrap = true };
+    pub const caret: Style = .{ .background = .current };
+    pub const selection: Style = .{ .background = .accent, .opacity = 0.4 };
+    pub const thumb: Style = .{
+        .width = .fixed(40),
+        .height = .fixed(5),
+        .background = .current,
+        .radius = .{ .fixed = 2 },
+        .opacity = 0.35,
+        .hover = &.{ .opacity = 0.6 },
+        .active = &.{ .opacity = 0.6 },
+    };
+};
 
 const TextArea = @This();
 
@@ -60,38 +85,22 @@ pub fn open(self: *const TextArea, frame: *Frame) !Element.Id {
     const rs = try ui.state.getOrCreate(.resize, ui.allocator, id);
     const handle_id = self.key.indexed(HANDLE_INDEX).hash();
 
-    const line_h = try ui.lineHeight(self.size.resolve(), null);
-    const min_h = line_h + self.padding.top() + self.padding.bottom();
+    const st = ui.states(id, .{ .hover = ui.hovering(handle_id) });
+    const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, st, null);
+    const padding = root.layout.padding;
+    const line_h = try ui.lineHeight(root.content.font_size, root.content.font);
+    const min_h = line_h + padding.top() + padding.bottom();
 
     if (ui.pressing(handle_id) and ui.input.mouseButton(.left).down and rs.box.h() > 0) {
         const my: f32 = @floatCast(ui.input.mouse_pos[1]);
         rs.height = @max(min_h, my - rs.box.y());
     }
 
-    var height = if (rs.height > 0) Element.sizing.Axis.fixed(@max(min_h, rs.height)) else self.height;
-    height.min = @max(height.min, min_h);
+    var config = root.element(.{ .interactive = true, .focusable = true });
+    if (rs.height > 0) config.height = .fixed(@max(min_h, rs.height));
+    config.height.min = @max(config.height.min, min_h);
 
-    const is_hovered = ui.hovering(id) or ui.hovering(handle_id);
-    const current_style = if (is_focused)
-        self.focused_style
-    else if (is_hovered)
-        if (self.hover_style) |hs| self.style.merge(hs) else self.style
-    else
-        self.style;
-
-    const decoration: Decoration = if (current_style.hasDecoration())
-        .{ .rect = current_style.toRect(&ui.theme) }
-    else
-        .none;
-
-    const element_id = try ui.open(self.key, .{
-        .width = self.width,
-        .height = height,
-        .overflow = .scroll_y,
-        .interactive = true,
-        .focusable = true,
-        .padding = self.padding,
-    }, decoration);
+    const element_id = try ui.openResolved(self.key, &root, config, null);
     return element_id;
 }
 
@@ -100,28 +109,23 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
     const id = self.key.hash();
     const is_focused = ui.focused(id);
     const items = self.buf.items;
-    const resolved_color = self.color.resolve(&ui.theme);
-    const size = self.size.resolve();
-
-    const display, const color = if (!is_focused and items.len == 0)
-        .{ self.placeholder, self.placeholder_color.resolve(&ui.theme) }
-    else
-        .{ items, resolved_color };
+    const content = ui.contents.items[ui.currentSlot()];
+    const padding = (ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, .{}, null)).layout.padding;
 
     if (is_focused) {
         const s = ui.state.get(.text_input, id).?;
         const scale = ui.content_scale;
 
-        const face = try ui.font.getFace(null);
+        const face = try ui.font.getFace(content.font);
         const m = try ui.state.getOrCreate(.measured, ui.allocator, id);
-        const content_w = m.width - self.padding.left() - self.padding.right();
+        const content_w = m.width - padding.left() - padding.right();
         const wrap_px: f32 = @max(0, content_w * scale);
-        const shaped = try face.shapeWrapped(items, size.value * scale, wrap_px);
+        const shaped = try face.shapeWrapped(items, content.font_size * scale, wrap_px);
         const line_h = shaped.line_height / scale;
         const scroll = try ui.state.getOrCreate(.scroll, ui.allocator, id);
         const content_origin = [2]f32{
-            m.box.x() + self.padding.left(),
-            m.box.y() + self.padding.top(),
+            m.box.x() + padding.left(),
+            m.box.y() + padding.top(),
         };
 
         edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
@@ -141,34 +145,33 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
         const sel_hi = @max(s.cursor, s.sel_anchor);
         const has_sel = sel_lo != sel_hi;
         const cursor_pos = util.posAtByte(shaped, s.cursor, scale);
-        const viewport_h = @max(0, m.height - self.padding.top() - self.padding.bottom());
+        const viewport_h = @max(0, m.height - padding.top() - padding.bottom());
         ensureCaretVisibleY(scroll, cursor_pos.y, line_h, viewport_h, shaped.height / scale);
         const scroll_offset = scroll.offset;
 
         if (has_sel) {
-            const sel_color = blk: {
-                const base: Color.Input = .primary;
-                var c = base.resolve(&ui.theme);
-                c[3] = 0.4;
-                break :blk c;
-            };
+            const selection = ui.resolveStyle(self.key.indexed(SELECTION_BASE).hash(), .{ .base = &base.selection, .user = self.parts.selection }, .{}, null);
             const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
             defer ui.allocator.free(spans);
             for (spans, 0..) |sp, i| {
-                _ = try ui.openAt(self.key.indexed(SELECTION_BASE + i), sp.x - scroll_offset[0], sp.y - scroll_offset[1], sp.w, line_h, .{}, .{ .rect = .{ .color = sel_color } });
+                _ = try ui.open(self.key.indexed(SELECTION_BASE + i), .at(sp.x - scroll_offset[0], sp.y - scroll_offset[1], sp.w, line_h), .{ .rect = selection.surface });
                 ui.close();
             }
         } else {
-            _ = try ui.openAt(self.key.indexed(CURSOR_INDEX), cursor_pos.x - scroll_offset[0], cursor_pos.y - scroll_offset[1], 1, line_h, .{}, .{ .rect = .{ .color = resolved_color } });
+            const caret = ui.resolveStyle(self.key.indexed(CURSOR_INDEX).hash(), .{ .base = &base.caret, .user = self.parts.caret }, .{}, null);
+            _ = try ui.open(self.key.indexed(CURSOR_INDEX), .at(cursor_pos.x - scroll_offset[0], cursor_pos.y - scroll_offset[1], 1, line_h), .{ .rect = caret.surface });
             ui.close();
         }
 
         if (has_sel) ui.state.selection_text = items[sel_lo..sel_hi];
     }
 
-    if (display.len > 0) {
-        var deco = try ui.textDecoration(display, size, null, true);
-        deco.text.color = color;
+    if (!is_focused and items.len == 0) {
+        if (self.placeholder.len > 0)
+            _ = try ui.styledText(self.key.indexed(BODY_INDEX), self.placeholder, .{ .base = &base.placeholder, .user = self.parts.placeholder }, .{});
+    } else if (items.len > 0) {
+        var deco = try ui.textDecoration(items, content.font_size, content.font, true);
+        deco.text.color = content.foreground;
         _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = .grow(), .height = .fit() }, deco);
         ui.close();
     }
@@ -178,21 +181,23 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
         const handle_id = self.key.indexed(HANDLE_INDEX).hash();
         const active = ui.hovering(handle_id) or ui.pressing(handle_id);
         if (active) ui.requestCursor(.resize_vertical);
-        var grip: Color.Input = .text;
-        var grip_color = grip.resolve(&ui.theme);
-        grip_color[3] = if (active) 0.6 else 0.35;
+        const thumb = ui.resolveStyle(self.key.indexed(PILL_INDEX).hash(), .{ .base = &base.thumb, .user = self.parts.thumb }, ui.states(handle_id, .{}), null);
+        const grip_w = if (thumb.layout.width.kind == .fixed) thumb.layout.width.value else GRIP_W;
+        const grip_h = if (thumb.layout.height.kind == .fixed) thumb.layout.height.value else GRIP_H;
 
         const cur_h = if (rs.height > 0) rs.height else rs.box.h();
-        const bottom = cur_h - self.padding.top();
-        const left = -self.padding.left();
+        const bottom = cur_h - padding.top();
+        const left = -padding.left();
 
         const hit_y = bottom - GRIP_HIT_H;
-        _ = try ui.openAt(self.key.indexed(HANDLE_INDEX), left, hit_y, rs.box.w(), GRIP_HIT_H, .{ .interactive = true }, .none);
+        var hit_config: Element.Config = .at(left, hit_y, rs.box.w(), GRIP_HIT_H);
+        hit_config.interactive = true;
+        _ = try ui.open(self.key.indexed(HANDLE_INDEX), hit_config, .none);
         ui.close();
 
-        const pill_y = bottom - (GRIP_HIT_H + GRIP_H) * 0.5;
-        const pill_x = (rs.box.w() - GRIP_W) * 0.5 + left;
-        _ = try ui.openAt(self.key.indexed(PILL_INDEX), pill_x, pill_y, GRIP_W, GRIP_H, .{}, .{ .rect = .{ .color = grip_color, .corner_radius = .all(2) } });
+        const pill_y = bottom - (GRIP_HIT_H + grip_h) * 0.5;
+        const pill_x = (rs.box.w() - grip_w) * 0.5 + left;
+        _ = try ui.open(self.key.indexed(PILL_INDEX), .at(pill_x, pill_y, grip_w, grip_h), .{ .rect = thumb.surface });
         ui.close();
     }
 

@@ -8,15 +8,15 @@ const Spacer = ui.component.Spacer;
 
 pub fn main(app: *knots.Frame) !void {
     try app.e(.{
-        Rect{ .dir = .layer, .key = .src(@src()) },
+        Rect{ .key = .src(@src()), .style = &.{ .direction = .layer } },
         .{
-            Rect{ .width = .fixed(96), .height = .fixed(96), .style = .{ .color = .info, .corner_radius = .{ .fixed = 48 } }, .key = .src(@src()) },
-            Rect{ .width = .fixed(64), .height = .fixed(64), .style = .{ .color = .success, .corner_radius = .{ .fixed = 32 } }, .key = .src(@src()) },
-            Rect{ .width = .fixed(32), .height = .fixed(32), .style = .{ .color = .@"error", .corner_radius = .{ .fixed = 16 } }, .key = .src(@src()) },
+            Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(96), .height = .fixed(96), .background = .info, .radius = .{ .fixed = 48 } } },
+            Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(64), .height = .fixed(64), .background = .success, .radius = .{ .fixed = 32 } } },
+            Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(32), .height = .fixed(32), .background = .@"error", .radius = .{ .fixed = 16 } } },
         },
     });
 
-    try app.e(Spacer{ .height = .fixed(20), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
 
-    try app.e(Text{ .content = "useful for badges, overlays, and z-stacked icons.", .size = .xs, .color = .dimmed, .key = .src(@src()) });
+    try app.e(Text{ .content = "useful for badges, overlays, and z-stacked icons.", .key = .src(@src()), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
 }

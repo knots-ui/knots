@@ -11,16 +11,18 @@ const Key = ui_mod.Key;
 const Style = ui_mod.Style;
 
 key: Key,
-width: Element.sizing.Axis = .grow(),
-height: Element.sizing.Axis = .fixed(64),
-style: Style = .{},
-inset: Element.Padding = .init(0, 0, 0, 0),
+/// `padding` insets the plot area.
+style: *const Style = &.{},
 x_domain: ?Domain = null,
 y_domain: ?Domain = null,
 series: []const Series = &.{},
 rules: []const Rule = &.{},
 
 const Graph = @This();
+
+pub const base = struct {
+    pub const root: Style = .{ .width = .grow(), .height = .fixed(64), .overflow = .hidden };
+};
 
 pub const Point = struct { x: f32, y: f32 };
 pub const Domain = struct { min: f32, max: f32 };
@@ -35,7 +37,7 @@ pub const Kind = enum { line, bars, points };
 pub const Series = struct {
     data: Data,
     kind: Kind = .line,
-    color: Color.Input = .primary,
+    color: Color.Input = .accent,
     thickness: f32 = 2,
     radius: f32 = 2,
     bar_gap: f32 = 1,
@@ -54,34 +56,26 @@ pub const Rule = struct {
 pub fn open(self: *const Graph, frame: *Frame) !Element.Id {
     const id = self.key.hash();
     _ = try frame.ui().state.getOrCreate(.measured, frame.ui().allocator, id);
-    const rect = self.style.toRect(&frame.ui().theme);
-    const needs_clip_shape = !rect.corner_radius.isZero() or !rect.border_width.isZero();
-    const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
-        .{ .rect = rect }
-    else
-        .none;
-    return try frame.ui().open(self.key, .{
-        .width = self.width,
-        .height = self.height,
-        .overflow = .hidden,
-    }, decoration);
+    return (try frame.ui().openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{}, .{})).id;
 }
 
 pub fn close(self: *const Graph, frame: *Frame) !void {
     const ui = frame.ui();
     const slot = ui.currentSlot();
-    const s = self.size(ui);
+    const content = ui.contents.items[slot];
+    const resolved = ui.resolveStyle(self.key.hash(), .{ .base = &base.root, .user = self.style }, .{}, &content);
+    const s = self.size(ui, &resolved.layout);
 
     var canvas_cmds: []const DrawCmd = &.{};
 
     if (s.w > 0 and s.h > 0) {
-        const plot = Plot.fromSize(s, self.inset);
+        const plot = Plot.fromSize(s, resolved.layout.padding);
         const graph_cmd_count = if (plot.w > 0 and plot.h > 0) self.maxGraphCommandCount() else 0;
-        const capacity = self.maxStyleCommandCount() + graph_cmd_count;
+        const capacity = maxStyleCommandCount(resolved.surface) + graph_cmd_count;
 
         if (capacity > 0) {
             var writer = CommandWriter{ .cmds = try frame.arena().alloc(DrawCmd, capacity) };
-            self.appendStyle(&writer, frame, s);
+            appendStyle(&writer, resolved.surface, s);
 
             if (graph_cmd_count > 0) {
                 const x_domain = expandDomain(self.x_domain orelse self.autoDomain(.x));
@@ -94,8 +88,8 @@ pub fn close(self: *const Graph, frame: *Frame) !void {
                     .y_inv_range = 1.0 / (y_domain.max - y_domain.min),
                 };
 
-                for (self.rules) |rule| appendRule(&writer, frame, mapper, rule);
-                for (self.series) |series| appendSeries(&writer, frame, mapper, series);
+                for (self.rules) |rule| appendRule(&writer, ui, &content, mapper, rule);
+                for (self.series) |series| appendSeries(&writer, ui, &content, mapper, series);
             }
 
             canvas_cmds = writer.items();
@@ -139,8 +133,8 @@ const Mapper = struct {
     }
 };
 
-fn maxStyleCommandCount(self: *const Graph) usize {
-    return if (self.style.hasDecoration()) 2 else 0;
+fn maxStyleCommandCount(surface: Style.Surface) usize {
+    return if (surface.isVisible()) 2 else 0;
 }
 
 fn maxGraphCommandCount(self: *const Graph) usize {
@@ -155,10 +149,9 @@ fn maxGraphCommandCount(self: *const Graph) usize {
     return count;
 }
 
-fn appendStyle(self: *const Graph, writer: *CommandWriter, frame: *Frame, s: Size) void {
-    if (!self.style.hasDecoration()) return;
+fn appendStyle(writer: *CommandWriter, rect: Style.Surface, s: Size) void {
+    if (!rect.isVisible()) return;
 
-    const rect = self.style.toRect(&frame.ui().theme);
     if (rect.color[3] > 0) {
         writer.append(.{ .fill_rect = .{
             .x = 0,
@@ -190,10 +183,10 @@ fn appendStyle(self: *const Graph, writer: *CommandWriter, frame: *Frame, s: Siz
     }
 }
 
-fn appendRule(writer: *CommandWriter, frame: *Frame, mapper: Mapper, rule: Rule) void {
+fn appendRule(writer: *CommandWriter, ui: *ui_mod.UI, content: *const Style.Content, mapper: Mapper, rule: Rule) void {
     if (rule.thickness <= 0) return;
 
-    const color = rule.color.resolve(&frame.ui().theme);
+    const color = content.color(rule.color, &ui.theme);
     if (color[3] <= 0) return;
 
     const plot = mapper.plot;
@@ -219,18 +212,18 @@ fn appendRule(writer: *CommandWriter, frame: *Frame, mapper: Mapper, rule: Rule)
     }
 }
 
-fn appendSeries(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
+fn appendSeries(writer: *CommandWriter, ui: *ui_mod.UI, content: *const Style.Content, mapper: Mapper, series_: Series) void {
     switch (series_.kind) {
-        .line => appendLine(writer, frame, mapper, series_),
-        .bars => appendBars(writer, frame, mapper, series_),
-        .points => appendPoints(writer, frame, mapper, series_),
+        .line => appendLine(writer, ui, content, mapper, series_),
+        .bars => appendBars(writer, ui, content, mapper, series_),
+        .points => appendPoints(writer, ui, content, mapper, series_),
     }
 }
 
-fn appendLine(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
+fn appendLine(writer: *CommandWriter, ui: *ui_mod.UI, content: *const Style.Content, mapper: Mapper, series_: Series) void {
     if (series_.thickness <= 0) return;
 
-    const color = series_.color.resolve(&frame.ui().theme);
+    const color = content.color(series_.color, &ui.theme);
     if (color[3] <= 0) return;
 
     switch (series_.data) {
@@ -273,8 +266,8 @@ fn appendLine(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Se
     }
 }
 
-fn appendBars(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
-    const color = series_.color.resolve(&frame.ui().theme);
+fn appendBars(writer: *CommandWriter, ui: *ui_mod.UI, content: *const Style.Content, mapper: Mapper, series_: Series) void {
+    const color = content.color(series_.color, &ui.theme);
     if (color[3] <= 0) return;
 
     const baseline = mapper.y(series_.baseline);
@@ -322,10 +315,10 @@ fn appendBars(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Se
     }
 }
 
-fn appendPoints(writer: *CommandWriter, frame: *Frame, mapper: Mapper, series_: Series) void {
+fn appendPoints(writer: *CommandWriter, ui: *ui_mod.UI, content: *const Style.Content, mapper: Mapper, series_: Series) void {
     if (series_.radius <= 0) return;
 
-    const color = series_.color.resolve(&frame.ui().theme);
+    const color = content.color(series_.color, &ui.theme);
     if (color[3] <= 0) return;
 
     switch (series_.data) {
@@ -429,11 +422,11 @@ const Plot = struct {
     }
 };
 
-fn size(self: *const Graph, ui: *ui_mod.UI) Size {
+fn size(self: *const Graph, ui: *ui_mod.UI, l: *const Style.Layout) Size {
     const measured = ui.state.get(.measured, self.key.hash());
     return .{
-        .w = if (measured) |m| fallbackSize(m.width, self.width) else axisFallback(self.width),
-        .h = if (measured) |m| fallbackSize(m.height, self.height) else axisFallback(self.height),
+        .w = if (measured) |m| fallbackSize(m.width, l.width) else axisFallback(l.width),
+        .h = if (measured) |m| fallbackSize(m.height, l.height) else axisFallback(l.height),
     };
 }
 

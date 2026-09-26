@@ -7,25 +7,89 @@ const ui_mod = @import("../root.zig");
 const Color = ui_mod.Color;
 const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
-const Layer = ui_mod.Layer;
-const Size = ui_mod.Size;
 const State = ui_mod.State;
 const Style = ui_mod.Style;
+const UI = ui_mod.UI;
 
 value: *Color,
 key: Key,
+/// The trigger; also styles the hex field in the popup.
+style: *const Style = &.{},
+parts: Parts = .{},
 
-width: Element.sizing.Axis = .fixed(180),
-height: Element.sizing.Axis = .fit(),
-size: Size.Input = .sm,
-style: Style = .{ .color = .muted, .corner_radius = .sm, .border_color = .toned, .border_width = .all(1) },
-focused_style: Style = .{ .color = .elevated, .corner_radius = .sm, .border_color = .primary, .border_width = .all(1) },
-popover_style: Style = .{ .color = .elevated, .corner_radius = .md, .border_color = .toned, .border_width = .all(1) },
-text_color: Color.Input = .text,
-swatch_size: f32 = 18,
-popover_width: f32 = 240,
-sv_height: f32 = 150,
-strip_height: f32 = 16,
+pub const Parts = struct {
+    /// Fixed `width` / `height` size the color swatch.
+    swatch: *const Style = &.{},
+    /// A fixed `width` sets the popup width.
+    popup: *const Style = &.{},
+    /// Saturation/value area; a fixed `height` sizes it.
+    area: *const Style = &.{},
+    /// Hue and alpha strips; a fixed `height` sizes them.
+    strip: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{
+        .width = .fixed(180),
+        .direction = .row,
+        .@"align" = .center,
+        .gap = 8,
+        .padding = .xy(8, 4),
+        .background = .muted,
+        .radius = .sm,
+        .border_width = .all(1),
+        .border_color = .toned,
+        .focus = &.{ .background = .elevated, .border_color = .accent },
+        .open = &.{ .background = .elevated, .border_color = .accent },
+    };
+    pub const swatch: Style = .{ .width = .fixed(18), .height = .fixed(18) };
+    pub const popup: Style = .{
+        .width = .fixed(240),
+        .direction = .column,
+        .padding = .all(10),
+        .gap = 8,
+        .overflow = .scroll_y,
+        .layer = .dropdown,
+        .background = .elevated,
+        .radius = .md,
+        .border_width = .all(1),
+        .border_color = .toned,
+    };
+    pub const area: Style = .{ .width = .grow(), .height = .fixed(150) };
+    pub const strip: Style = .{ .width = .grow(), .height = .fixed(16) };
+};
+
+/// Resolved geometry shared by the trigger and the popup.
+const Metrics = struct {
+    swatch_w: f32,
+    swatch_h: f32,
+    popup_w: f32,
+    inner_w: f32,
+    area_h: f32,
+    strip_h: f32,
+};
+
+fn fixedOr(axis: Element.sizing.Axis, fallback: f32) f32 {
+    return if (axis.kind == .fixed) axis.value else fallback;
+}
+
+fn metrics(self: *const ColorPicker, ui: *UI) Metrics {
+    const content = ui.parentContent();
+    const theme = &ui.theme;
+    const swatch = Style.resolve(.{ .base = &base.swatch, .user = self.parts.swatch }, .{}, &content, theme);
+    const popup = Style.resolve(.{ .base = &base.popup, .user = self.parts.popup }, .{}, &content, theme);
+    const area = Style.resolve(.{ .base = &base.area, .user = self.parts.area }, .{}, &content, theme);
+    const strip = Style.resolve(.{ .base = &base.strip, .user = self.parts.strip }, .{}, &content, theme);
+    const popup_w = fixedOr(popup.layout.width, 240);
+    return .{
+        .swatch_w = fixedOr(swatch.layout.width, 18),
+        .swatch_h = fixedOr(swatch.layout.height, 18),
+        .popup_w = popup_w,
+        .inner_w = @max(0, popup_w - popup.layout.padding.left() - popup.layout.padding.right()),
+        .area_h = fixedOr(area.layout.height, 150),
+        .strip_h = fixedOr(strip.layout.height, 16),
+    };
+}
 
 const ColorPicker = @This();
 
@@ -70,19 +134,11 @@ pub fn open(self: *const ColorPicker, frame: *Frame) !Element.Id {
         }
     }
 
-    var h = self.height;
-    h.min = @max(self.swatch_size + 8, try ui.lineHeight(self.size.resolve(), null) + 8);
-
-    const current_style = if (s.open or ui.focused(id)) self.focused_style else self.style;
-    return try ui.open(self.key, .{
-        .width = self.width,
-        .height = h,
-        .direction = .row,
-        .alignment = .center,
-        .gap = 8,
-        .padding = .init(4, 8, 4, 8),
-        .interactive = true,
-    }, .{ .rect = current_style.toRect(&ui.theme) });
+    const m = self.metrics(ui);
+    const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, ui.states(id, .{ .open = s.open }), null);
+    var config = root.element(.{ .interactive = true });
+    config.height.min = @max(config.height.min, @max(m.swatch_h + 8, try ui.lineHeight(root.content.font_size, root.content.font) + 8));
+    return try ui.openResolved(self.key, &root, config, null);
 }
 
 pub fn interact(self: *const ColorPicker, frame: *Frame) !Response {
@@ -99,44 +155,46 @@ pub fn close(self: *const ColorPicker, frame: *Frame) !void {
     const ui = frame.ui();
     const id = self.key.hash();
     const s = try ui.state.getOrCreate(.color_picker, ui.allocator, id);
+    const content = ui.contents.items[ui.currentSlot()];
+    const m = self.metrics(ui);
 
     var swatch_cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    try appendCheckerboard(&swatch_cmds, arena, self.swatch_size, self.swatch_size, 6);
+    try appendCheckerboard(&swatch_cmds, arena, m.swatch_w, m.swatch_h, 6);
     try swatch_cmds.append(arena, .{ .fill_rect = .{
         .x = 0,
         .y = 0,
-        .w = self.swatch_size,
-        .h = self.swatch_size,
+        .w = m.swatch_w,
+        .h = m.swatch_h,
         .color = self.value.value,
         .corner_radius = .all(3),
     } });
     try swatch_cmds.append(arena, .{ .stroke_rect = .{
         .x = 0.5,
         .y = 0.5,
-        .w = self.swatch_size - 1,
-        .h = self.swatch_size - 1,
+        .w = m.swatch_w - 1,
+        .h = m.swatch_h - 1,
         .color = .{ 0, 0, 0, 0.35 },
         .corner_radius = .all(2.5),
         .thickness = 1,
     } });
     _ = try ui.open(self.key.indexed(SWATCH_INDEX), .{
-        .width = .fixed(self.swatch_size),
-        .height = .fixed(self.swatch_size),
+        .width = .fixed(m.swatch_w),
+        .height = .fixed(m.swatch_h),
     }, .{ .canvas = .{ .cmds = swatch_cmds.items } });
     ui.close();
 
     {
         const hex = try formatHexAlloc(frame.arena(), self.value.*, true);
-        var deco = try ui.textDecoration(hex, self.size.resolve(), null, false);
-        deco.text.color = self.text_color.resolve(&ui.theme);
+        var deco = try ui.textDecoration(hex, content.font_size, content.font, false);
+        deco.text.color = content.foreground;
         _ = try ui.open(self.key.indexed(TEXT_INDEX), .{ .width = .fit(), .height = .fit() }, deco);
         ui.close();
     }
 
     ui.close();
 
-    if (s.open) try self.renderPopover(frame, s);
+    if (s.open) try self.renderPopover(frame, s, &content, m);
 }
 
 fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
@@ -247,14 +305,14 @@ fn isCommittableHexLen(hex: []const u8, allow_shorthand: bool) bool {
     return len == 6 or len == 8 or (allow_shorthand and (len == 3 or len == 4));
 }
 
-fn renderPopover(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+fn renderPopover(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, parent: *const Style.Content, m: Metrics) !void {
     const ui = frame.ui();
     const anchor = s.anchor_box;
     const viewport = s.viewport_box;
     const popup_id = self.key.indexed(POPUP_INDEX).hash();
 
-    const line_h = try ui.lineHeight(self.size.resolve(), null);
-    const popup_h = self.sv_height + self.strip_height * 2 + line_h + 76;
+    const line_h = try ui.lineHeight(parent.font_size, parent.font);
+    const popup_h = m.area_h + m.strip_h * 2 + line_h + 76;
     const viewport_bottom = viewport.y() + viewport.h();
     const space_below = viewport_bottom - (anchor.y() + anchor.h());
     const space_above = anchor.y() - viewport.y();
@@ -263,21 +321,16 @@ fn renderPopover(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker)
     const popup_y = if (open_above) anchor.y() - @min(popup_h, max_h) else anchor.y() + anchor.h();
 
     _ = try ui.state.getOrCreate(.measured, ui.allocator, popup_id);
-    _ = try ui.openRoot(self.key.indexed(POPUP_INDEX), anchor.x(), popup_y, .{
-        .direction = .column,
-        .width = .fixed(self.popover_width),
-        .height = .{ .kind = .fit, .max = max_h },
-        .overflow = .scroll_y,
-        .z_index = Layer.dropdown.index(),
-        .padding = .init(10, 10, 10, 10),
-        .gap = 8,
-        .interactive = true,
-    }, .{ .rect = self.popover_style.toRect(&ui.theme) });
+    const popup = ui.resolveStyle(popup_id, .{ .base = &base.popup, .user = self.parts.popup }, .{}, parent);
+    var config = popup.element(.{ .interactive = true });
+    config.width = .fixed(m.popup_w);
+    config.height = .{ .kind = .fit, .max = max_h };
+    _ = try ui.openResolved(self.key.indexed(POPUP_INDEX), &popup, config, .{ anchor.x(), popup_y });
 
-    try self.renderSvControl(frame, s);
-    try self.renderHueControl(frame, s);
-    try self.renderAlphaControl(frame, s);
-    try self.renderPreview(frame, s);
+    try self.renderSvControl(frame, s, m);
+    try self.renderHueControl(frame, s, m);
+    try self.renderAlphaControl(frame, s, m);
+    try self.renderPreview(frame, s, m);
     try self.renderHexField(frame, s);
 
     ui.close();
@@ -296,15 +349,15 @@ fn isPointerInside(self: *const ColorPicker, frame: *Frame, s: *const State.Colo
     return false;
 }
 
-fn renderSvControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+fn renderSvControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, m: Metrics) !void {
     const ui = frame.ui();
     const id = self.key.indexed(SV_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    const w = self.popover_width - 20;
-    const h = self.sv_height;
+    const w = m.inner_w;
+    const h = m.area_h;
     const hue_color = hsvToLinearColor(s.hue, 1, 1, 1);
     const marker_x = s.saturation * w;
     const marker_y = (1.0 - s.value) * h;
@@ -355,15 +408,15 @@ fn renderSvControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicke
     ui.close();
 }
 
-fn renderHueControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+fn renderHueControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, m: Metrics) !void {
     const ui = frame.ui();
     const id = self.key.indexed(HUE_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    const w = self.popover_width - 20;
-    const h = self.strip_height;
+    const w = m.inner_w;
+    const h = m.strip_h;
     const segment_w = w / 6.0;
 
     for (0..6) |i| {
@@ -393,15 +446,15 @@ fn renderHueControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPick
     ui.close();
 }
 
-fn renderAlphaControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+fn renderAlphaControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, m: Metrics) !void {
     const ui = frame.ui();
     const id = self.key.indexed(ALPHA_INDEX).hash();
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    const w = self.popover_width - 20;
-    const h = self.strip_height;
+    const w = m.inner_w;
+    const h = m.strip_h;
     try appendCheckerboard(&cmds, arena, w, h, 8);
 
     const solid = hsvToLinearColor(s.hue, s.saturation, s.value, 1).value;
@@ -427,11 +480,11 @@ fn renderAlphaControl(self: *const ColorPicker, frame: *Frame, s: *State.ColorPi
     ui.close();
 }
 
-fn renderPreview(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
+fn renderPreview(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, m: Metrics) !void {
     const ui = frame.ui();
     var cmds: std.ArrayList(Decoration.DrawCmd) = .empty;
     const arena = frame.arena();
-    const w = self.popover_width - 20;
+    const w = m.inner_w;
     const h: f32 = 28;
     const half = w * 0.5;
     const original = if (s.has_original) s.original_color else self.value.value;
@@ -452,24 +505,21 @@ fn renderPreview(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker)
 fn renderHexField(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker) !void {
     const ui = frame.ui();
     const id = self.key.indexed(HEX_INDEX).hash();
-    const focused = ui.focused(id);
-    const style = if (focused) self.focused_style else self.style;
-    const line_h = try ui.lineHeight(self.size.resolve(), null);
+    const field = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, ui.states(id, .{}), null);
+    const line_h = try ui.lineHeight(field.content.font_size, field.content.font);
 
-    _ = try ui.open(self.key.indexed(HEX_INDEX), .{
-        .width = .grow(),
-        .height = .fixed(line_h + 12),
-        .alignment = .center,
-        .padding = .init(0, 8, 0, 8),
-        .interactive = true,
-    }, .{ .rect = style.toRect(&ui.theme) });
+    var config = field.element(.{ .interactive = true });
+    config.width = .grow();
+    config.height = .fixed(line_h + 12);
+    config.padding = .xy(8, 0);
+    _ = try ui.openWith(self.key.indexed(HEX_INDEX), config, .{ .rect = field.surface }, .{ .content = field.content });
 
     const display = if (s.editing_hex)
         s.hex_buf[0..s.hex_len]
     else
         try formatHexAlloc(frame.arena(), self.value.*, true);
-    var deco = try ui.textDecoration(display, self.size.resolve(), null, false);
-    deco.text.color = self.text_color.resolve(&ui.theme);
+    var deco = try ui.textDecoration(display, field.content.font_size, field.content.font, false);
+    deco.text.color = field.content.foreground;
     _ = try ui.open(self.key.indexed(HEX_INDEX + 100), .{ .width = .fit(), .height = .fit() }, deco);
     ui.close();
 

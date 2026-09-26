@@ -15,7 +15,7 @@ const canvas_height = 480;
 var canvas_effect: u32 = 0;
 
 pub fn main(app: *knots.Frame) !void {
-    const controls = Rect{ .width = .fixed(220), .key = .src(@src()) };
+    const controls = Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(220) } };
     _ = try controls.open(app);
     const selection = try app.interact(SelectInput(Effect){
         .key = .src(@src()),
@@ -24,7 +24,7 @@ pub fn main(app: *knots.Frame) !void {
     if (selection.selected) |selected| canvas_effect = selected.index;
     try controls.close(app);
 
-    try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
     var commands: std.ArrayList(Canvas.DrawCmd) = .empty;
     var painter = Canvas.Painter{
@@ -40,17 +40,13 @@ pub fn main(app: *knots.Frame) !void {
     }
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .height = .grow(),
             .key = .src(@src()),
-            .style = .{ .color = .elevated, .corner_radius = .sm },
-            .overflow = .scroll,
+            .style = &.{ .width = .grow(), .height = .grow(), .background = .elevated, .radius = .sm, .overflow = .scroll },
         },
         .{Canvas{
-            .width = .fixed(canvas_width),
-            .height = .fixed(canvas_height),
             .commands = commands.items,
             .key = .src(@src()),
+            .style = &.{ .width = .fixed(canvas_width), .height = .fixed(canvas_height) },
         }},
     });
 }

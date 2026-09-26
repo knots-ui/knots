@@ -16,9 +16,7 @@ pub const source = struct {
         frames += 1;
         try frame.e(knots.component.Rect{
             .key = .str("counter"),
-            .width = .fixed(@floatFromInt(frames)),
-            .height = .fixed(10),
-            .style = .{ .color = .primary },
+            .style = &.{ .width = .fixed(@floatFromInt(frames)), .height = .fixed(10), .background = .primary },
         });
     }
 };

@@ -1,6 +1,7 @@
-const Frame = @import("../root.zig").Frame;
-
-const Key = @import("../root.zig").Key;
+const ui_mod = @import("../root.zig");
+const Frame = ui_mod.Frame;
+const Key = ui_mod.Key;
+const Style = ui_mod.Style;
 const Element = @import("layout").Element;
 const types = @import("render_types");
 const render = @import("render");
@@ -36,12 +37,20 @@ pub const SamplingMode = enum {
 };
 
 source: Source,
-width: Element.sizing.Axis = .grow(),
-height: Element.sizing.Axis = .grow(),
-position: Element.Position = .static,
-tint: [4]f32 = .{ 1, 1, 1, 1 },
 sampling_mode: SamplingMode = .alpha,
 key: Key,
+/// `foreground` tints the image.
+style: *const Style = &.{},
+
+pub const base = struct {
+    /// White foreground so the image does not inherit the text color as tint.
+    pub const root: Style = .{
+        .width = .grow(),
+        .height = .grow(),
+        .overflow = .hidden,
+        .foreground = .{ .color = .{ .value = .{ 1, 1, 1, 1 } } },
+    };
+};
 
 const Image = @This();
 
@@ -60,16 +69,13 @@ pub fn open(self: *const Image, frame: *Frame) !Element.Id {
         } },
     };
 
-    return try frame.ui().open(self.key, .{
-        .width = self.width,
-        .height = self.height,
-        .position = self.position,
-        .overflow = .hidden,
-    }, .{ .image = .{
+    const ui = frame.ui();
+    const resolved = ui.resolveStyle(self.key.hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
+    return try ui.openWith(self.key, resolved.element(.{}), .{ .image = .{
         .source = source,
-        .tint = self.tint,
+        .tint = resolved.content.foreground,
         .@"opaque" = self.sampling_mode == .@"opaque",
-    } });
+    } }, .{ .content = resolved.content });
 }
 
 pub fn close(_: *const Image, frame: *Frame) !void {

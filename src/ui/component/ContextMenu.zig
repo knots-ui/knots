@@ -2,13 +2,10 @@ const std = @import("std");
 
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
-const Grid = @import("layout").Grid;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
 
-const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
-const Layer = ui_mod.Layer;
 const State = ui_mod.State;
 const Style = ui_mod.Style;
 
@@ -23,26 +20,12 @@ pub fn ContextMenu(comptime Menu: type) type {
     return struct {
         key: Key,
         menu: Menu,
-
-        @"align": Element.Align = .start,
-        justify: Element.Justify = .start,
-        width: Element.sizing.Axis = .fit(),
-        height: Element.sizing.Axis = .fit(),
-        padding: Element.Padding = .init(0, 0, 0, 0),
-        dir: Element.Direction = .row,
-        overflow: Element.Overflow = .visible,
-        position: Element.Position = .static,
-        gap: f32 = 0,
-        style: Style = .{},
-        grid_template: ?Grid.Template = null,
-        grid_placement: ?Grid.Placement = null,
-
-        menu_width: f32 = 180,
         fallback_menu_height: f32 = 180,
-        popup_z_index: Layer = .popup,
-        popup_padding: Element.Padding = .init(4, 4, 4, 4),
-        popup_gap: f32 = 2,
-        popup_style: Style = .{ .color = .elevated, .corner_radius = .sm, .border_color = .toned, .border_width = .all(1) },
+        style: *const Style = &.{},
+        parts: Parts = .{},
+
+        pub const Parts = context_parts;
+        pub const base = context_base;
 
         const Self = @This();
         const POPUP_INDEX: usize = 1;
@@ -72,41 +55,24 @@ pub fn ContextMenu(comptime Menu: type) type {
                 frame.requestRedraw();
             }
 
-            const decoration: Decoration = if (self.style.hasDecoration())
-                .{ .rect = self.style.toRect(&ui.theme) }
-            else
-                .none;
-
-            const element_id = try ui.open(self.key, .{
-                .alignment = self.@"align",
-                .justify = self.justify,
-                .width = self.width,
-                .height = self.height,
-                .padding = self.padding,
-                .overflow = self.overflow,
-                .position = self.position,
-                .direction = self.dir,
-                .gap = self.gap,
-                .interactive = true,
-                .grid_template = self.grid_template,
-                .grid_placement = self.grid_placement,
-            }, decoration);
-            try ui.setAccessibility(element_id, .{
+            const root = try ui.openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{ .open = s.open }, .{ .interactive = true });
+            try ui.setAccessibility(root.id, .{
                 .role = .menu,
                 .state = .{ .expanded = s.open },
             });
-            return element_id;
+            return root.id;
         }
 
         pub fn close(self: *const Self, frame: *Frame) !void {
             const ui = frame.ui();
             const id = self.key.hash();
+            const content = ui.contents.items[ui.currentSlot()];
             ui.close();
 
             const s = try ui.state.getOrCreate(.context_menu, ui.allocator, id);
             if (!s.open) return;
 
-            try self.renderPopup(frame, s);
+            try self.renderPopup(frame, s, &content);
 
             const popup_id = self.key.indexed(POPUP_INDEX).hash();
             if (ui.input.mouseButton(.left).released and ui.isHoveredWithin(popup_id)) {
@@ -115,7 +81,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             }
         }
 
-        fn renderPopup(self: *const Self, frame: *Frame, s: *State.ContextMenu) !void {
+        fn renderPopup(self: *const Self, frame: *Frame, s: *State.ContextMenu, parent: *const Style.Content) !void {
             const ui = frame.ui();
             const popup_key = self.key.indexed(POPUP_INDEX);
             const popup_id = popup_key.hash();
@@ -128,19 +94,15 @@ pub fn ContextMenu(comptime Menu: type) type {
                 frame.requestRedraw();
             }
 
+            const popup = ui.resolveStyle(popup_id, .{ .base = &base.popup, .user = self.parts.popup }, .{}, parent);
             const measured_h = if (measured_box.h() > 0) measured_box.h() else self.fallback_menu_height;
-            const p = placePopup(s.viewport_box, s.click_pos, self.menu_width, measured_h);
+            const requested_w = if (popup.layout.width.kind == .fixed) popup.layout.width.value else 180;
+            const p = placePopup(s.viewport_box, s.click_pos, requested_w, measured_h);
 
-            _ = try ui.openRoot(popup_key, p.x, p.y, .{
-                .direction = .column,
-                .width = .fixed(p.width),
-                .height = .{ .kind = .fit, .max = p.max_height },
-                .overflow = .scroll_y,
-                .z_index = self.popup_z_index.index(),
-                .padding = self.popup_padding,
-                .gap = self.popup_gap,
-                .interactive = true,
-            }, .{ .rect = self.popup_style.toRect(&ui.theme) });
+            var config = popup.element(.{ .interactive = true });
+            config.width = .fixed(p.width);
+            config.height = .{ .kind = .fit, .max = p.max_height };
+            _ = try ui.openResolved(popup_key, &popup, config, .{ p.x, p.y });
 
             try frame.e(self.menu);
 
@@ -148,6 +110,28 @@ pub fn ContextMenu(comptime Menu: type) type {
         }
     };
 }
+
+const context_parts = struct {
+    /// A fixed `width` sizes the popup.
+    popup: *const Style = &.{},
+};
+
+const context_base = struct {
+    pub const root: Style = .{};
+    pub const popup: Style = .{
+        .width = .fixed(180),
+        .direction = .column,
+        .padding = .all(4),
+        .gap = 2,
+        .overflow = .scroll_y,
+        .layer = .popup,
+        .background = .elevated,
+        .foreground = .text,
+        .radius = .sm,
+        .border_width = .all(1),
+        .border_color = .toned,
+    };
+};
 
 fn openAtPointer(s: *State.ContextMenu, mouse_pos: [2]f64) void {
     s.open = true;

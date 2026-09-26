@@ -55,16 +55,12 @@ fn frameCb(view: *knots.View, frame: *ui.Frame) !void {
     try frame.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .fixed(w),
-            .height = .fixed(h),
-            .@"align" = .center,
-            .justify = .center,
+            .style = &.{ .width = .fixed(w), .height = .fixed(h), .@"align" = .center, .justify = .center },
         },
         .{Canvas{
             .commands = &commands,
             .key = .src(@src()),
-            .width = .fixed(triangle_width),
-            .height = .fixed(triangle_height),
+            .style = &.{ .width = .fixed(triangle_width), .height = .fixed(triangle_height) },
         }},
     });
 

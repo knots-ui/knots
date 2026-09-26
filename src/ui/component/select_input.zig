@@ -2,11 +2,8 @@ const std = @import("std");
 
 const ui_mod = @import("../root.zig");
 
-const Layer = ui_mod.Layer;
-const State = ui_mod.State;
+const UI = ui_mod.UI;
 const Style = ui_mod.Style;
-const Color = ui_mod.Color;
-const Size = ui_mod.Size;
 const Key = ui_mod.Key;
 const Decoration = ui_mod.Decoration;
 
@@ -38,18 +35,12 @@ pub fn SelectInput(comptime T: type) type {
         key: Key,
 
         placeholder: []const u8 = "Select...",
-        width: Element.sizing.Axis = .grow(),
-        height: Element.sizing.Axis = .fit(),
-        size: Size.Input = .md,
-        font: ?[]const u8 = null,
-        color: Color.Input = .text,
-        placeholder_color: Color.Input = .dimmed,
-        style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
-        hover_style: ?Style.Override = .{ .border_color = .dimmed },
-        focused_style: Style = .{ .color = .elevated, .border_color = .primary, .border_width = .all(1) },
-        option_style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
-        option_hover_color: Color.Input = .muted,
-        dropdown_z_index: Layer = .dropdown,
+        style: *const Style = &.{},
+        parts: Parts = .{},
+
+        pub const Parts = select_parts;
+        pub const base = select_base;
+
         const Self = @This();
 
         pub const Selection = struct {
@@ -155,32 +146,10 @@ pub fn SelectInput(comptime T: type) type {
                 if (ui.state.hovered != id and !ui.isHoveredWithin(popup_id)) s.open = false;
             }
 
-            const is_hovered = ui.hovering(id);
-            const current_style = if (s.open)
-                self.focused_style
-            else if (is_hovered)
-                if (self.hover_style) |hs| self.style.merge(hs) else self.style
-            else
-                self.style;
-
-            var h = self.height;
-            h.min = try ui.lineHeight(self.size.resolve(), self.font) + 12;
-
-            const decoration: Decoration = if (current_style.hasDecoration())
-                .{ .rect = current_style.toRect(&ui.theme) }
-            else
-                .none;
-
-            const element_id = try ui.open(self.key, .{
-                .width = self.width,
-                .height = h,
-                .direction = .row,
-                .alignment = .center,
-                .justify = .space_between,
-                .padding = .init(6, 10, 6, 10),
-                .interactive = true,
-                .focusable = true,
-            }, decoration);
+            const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, ui.states(id, .{ .open = s.open }), null);
+            var config = root.element(.{ .interactive = true, .focusable = true });
+            config.height.min = @max(config.height.min, try ui.lineHeight(root.content.font_size, root.content.font) + 12);
+            const element_id = try ui.openResolved(self.key, &root, config, null);
             const accessibility_name = if (s.selected) |sel|
                 if (sel < self.labels.len) self.labels[sel] else self.placeholder
             else
@@ -197,27 +166,24 @@ pub fn SelectInput(comptime T: type) type {
             const ui = frame.ui();
             const id = self.key.hash();
             const s = try ui.state.getOrCreate(.select_input, ui.allocator, id);
-            const size = self.size.resolve();
+            const content = ui.contents.items[ui.currentSlot()];
+            const st: Style.States = .{ .open = s.open };
 
-            const display_text, const text_color = if (s.selected) |sel|
-                if (sel < self.labels.len)
-                    .{ self.labels[sel], self.color.resolve(&ui.theme) }
-                else
-                    .{ self.placeholder, self.placeholder_color.resolve(&ui.theme) }
-            else
-                .{ self.placeholder, self.placeholder_color.resolve(&ui.theme) };
-
-            {
-                var deco = try ui.textDecoration(display_text, size, self.font, false);
-                deco.text.color = text_color;
+            const selected_label: ?[]const u8 = if (s.selected) |sel| if (sel < self.labels.len) self.labels[sel] else null else null;
+            if (selected_label) |label| {
+                var deco = try ui.textDecoration(label, content.font_size, content.font, false);
+                deco.text.color = content.foreground;
                 _ = try ui.open(self.key.indexed(1), .{ .width = .fit(), .height = .fit() }, deco);
                 ui.close();
+            } else {
+                _ = try ui.styledText(self.key.indexed(1), self.placeholder, .{ .base = &base.placeholder, .user = self.parts.placeholder }, st);
             }
 
             {
-                const icon_size: f32 = @max(10, size.value * 0.55);
+                const icon = ui.resolveStyle(self.key.indexed(2).hash(), .{ .base = &base.icon, .user = self.parts.icon }, st, null);
+                const icon_size: f32 = if (icon.layout.width.kind == .fixed) icon.layout.width.value else @max(10, icon.content.font_size * 0.55);
                 const mid = icon_size * 0.5;
-                const icon_color = self.color.resolve(&ui.theme);
+                const icon_color = icon.content.foreground;
                 const cmds = try frame.arena().alloc(Decoration.DrawCmd, 2);
 
                 if (s.open) {
@@ -248,7 +214,7 @@ pub fn SelectInput(comptime T: type) type {
                     } };
                 }
 
-                _ = try ui.open(self.key.indexed(2), .{ .width = .fixed(icon_size), .height = .fixed(icon_size) }, .{ .canvas = .{ .cmds = cmds } });
+                _ = try ui.openWith(self.key.indexed(2), .{ .width = .fixed(icon_size), .height = .fixed(icon_size) }, .{ .canvas = .{ .cmds = cmds } }, .{ .content = icon.content });
                 ui.close();
             }
 
@@ -257,8 +223,10 @@ pub fn SelectInput(comptime T: type) type {
             if (s.open) {
                 const anchor = s.anchor_box;
                 const viewport = s.viewport_box;
+                const popup_key = self.key.indexed(3);
+                const popup = ui.resolveStyle(popup_key.hash(), .{ .base = &base.popup, .user = self.parts.popup }, .{}, &content);
 
-                const line_h = try ui.lineHeight(size, self.font);
+                const line_h = try ui.lineHeight(content.font_size, content.font);
                 const item_h = line_h + 12 + 2;
                 const dropdown_h = item_h * @as(f32, @floatFromInt(self.labels.len)) + 4;
 
@@ -270,45 +238,29 @@ pub fn SelectInput(comptime T: type) type {
                 const max_h = if (open_above) space_above else space_below;
                 const popup_y = if (open_above) anchor.y() - @min(dropdown_h, max_h) else anchor.y() + anchor.h();
 
-                const list_id = try ui.openRoot(self.key.indexed(3), anchor.x(), popup_y, .{
-                    .direction = .column,
-                    .width = .fixed(anchor.w()),
-                    .height = .{ .kind = .fit, .max = max_h },
-                    .overflow = .scroll_y,
-                    .z_index = self.dropdown_z_index.index(),
-                    .padding = .init(2, 0, 2, 0),
-                }, .{ .rect = self.option_style.toRect(&ui.theme) });
+                var config = popup.element(.{});
+                config.width = .fixed(anchor.w());
+                config.height = .{ .kind = .fit, .max = max_h };
+                const list_id = try ui.openResolved(popup_key, &popup, config, .{ anchor.x(), popup_y });
                 try ui.setAccessibility(list_id, .{ .role = .list_box, .parent = self.key.hash() });
 
                 for (self.labels, 0..) |option, i| {
                     const opt_key = self.key.indexed(4 + i);
                     const opt_id = opt_key.hash();
-                    const is_hovered = ui.hovering(opt_id);
                     const is_selected = if (s.selected) |sel| sel == i else false;
 
-                    const opt_bg: Decoration = if (is_hovered or is_selected)
-                        .{ .rect = .{
-                            .color = self.option_hover_color.resolve(&ui.theme),
-                            .corner_radius = ui.theme.radius.scale(0.5),
-                        } }
-                    else
-                        .none;
-
                     {
-                        const option_id = try ui.open(opt_key, .{
-                            .width = .grow(),
-                            .padding = .init(7, 10, 7, 10),
-                            .interactive = true,
-                        }, opt_bg);
-                        try ui.setAccessibility(option_id, .{
+                        const option_styled = try ui.openStyled(opt_key, .{ .base = &base.option, .user = self.parts.option }, ui.states(opt_id, .{ .checked = is_selected }), .{ .interactive = true });
+                        try ui.setAccessibility(option_styled.id, .{
                             .role = .list_box_option,
                             .name = option,
                             .state = .{ .selected = is_selected },
                         });
 
                         {
-                            var opt_deco = try ui.textDecoration(option, size, self.font, false);
-                            opt_deco.text.color = self.color.resolve(&ui.theme);
+                            const opt_content = option_styled.resolved.content;
+                            var opt_deco = try ui.textDecoration(option, opt_content.font_size, opt_content.font, false);
+                            opt_deco.text.color = opt_content.foreground;
                             _ = try ui.open(self.key.indexed(4 + self.labels.len + i), .{ .width = .fit(), .height = .fit() }, opt_deco);
                             ui.close();
                         }
@@ -322,3 +274,46 @@ pub fn SelectInput(comptime T: type) type {
         }
     };
 }
+
+const select_parts = struct {
+    placeholder: *const Style = &.{},
+    /// The chevron; `foreground` colors it, a fixed `width` sizes it.
+    icon: *const Style = &.{},
+    popup: *const Style = &.{},
+    option: *const Style = &.{},
+};
+
+const select_base = struct {
+    pub const root: Style = .{
+        .width = .grow(),
+        .direction = .row,
+        .@"align" = .center,
+        .justify = .space_between,
+        .padding = .init(6, 10, 6, 10),
+        .background = .elevated,
+        .border_width = .all(1),
+        .border_color = .toned,
+        .font_size = .md,
+        .hover = &.{ .border_color = .dimmed },
+        .focus = &.{ .border_color = .accent },
+        .open = &.{ .border_color = .accent },
+    };
+    pub const placeholder: Style = .{ .foreground = .dimmed };
+    pub const icon: Style = .{};
+    pub const popup: Style = .{
+        .direction = .column,
+        .padding = .init(2, 0, 2, 0),
+        .overflow = .scroll_y,
+        .layer = .dropdown,
+        .background = .elevated,
+        .border_width = .all(1),
+        .border_color = .toned,
+    };
+    pub const option: Style = .{
+        .width = .grow(),
+        .padding = .init(7, 10, 7, 10),
+        .radius = .sm,
+        .hover = &.{ .background = .muted },
+        .checked = &.{ .background = .muted },
+    };
+};

@@ -8,12 +8,15 @@ const Frame = @import("../root.zig").Frame;
 
 pub const DrawCmd = Decoration.DrawCmd;
 
-width: Element.sizing.Axis = .grow(),
-height: Element.sizing.Axis = .grow(),
-style: Style = .{},
 interactive: bool = false,
 commands: []const DrawCmd = &.{},
 key: Key,
+/// Radius and border shape the clip of the drawn commands.
+style: *const Style = &.{},
+
+pub const base = struct {
+    pub const root: Style = .{ .width = .grow(), .height = .grow(), .overflow = .hidden };
+};
 
 const Canvas = @This();
 
@@ -59,18 +62,8 @@ pub const Painter = struct {
 };
 
 pub fn open(self: *const Canvas, frame: *Frame) !Element.Id {
-    const rect = self.style.toRect(&frame.ui().theme);
-    const needs_clip_shape = !rect.corner_radius.isZero() or !rect.border_width.isZero();
-    const decoration: Decoration = if (self.style.hasDecoration() or needs_clip_shape)
-        .{ .rect = rect }
-    else
-        .none;
-    return try frame.ui().open(self.key, .{
-        .width = self.width,
-        .height = self.height,
-        .overflow = .hidden,
-        .interactive = self.interactive,
-    }, decoration);
+    const styled = try frame.ui().openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{}, .{ .interactive = self.interactive });
+    return styled.id;
 }
 
 pub fn close(self: *const Canvas, frame: *Frame) !void {

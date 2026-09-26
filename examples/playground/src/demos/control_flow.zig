@@ -19,49 +19,33 @@ var show_details = true;
 pub fn main(app: *knots.Frame) !void {
     const arena = app.arena();
 
-    const actions = Rect{ .width = .grow(), .gap = 8, .@"align" = .center, .key = .src(@src()) };
+    const actions = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 8, .@"align" = .center } };
     _ = try actions.open(app);
     if ((try app.interact(Button{
-        .height = .fixed(28),
-        .width = .fixed(60),
-        .style = .{ .color = .success, .corner_radius = .sm },
-        .hover_anim = .{},
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "+1" },
+        .label = "+1",
+        .style = &.{ .height = .fixed(28), .width = .fixed(60), .tone = .success },
     })).clicked) pushItem(app);
     if ((try app.interact(Button{
-        .height = .fixed(28),
-        .width = .fixed(60),
-        .style = .{ .color = .@"error", .corner_radius = .sm },
-        .hover_anim = .{},
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "-1" },
+        .label = "-1",
+        .style = &.{ .height = .fixed(28), .width = .fixed(60), .tone = .@"error" },
     })).clicked) popItem(app);
     if ((try app.interact(Button{
-        .height = .fixed(28),
-        .width = .fixed(96),
-        .style = .{ .color = .primary, .corner_radius = .sm },
-        .hover_anim = .{},
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = if (show_details) "hide" else "show" },
+        .label = if (show_details) "hide" else "show",
+        .style = &.{ .height = .fixed(28), .width = .fixed(96) },
     })).clicked) toggle(app);
     try app.e(.{
         Text{
             .content = try std.fmt.allocPrint(arena, "{d} items", .{counter_items_count}),
-            .size = .sm,
-            .color = .dimmed,
             .key = .src(@src()),
+            .style = &.{ .font_size = .sm, .foreground = .dimmed },
         },
     });
     try actions.close(app);
 
-    try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
     const collapsible = ui.component.Collapsible{
         .key = .str("control_flow.details"),
@@ -72,27 +56,17 @@ pub fn main(app: *knots.Frame) !void {
         collapsible.closeContent(app);
     }
 
-    try app.e(Spacer{ .height = .fixed(20), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
     try app.e(Text{
         .content = "VirtualList: 100,000 items",
-        .size = .sm,
-        .color = .dimmed,
         .key = .src(@src()),
+        .style = &.{ .font_size = .sm, .foreground = .dimmed },
     });
-    try app.e(Spacer{ .height = .fixed(8), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(8) } });
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .height = .fixed(320),
-            .dir = .column,
-            .overflow = .scroll_y,
             .key = .src(@src()),
-            .style = .{
-                .color = .muted,
-                .corner_radius = .sm,
-                .border_width = .all(1),
-                .border_color = .toned,
-            },
+            .style = &.{ .width = .grow(), .height = .fixed(320), .direction = .column, .overflow = .scroll_y, .background = .muted, .radius = .sm, .border_width = .all(1), .border_color = .toned },
         },
         .{
             VirtualList(usize){
@@ -108,12 +82,8 @@ pub fn main(app: *knots.Frame) !void {
 fn dynamicList(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .padding = .init(8, 8, 8, 8),
             .key = .src(@src()),
-            .style = .{ .color = .muted, .corner_radius = .sm, .border_width = .all(1), .border_color = .toned },
-            .dir = .column,
-            .gap = 4,
+            .style = &.{ .width = .grow(), .padding = .init(8, 8, 8, 8), .background = .muted, .radius = .sm, .border_width = .all(1), .border_color = .toned, .direction = .column, .gap = 4 },
         },
         .{
             For(isize){
@@ -140,16 +110,13 @@ fn renderVirtualItem(app: *ui.Frame, item: usize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .height = .fixed(virtual_row_height),
-            .padding = .init(2, 12, 2, 12),
-            .@"align" = .center,
             .key = ui.Key.src(@src()).indexed(i),
+            .style = &.{ .width = .grow(), .height = .fixed(virtual_row_height), .padding = .init(2, 12, 2, 12), .@"align" = .center },
         },
         .{Text{
             .content = try std.fmt.allocPrint(arena, "row #{d}", .{item}),
-            .size = .sm,
             .key = ui.Key.src(@src()).indexed(i),
+            .style = &.{ .font_size = .sm },
         }},
     });
 }
@@ -158,17 +125,13 @@ fn renderItem(app: *ui.Frame, item: isize, i: usize) !void {
     const arena = app.arena();
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .height = .fixed(24),
-            .padding = .init(0, 8, 0, 8),
-            .@"align" = .center,
             .key = ui.Key.src(@src()).indexed(i),
-            .style = .{ .color = .elevated, .corner_radius = .sm },
+            .style = &.{ .width = .grow(), .height = .fixed(24), .padding = .init(0, 8, 0, 8), .@"align" = .center, .background = .elevated, .radius = .sm },
         },
         .{Text{
             .content = try std.fmt.allocPrint(arena, "item #{d}", .{item}),
-            .size = .sm,
             .key = ui.Key.src(@src()).indexed(i),
+            .style = &.{ .font_size = .sm },
         }},
     });
 }

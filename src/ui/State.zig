@@ -2,7 +2,8 @@ const std = @import("std");
 const Element = @import("layout").Element;
 const math = @import("math");
 const animation = @import("animation.zig");
-const Layer = @import("Layer.zig");
+const style = @import("style");
+const Layer = @import("layout").Layer;
 const StateBridge = @import("StateBridge.zig");
 
 pub const TextInput = struct {
@@ -116,6 +117,15 @@ pub const Anim = struct {
     initialized: bool = false,
 };
 
+pub const StyleTransition = struct {
+    from: style.Visual = .{ .surface = .{}, .foreground = .{ 0, 0, 0, 0 } },
+    to: style.Visual = .{ .surface = .{}, .foreground = .{ 0, 0, 0, 0 } },
+    t0_ms: i64 = 0,
+    duration_ms: u16 = 0,
+    ease: math.Ease = .smooth_step,
+    initialized: bool = false,
+};
+
 // Element.Id is the Wyhash output of a Key (see Key.hash), so it is
 // well-distributed and identity-hashing is correct here.
 const IdContext = struct {
@@ -146,6 +156,7 @@ pub const Ttls = struct {
     resize: u32 = DEFAULT_WIDGET_TTL_FRAMES,
     floating_window: u32 = DEFAULT_WIDGET_TTL_FRAMES,
     anim: u32 = DEFAULT_ANIM_TTL_FRAMES,
+    style_transition: u32 = DEFAULT_ANIM_TTL_FRAMES,
 };
 
 /// Hash map of (id, T) pairs with TTL-based eviction.
@@ -221,6 +232,7 @@ pub const Storage = struct {
         resize: Pool(Resize) = .{},
         floating_window: Pool(FloatingWindow) = .{},
         anim: Pool(Anim) = .{},
+        style_transition: Pool(StyleTransition) = .{},
     };
 
     pools: StoragePools = .{},
@@ -356,8 +368,38 @@ fn stateDomain(comptime field_name: []const u8) u64 {
     return StateBridge.key("knots.ui.state." ++ field_name);
 }
 
-const FLOATING_WINDOW_Z_CAPACITY: usize = Layer.floating_window_capacity;
-const FLOATING_WINDOW_Z_BASE: Layer = .floatingWindow(1);
+// Window-stacking policy: floating windows occupy a band of layers between
+// `Layer.popup` and `Layer.modal`, with room above each for its own overlays.
+pub const floating_window_min: usize = 32;
+pub const floating_window_max: usize = 199;
+pub const floating_window_stride: usize = 4;
+pub const floating_window_capacity: usize = ((floating_window_max - floating_window_min) / floating_window_stride) + 1;
+
+pub fn floatingWindowLayer(order: usize) Layer {
+    std.debug.assert(order > 0 and order <= floating_window_capacity);
+    return .fromIndex(floating_window_min + (order - 1) * floating_window_stride);
+}
+
+/// Layer for an overlay opened inside `parent`: overlays of a floating window stay within its band.
+pub fn overlayWithin(parent: Layer, requested: Layer) Layer {
+    if (!isFloatingWindowLayer(parent) or requested.z == Layer.base.z) return .max(parent, requested);
+    return .fromIndex(@min(floating_window_max, @as(usize, parent.z) + floatingOverlayOffset(requested)));
+}
+
+fn isFloatingWindowLayer(layer: Layer) bool {
+    const z: usize = layer.z;
+    return z >= floating_window_min and z <= floating_window_max;
+}
+
+fn floatingOverlayOffset(requested: Layer) usize {
+    if (requested.z >= Layer.modal.z) return 3;
+    if (requested.z >= Layer.popup.z) return 2;
+    if (requested.z >= Layer.dropdown.z) return 1;
+    return 0;
+}
+
+const FLOATING_WINDOW_Z_CAPACITY: usize = floating_window_capacity;
+const FLOATING_WINDOW_Z_BASE: Layer = floatingWindowLayer(1);
 
 pub fn touchFloatingWindow(self: *State, id: Element.Id) !*FloatingWindow {
     const state = try self.getOrCreate(.floating_window, self.allocator, id);
@@ -405,7 +447,7 @@ pub fn floatingWindowZ(self: *State, id: Element.Id) !Layer {
     const state = self.get(.floating_window, id) orelse return FLOATING_WINDOW_Z_BASE;
     if (state.stack_order == 0) return FLOATING_WINDOW_Z_BASE;
     if (@as(usize, state.stack_order) > FLOATING_WINDOW_Z_CAPACITY) return error.TooManyFloatingWindows;
-    return Layer.floatingWindow(@as(usize, state.stack_order));
+    return floatingWindowLayer(@as(usize, state.stack_order));
 }
 
 pub fn isFrontFloatingWindow(self: *State, id: Element.Id) bool {

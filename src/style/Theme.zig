@@ -24,6 +24,8 @@ highlighted: Color,
 toned: Color,
 dimmed: Color,
 radius: Radius,
+/// xs, sm, md, lg, xl in logical pixels.
+font_size: [5]f32,
 
 scrollbar_thickness: f32,
 scrollbar_min_thumb: f32,
@@ -37,6 +39,8 @@ const Theme = @This();
 pub const dark: Theme = parse(@import("themes/dark.zon"));
 pub const light: Theme = parse(@import("themes/light.zon"));
 
+pub const default_font_size: [5]f32 = .{ 12, 16, 20, 24, 28 };
+
 pub fn parse(comptime def: anytype) Theme {
     const Def = @TypeOf(def);
     const def_info = @typeInfo(@TypeOf(def));
@@ -44,7 +48,9 @@ pub fn parse(comptime def: anytype) Theme {
         if (!@hasField(Def, field_name))
             @compileError("theme is missing required field: " ++ field_name);
     }
-    return parseWithBase(std.mem.zeroes(Theme), def);
+    var base = std.mem.zeroes(Theme);
+    base.font_size = default_font_size;
+    return parseWithBase(base, def);
 }
 
 pub fn parseWithBase(comptime base: Theme, comptime def: anytype) Theme {
@@ -53,6 +59,10 @@ pub fn parseWithBase(comptime base: Theme, comptime def: anytype) Theme {
     inline for (def_info.@"struct".field_names) |field_name| {
         const v = @field(def, field_name);
         const Field = @TypeOf(@field(res, field_name));
+        if (Field == [5]f32) {
+            @field(res, field_name) = v;
+            continue;
+        }
         if (Field == Radius) {
             @field(res, field_name) = parseRadius(v);
             continue;

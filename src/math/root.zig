@@ -73,3 +73,18 @@ pub fn cross2(a: Vec2, b: Vec2) f32 {
 pub fn isZero(v: anytype) bool {
     return @reduce(.And, v == @as(@TypeOf(v), @splat(0)));
 }
+
+pub const Ease = enum {
+    smooth_step,
+    ease_out_cubic,
+
+    pub fn eval(self: Ease, t: f32) f32 {
+        return switch (self) {
+            .smooth_step => t * t * (3.0 - 2.0 * t),
+            .ease_out_cubic => blk: {
+                const u = 1.0 - t;
+                break :blk 1.0 - u * u * u;
+            },
+        };
+    }
+};

@@ -18,12 +18,12 @@ const animation = @import("animation.zig");
 
 const Decoration = @import("decoration.zig").Decoration;
 const Key = @import("Key.zig");
-const Style = @import("Style.zig");
-const Size = @import("Size.zig");
-const Theme = @import("Theme.zig");
-const Radius = @import("Radius.zig");
-const BorderWidth = @import("BorderWidth.zig");
-const Layer = @import("Layer.zig");
+const style = @import("style");
+const Theme = style.Theme;
+const FontSize = style.FontSize;
+const Radius = style.Radius;
+const BorderWidth = style.BorderWidth;
+const Layer = layout.Layer;
 const scrollbar = @import("scrollbar.zig");
 const canvas_tessellator = @import("canvas_tessellator.zig");
 
@@ -57,7 +57,7 @@ pub const Config = struct {
     /// scroll, dropdown-open, selection) survives conditional hiding (Tabs,
     /// Accordion, Tree); short-lived state (anim) is evicted promptly.
     state_ttls: State.Ttls = .{},
-    scroll_line_size: Size.Input = .sm,
+    scroll_line_size: FontSize.Input = .sm,
     theme: Theme = Theme.light,
 };
 
@@ -72,6 +72,8 @@ pub const Stats = struct {
 allocator: Allocator,
 layout_ctx: layout.Context,
 decorations: std.ArrayList(Decoration),
+/// Inherited style content per slot, parallel to `decorations`.
+contents: std.ArrayList(style.Content),
 font: text.Font,
 state: State,
 input: Input,
@@ -92,7 +94,7 @@ child_clips: std.ArrayList(Clip.State),
 clip_nodes: std.ArrayList(Clip.Node),
 input_scopes: InputScope,
 content_scale: f32,
-scroll_line_size: Size.Input,
+scroll_line_size: FontSize.Input,
 anim_active: bool,
 text_input_requested: bool,
 theme: Theme,
@@ -106,6 +108,7 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .allocator = allocator,
         .layout_ctx = .init(allocator),
         .decorations = .empty,
+        .contents = .empty,
         .state = .init(allocator, cfg.state_ttls),
         .input = .{},
         .font = try .init(allocator, cfg.fonts),
@@ -134,6 +137,7 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
 pub fn deinit(self: *UI) void {
     self.layout_ctx.deinit();
     self.decorations.deinit(self.allocator);
+    self.contents.deinit(self.allocator);
     self.font.deinit();
     self.state.deinit();
     self.hit_records.deinit(self.allocator);
@@ -153,23 +157,48 @@ pub fn deinit(self: *UI) void {
 }
 
 pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration) !Element.Id {
+    return self.openWith(key, element, decoration, .{});
+}
+
+pub const OpenOptions = struct {
+    /// Inherited style scope for descendants; defaults to the parent's.
+    content: ?style.Content = null,
+    /// Open a new layout root at this viewport position (popups, overlays)
+    /// instead of a child of the current element.
+    root: ?[2]f32 = null,
+};
+
+pub fn openWith(self: *UI, key: Key, element: Element.Config, decoration: Decoration, options: OpenOptions) !Element.Id {
+    var cfg = element;
+    if (options.root != null and self.layout_ctx.stack.items.len > 0) {
+        cfg.z_index = State.overlayWithin(self.currentLayer(), Layer.fromIndex(cfg.z_index)).index();
+    }
+
     const id = key.hash();
     try self.decorations.ensureUnusedCapacity(self.allocator, 1);
+    try self.contents.ensureUnusedCapacity(self.allocator, 1);
     try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
-    if (element.focusable) try self.focus_order.ensureUnusedCapacity(self.allocator, 1);
-    const slot = try self.layout_ctx.open(id, element);
+    if (cfg.focusable) try self.focus_order.ensureUnusedCapacity(self.allocator, 1);
+    const content = options.content orelse self.parentContent();
+    const slot = if (options.root != null) try self.layout_ctx.openRoot(id, cfg) else try self.layout_ctx.open(id, cfg);
     const slot_index: usize = @intCast(slot);
     std.debug.assert(self.decorations.items.len == slot_index);
+    std.debug.assert(self.contents.items.len == slot_index);
     std.debug.assert(self.clip_shapes.items.len == slot_index);
     self.decorations.appendAssumeCapacity(decoration);
+    self.contents.appendAssumeCapacity(content);
     self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration));
     const el = self.layout_ctx.pool.get(slot);
     el.input_scope = self.input_scopes.current();
+    if (options.root) |pos| {
+        el.box.setX(pos[0]);
+        el.box.setY(pos[1]);
+    }
     if (decoration == .text) {
         el.intrinsic_w = decoration.text.intrinsic_w;
         el.intrinsic_h = decoration.text.intrinsic_h;
     }
-    if (element.focusable) self.focus_order.appendAssumeCapacity(id);
+    if (cfg.focusable) self.focus_order.appendAssumeCapacity(id);
     return id;
 }
 
@@ -177,39 +206,11 @@ pub fn close(self: *UI) void {
     self.layout_ctx.close();
 }
 
+/// Layer of the element being built.
 pub fn currentLayer(self: *UI) Layer {
-    if (self.layout_ctx.stack.items.len == 0) return .base;
-    const parent_slot = self.layout_ctx.stack.items[self.layout_ctx.stack.items.len - 1];
-    const parent = self.layout_ctx.pool.get(parent_slot);
-    return .fromIndex(parent.z_index);
-}
-
-pub fn openRoot(self: *UI, key: Key, x: f32, y: f32, config: Element.Config, decoration: Decoration) !Element.Id {
-    var cfg = config;
-    if (self.layout_ctx.stack.items.len > 0) {
-        cfg.z_index = self.currentLayer().overlayWithin(Layer.fromIndex(cfg.z_index)).index();
-    }
-
-    const id = key.hash();
-    try self.decorations.ensureUnusedCapacity(self.allocator, 1);
-    try self.clip_shapes.ensureUnusedCapacity(self.allocator, 1);
-    if (cfg.focusable) try self.focus_order.ensureUnusedCapacity(self.allocator, 1);
-    const slot = try self.layout_ctx.openRoot(id, cfg);
-    const slot_index: usize = @intCast(slot);
-    std.debug.assert(self.decorations.items.len == slot_index);
-    std.debug.assert(self.clip_shapes.items.len == slot_index);
-    self.decorations.appendAssumeCapacity(decoration);
-    self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration));
-    const el = self.layout_ctx.pool.get(slot);
-    el.input_scope = self.input_scopes.current();
-    el.box.setX(x);
-    el.box.setY(y);
-    if (decoration == .text) {
-        el.intrinsic_w = decoration.text.intrinsic_w;
-        el.intrinsic_h = decoration.text.intrinsic_h;
-    }
-    if (cfg.focusable) self.focus_order.appendAssumeCapacity(id);
-    return id;
+    const stack = self.layout_ctx.stack.items;
+    if (stack.len == 0) return .base;
+    return .fromIndex(self.layout_ctx.pool.get(stack[stack.len - 1]).z_index);
 }
 
 fn clipShapeFromDecoration(decoration: Decoration) ?Clip.Shape {
@@ -220,20 +221,6 @@ fn clipShapeFromDecoration(decoration: Decoration) ?Clip.Shape {
         },
         else => null,
     };
-}
-
-/// Open an absolutely-positioned element inside the current parent at parent-local
-/// offset (x, y) with size (w, h). The caller still pairs this with `close()`.
-/// Use this for overlay rects (cursor, selection, drag handles, tab indicators)
-/// that need precise placement on top of sibling content without escaping the parent.
-/// For popups that need to escape clipping or the layout tree, use `openRoot`.
-pub fn openAt(self: *UI, key: Key, x: f32, y: f32, w: f32, h: f32, config: Element.Config, decoration: Decoration) !Element.Id {
-    var cfg = config;
-    cfg.position = .absolute;
-    cfg.width = .fixed(w);
-    cfg.height = .fixed(h);
-    cfg.offset = .{ x, y };
-    return self.open(key, cfg, decoration);
 }
 
 pub fn beginInputScope(self: *UI, id: Element.Id, config: InputScopeConfig) !void {
@@ -259,39 +246,132 @@ pub fn acceptsInput(self: *UI, id: Element.Id) bool {
     return self.inputScopeAllowsId(id);
 }
 
-pub fn lineHeight(self: *UI, size: Size, font: ?[]const u8) !f32 {
+/// Line height in logical pixels for a font size in logical pixels.
+pub fn lineHeight(self: *UI, size: f32, font: ?[]const u8) !f32 {
     const face = try self.font.getFace(font);
     const scale = self.content_scale;
-    return (try face.lineHeight(size.value * scale)) / scale;
+    return (try face.lineHeight(size * scale)) / scale;
 }
 
-pub fn scrollLineHeight(self: *UI) !f32 {
-    return self.lineHeight(self.scroll_line_size.resolve(), null);
-}
-
-pub fn textDecoration(self: *UI, content: []const u8, size: Size, font: ?[]const u8, wrap: bool) !Decoration {
+pub fn textDecoration(self: *UI, content: []const u8, size: f32, font: ?[]const u8, wrap: bool) !Decoration {
     const face = try self.font.getFace(font);
     const scale = self.content_scale;
     if (wrap) {
-        const lh = (try face.lineHeight(size.value * scale)) / scale;
+        const lh = (try face.lineHeight(size * scale)) / scale;
         return .{ .text = .{
             .content = content,
-            .size = size.value,
+            .size = size,
             .font = font,
             .intrinsic_w = 0,
             .intrinsic_h = lh,
             .wrap = true,
         } };
     }
-    const measured = try face.measure(content, size.value * scale);
+    const measured = try face.measure(content, size * scale);
     return .{ .text = .{
         .content = content,
-        .size = size.value,
+        .size = size,
         .font = font,
         .intrinsic_w = measured.width / scale,
         .intrinsic_h = measured.height / scale,
         .wrap = false,
     } };
+}
+
+/// The inherited style scope of the element being built (the stack top), or the root scope.
+pub fn parentContent(self: *const UI) style.Content {
+    const stack = self.layout_ctx.stack.items;
+    if (stack.len == 0) return style.rootContent(&self.theme);
+    return self.contents.items[stack[stack.len - 1]];
+}
+
+/// hover / focus / active from last frame's hit records; the component supplies the rest.
+pub fn states(self: *UI, id: Element.Id, extra: style.States) style.States {
+    var st = extra;
+    if (st.disabled) return st;
+    st.hover = st.hover or self.hovering(id);
+    st.focus = st.focus or self.focused(id);
+    st.active = st.active or self.pressing(id);
+    return st;
+}
+
+/// Resolve against `parent` (default: the current element's Content), then apply the
+/// transition if any. Opens no element: use it for parts drawn inside one decoration
+/// (slider track/fill/thumb), or pass an explicit parent for popups opened after
+/// their anchor closed.
+pub fn resolveStyle(self: *UI, id: Element.Id, cascade: style.Cascade, st: style.States, parent: ?*const style.Content) style.Resolved {
+    const inherited = if (parent) |p| p.* else self.parentContent();
+    var resolved = style.resolve(cascade, st, &inherited, &self.theme);
+    if (resolved.transition) |transition| resolved.setVisual(self.transitionVisual(id, resolved.visual(), transition));
+    return resolved;
+}
+
+pub const Styled = struct { id: Element.Id, resolved: style.Resolved };
+
+/// resolveStyle + open(resolved.element(flags), surface) + record resolved.content
+/// as this slot's Content. Paired with `close()`.
+pub fn openStyled(self: *UI, key: Key, cascade: style.Cascade, st: style.States, flags: style.Resolved.Flags) !Styled {
+    const resolved = self.resolveStyle(key.hash(), cascade, st, null);
+    const config = resolved.element(flags);
+    const id = try self.openResolved(key, &resolved, config, null);
+    return .{ .id = id, .resolved = resolved };
+}
+
+/// Open an element for an already resolved style: its surface as the decoration and
+/// its content as the inherited scope. `config` is usually `resolved.element(flags)`,
+/// adjusted by the component. `root` opens a new layout root at that position.
+pub fn openResolved(self: *UI, key: Key, resolved: *const style.Resolved, config: Element.Config, root: ?[2]f32) !Element.Id {
+    return self.openWith(key, config, surfaceDecoration(resolved, config), .{ .content = resolved.content, .root = root });
+}
+
+/// Surface decoration for a resolved style, or `.none` when nothing would draw or clip.
+fn surfaceDecoration(resolved: *const style.Resolved, config: Element.Config) Decoration {
+    const surface = resolved.surface;
+    const needs_clip_shape = config.overflow != .visible and (!surface.corner_radius.isZero() or !surface.border_width.isZero());
+    return if (surface.isVisible() or needs_clip_shape) .{ .rect = surface } else .none;
+}
+
+/// Text decoration from resolved content (replaces the (size, font, color) plumbing).
+pub fn textDecorationStyled(self: *UI, content: []const u8, resolved: *const style.Resolved) !Decoration {
+    var decoration = try self.textDecoration(content, resolved.content.font_size, resolved.content.font, resolved.wrap);
+    decoration.text.color = resolved.content.foreground;
+    return decoration;
+}
+
+/// Open and close a non-interactive text leaf styled by `cascade`.
+pub fn styledText(self: *UI, key: Key, content: []const u8, cascade: style.Cascade, st: style.States) !Element.Id {
+    const resolved = self.resolveStyle(key.hash(), cascade, st, null);
+    const decoration = try self.textDecorationStyled(content, &resolved);
+    const id = try self.openWith(key, resolved.element(.{}), decoration, .{ .content = resolved.content });
+    self.close();
+    return id;
+}
+
+fn transitionVisual(self: *UI, id: Element.Id, target: style.Visual, transition: style.Transition) style.Visual {
+    const s: *State.StyleTransition = self.state.getOrCreate(.style_transition, self.allocator, id) catch return target;
+    const now = self.input.now_ms;
+    if (!s.initialized) {
+        s.* = .{ .from = target, .to = target, .t0_ms = now, .duration_ms = transition.duration_ms, .ease = transition.ease, .initialized = true };
+        return target;
+    }
+    if (!s.to.eql(target)) {
+        s.from = sampleTransition(s, now).visual;
+        s.to = target;
+        s.t0_ms = now;
+        s.duration_ms = transition.duration_ms;
+        s.ease = transition.ease;
+    }
+    const sample = sampleTransition(s, now);
+    if (sample.t < 1.0) self.anim_active = true;
+    return sample.visual;
+}
+
+fn sampleTransition(s: *const State.StyleTransition, now_ms: i64) struct { visual: style.Visual, t: f32 } {
+    if (s.duration_ms == 0) return .{ .visual = s.to, .t = 1.0 };
+    const elapsed: f32 = @floatFromInt(now_ms - s.t0_ms);
+    const t = std.math.clamp(elapsed / @as(f32, @floatFromInt(s.duration_ms)), 0.0, 1.0);
+    if (t >= 1.0) return .{ .visual = s.to, .t = 1.0 };
+    return .{ .visual = s.from.lerp(s.to, s.ease.eval(t)), .t = t };
 }
 
 /// Replaces only the draw decoration.
@@ -308,6 +388,7 @@ pub fn currentSlot(self: *UI) Element.Slot {
 pub fn reset(self: *UI) void {
     self.layout_ctx.reset();
     self.decorations.clearRetainingCapacity();
+    self.contents.clearRetainingCapacity();
     self.clip_shapes.clearRetainingCapacity();
     self.hit_records.clearRetainingCapacity();
     self.focus_order.clearRetainingCapacity();
@@ -467,11 +548,6 @@ pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata)
     self.accessibility_node_indices.putAssumeCapacity(id, index);
 }
 
-/// The returned nodes and their text remain valid until the next `reset`.
-pub fn accessibilitySnapshot(self: *const UI) []const Accessibility.Node {
-    return self.accessibility_nodes.items;
-}
-
 pub fn semanticSnapshot(self: *const UI) Accessibility.Snapshot {
     const nodes = self.accessibility_nodes.items;
     return .{
@@ -584,10 +660,6 @@ pub fn hovering(self: *UI, id: Element.Id) bool {
     return self.state.hovered == id;
 }
 
-pub fn mousePosition(self: *const UI) [2]f64 {
-    return self.input.mouse_pos;
-}
-
 pub fn pressing(self: *UI, id: Element.Id) bool {
     if (!self.inputScopeAllowsId(id)) return false;
     return self.state.active == id;
@@ -610,11 +682,6 @@ pub fn leftClicked(self: *UI, id: Element.Id, target: HitTarget) bool {
 pub fn focused(self: *UI, id: Element.Id) bool {
     if (!self.inputScopeAllowsId(id)) return false;
     return self.state.focused == id;
-}
-
-pub fn selectionText(self: *UI) ?[]const u8 {
-    if (self.state.selection_text.len == 0) return null;
-    return self.state.selection_text;
 }
 
 pub fn isHoveredWithin(self: *UI, ancestor_id: Element.Id) bool {
@@ -866,11 +933,7 @@ fn clearOtherTextSelect(hovered: Element.Id, id: Element.Id, s: *State.TextSelec
     s.dragging = false;
 }
 
-pub fn appendHit(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: Layer) !void {
-    try self.appendHitWithScope(id, bounds, clip, layer, self.inputScopeForId(id) orelse Element.INVALID_ID);
-}
-
-pub fn appendHitWithScope(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: Layer, input_scope: Element.Id) !void {
+pub fn appendHit(self: *UI, id: Element.Id, bounds: math.Rect, clip: Clip.State, layer: Layer, input_scope: Element.Id) !void {
     try self.hit_records.append(self.allocator, .{
         .id = id,
         .bounds = bounds,
@@ -1055,7 +1118,7 @@ fn tessellateLayer(self: *UI, allocator: Allocator, draw_list: *DrawList, slots:
 
         if (el.overflow.isScroll()) try scrollbar.recordForTessellate(self, slot, clip, layer);
 
-        if (el.interactive) try self.appendHitWithScope(el.id, el.box, clip, layer, el.input_scope);
+        if (el.interactive) try self.appendHit(el.id, el.box, clip, layer, el.input_scope);
 
         switch (self.decorations.items[slot]) {
             .none => {},
@@ -1362,7 +1425,7 @@ test "resolveHit reports hover changes" {
     var ui = try UI.init(allocator, .{});
     defer ui.deinit();
 
-    try ui.appendHit(42, .init(0, 0, 100, 100), .{}, Layer.base);
+    try ui.appendHit(42, .init(0, 0, 100, 100), .{}, Layer.base, Element.INVALID_ID);
 
     ui.input.mouse_pos = .{ 10, 10 };
     try std.testing.expect(ui.resolveHit());
@@ -1389,5 +1452,56 @@ test "anim settles and clears dirty flag" {
     ui.input.now_ms = 500;
     const done = ui.anim(1, "hover", 1.0, .{ .duration_ms = 100 });
     try std.testing.expectApproxEqAbs(done, 1.0, 1e-6);
+    try std.testing.expect(!ui.anim_active);
+}
+
+test "style content is inherited through raw and styled elements" {
+    var ui = try UI.init(std.testing.allocator, .{ .theme = Theme.dark });
+    defer ui.deinit();
+
+    const parent: style.Style = .{ .foreground = .success, .font_size = .lg, .tone = .warning };
+    _ = try ui.openStyled(Key.str("parent"), .{ .base = &parent, .user = &.{} }, .{}, .{});
+    _ = try ui.open(Key.str("raw"), .{}, .none);
+    const child = try ui.openStyled(Key.str("child"), .{ .base = &.{ .background = .accent }, .user = &.{} }, .{}, .{});
+    try std.testing.expectEqual(Theme.dark.success.value, child.resolved.content.foreground);
+    try std.testing.expectEqual(Theme.dark.font_size[3], child.resolved.content.font_size);
+    try std.testing.expectEqual(Theme.dark.warning.value, child.resolved.surface.color);
+    ui.close();
+    ui.close();
+    ui.close();
+
+    try std.testing.expectEqual(Theme.dark.text.value, ui.parentContent().foreground);
+    try std.testing.expectEqual(@as(usize, 3), ui.contents.items.len);
+}
+
+test "style transitions interpolate surface changes" {
+    var ui = try UI.init(std.testing.allocator, .{ .theme = Theme.dark });
+    defer ui.deinit();
+
+    const s: style.Style = .{
+        .background = .muted,
+        .hover = &.{ .background = .success },
+        .transition = .{ .duration_ms = 100, .ease = .smooth_step },
+    };
+    const cascade: style.Cascade = .{ .base = &s, .user = &.{} };
+
+    ui.input.now_ms = 0;
+    const idle = ui.resolveStyle(1, cascade, .{}, null);
+    try std.testing.expectEqual(Theme.dark.muted.value, idle.surface.color);
+    try std.testing.expect(!ui.anim_active);
+
+    const start = ui.resolveStyle(1, cascade, .{ .hover = true }, null);
+    try std.testing.expectEqual(Theme.dark.muted.value, start.surface.color);
+
+    ui.input.now_ms = 50;
+    const mid = ui.resolveStyle(1, cascade, .{ .hover = true }, null);
+    try std.testing.expect(ui.anim_active);
+    try std.testing.expect(!std.meta.eql(mid.surface.color, Theme.dark.muted.value));
+    try std.testing.expect(!std.meta.eql(mid.surface.color, Theme.dark.success.value));
+
+    ui.anim_active = false;
+    ui.input.now_ms = 500;
+    const done = ui.resolveStyle(1, cascade, .{ .hover = true }, null);
+    try std.testing.expectEqual(Theme.dark.success.value, done.surface.color);
     try std.testing.expect(!ui.anim_active);
 }

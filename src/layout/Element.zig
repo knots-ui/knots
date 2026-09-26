@@ -67,6 +67,14 @@ pub const Padding = struct {
         return Padding{ .value = .{ t, r, b, l } };
     }
 
+    pub fn all(v: f32) Padding {
+        return .init(v, v, v, v);
+    }
+
+    pub fn xy(x: f32, y: f32) Padding {
+        return .init(y, x, y, x);
+    }
+
     pub fn top(self: Padding) f32 {
         return self.value[0];
     }
@@ -200,6 +208,12 @@ pub const Config = struct {
     offset: [2]f32 = .{ 0, 0 },
     grid_template: ?Grid.Template = null,
     grid_placement: ?Grid.Placement = null,
+
+    /// Absolutely positioned at parent-local (x, y) with a fixed size: overlays such
+    /// as carets, selections and drag handles that sit on top of sibling content.
+    pub fn at(x: f32, y: f32, w: f32, h: f32) Config {
+        return .{ .width = .fixed(w), .height = .fixed(h), .position = .absolute, .offset = .{ x, y } };
+    }
 
     pub fn toElement(self: Config) Element {
         return .{

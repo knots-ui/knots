@@ -8,10 +8,10 @@ const Clip = @import("render").Clip;
 
 const Element = layout.Element;
 const State = @import("State.zig");
-const Theme = @import("Theme.zig");
+const Theme = @import("style").Theme;
 const UI = @import("UI.zig");
-const BorderWidth = @import("BorderWidth.zig");
-const Layer = @import("Layer.zig");
+const BorderWidth = @import("style").BorderWidth;
+const Layer = @import("layout").Layer;
 
 const THUMB_ID_SALT: Element.Id = 0x5C205C205C205C20;
 const WHEEL_LOCK_IDLE_MS: i64 = 120;
@@ -106,7 +106,7 @@ fn resolveScrollInput(ui: *UI, el: *const Element) !math.Vec2 {
     const input = ui.input.scroll;
     const has_line_or_page = input.line[0] != 0 or input.line[1] != 0 or
         input.page[0] != 0 or input.page[1] != 0;
-    const line_h = if (has_line_or_page) try ui.scrollLineHeight() else 0;
+    const line_h = if (has_line_or_page) try ui.lineHeight(ui.scroll_line_size.resolve(&ui.theme), null) else 0;
     const metrics = Element.scrollMetrics(el.overflow, el.box, el.content_w, el.content_h, ui.theme.scrollbar_thickness);
     const page_x = @max(0, metrics.viewport_w - line_h);
     const page_y = @max(0, metrics.viewport_h - line_h);
@@ -310,7 +310,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
             };
             try draw_list.pushInstances(&[_]types.Instance{thumb_inst}, .atlas, sg.parent_clip);
 
-            try ui.appendHitWithScope(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
+            try ui.appendHit(sb_id, bar.thumb, sg.parent_clip, layer, el.input_scope);
         }
 
         // Corner fill when both bars are present.

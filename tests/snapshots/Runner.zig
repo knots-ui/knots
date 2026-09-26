@@ -173,21 +173,21 @@ fn renderComponents(self: *Runner, app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{
-            Text{ .content = "Interactive controls in deterministic hovered, focused, and selected states.", .size = .sm, .color = .dimmed, .key = .str("component-copy") },
-            Spacer{ .height = .fixed(18), .key = .str("component-space-1") },
-            Rect{ .width = .grow(), .height = .fixed(54), .dir = .row, .gap = 12, .key = .str("button-row") },
+            Text{ .content = "Interactive controls in deterministic hovered, focused, and selected states.", .style = &dimmed, .key = .str("component-copy") },
+            Spacer{ .style = &.{ .height = .fixed(18) }, .key = .str("component-space-1") },
+            Rect{ .style = &.{ .width = .grow(), .height = .fixed(54), .direction = .row, .gap = 12 }, .key = .str("button-row") },
             .{
-                Button{ .key = .str("component-primary"), .width = .fixed(150), .height = .fixed(42), .padding = .init(8, 16, 8, 16), .@"align" = .center, .justify = .center, .style = .{ .color = .primary, .corner_radius = .md }, .text = .{ .content = "Hovered button" } },
-                Button{ .key = .str("component-disabled"), .width = .fixed(150), .height = .fixed(42), .padding = .init(8, 16, 8, 16), .@"align" = .center, .justify = .center, .disabled = true, .style = .{ .color = .muted, .corner_radius = .md }, .text = .{ .content = "Disabled" } },
+                Button{ .key = .str("component-primary"), .label = "Hovered button", .style = &button_style },
+                Button{ .key = .str("component-disabled"), .label = "Disabled", .disabled = true, .style = &comptime button_style.with(.{ .background = .muted, .foreground = .text }) },
             },
-            Spacer{ .height = .fixed(18), .key = .str("component-space-2") },
+            Spacer{ .style = &.{ .height = .fixed(18) }, .key = .str("component-space-2") },
             Checkbox{ .checked = &self.checked, .label = "Focused checked option", .key = .str("component-checkbox") },
-            Spacer{ .height = .fixed(22), .key = .str("component-space-3") },
-            SliderInput{ .value = &self.slider, .width = .fixed(420), .key = .str("component-slider") },
-            Spacer{ .height = .fixed(20), .key = .str("component-space-4") },
-            ProgressBar{ .progress = 0.72, .width = .fixed(420), .height = .fixed(12), .key = .str("component-progress") },
-            Spacer{ .height = .fixed(18), .key = .str("component-space-5") },
-            Rect{ .width = .fixed(420), .height = .fixed(100), .padding = .init(8, 10, 8, 10), .dir = .column, .gap = 8, .overflow = .scroll_y, .style = .{ .color = .muted, .corner_radius = .md }, .key = .str("component-scroll") },
+            Spacer{ .style = &.{ .height = .fixed(22) }, .key = .str("component-space-3") },
+            SliderInput{ .value = &self.slider, .style = &.{ .width = .fixed(420) }, .key = .str("component-slider") },
+            Spacer{ .style = &.{ .height = .fixed(20) }, .key = .str("component-space-4") },
+            ProgressBar{ .progress = 0.72, .style = &.{ .width = .fixed(420), .height = .fixed(12) }, .key = .str("component-progress") },
+            Spacer{ .style = &.{ .height = .fixed(18) }, .key = .str("component-space-5") },
+            Rect{ .style = &.{ .width = .fixed(420), .height = .fixed(100), .padding = .xy(10, 8), .direction = .column, .gap = 8, .overflow = .scroll_y, .background = .muted, .radius = .md }, .key = .str("component-scroll") },
             .{
                 Text{ .content = "Scrolled content row one", .key = .str("scroll-row-1") },
                 Text{ .content = "Scrolled content row two", .key = .str("scroll-row-2") },
@@ -204,32 +204,39 @@ fn renderOverlay(self: *Runner, app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{
-            Text{ .content = "Modal layering", .size = .xl, .key = .str("overlay-title") },
-            Text{ .content = "The dialog verifies root layers, backdrop blending, input scopes, and nested panel layout.", .width = .fixed(560), .wrap = true, .color = .dimmed, .key = .str("overlay-copy") },
+            Text{ .content = "Modal layering", .style = &.{ .font_size = .xl }, .key = .str("overlay-title") },
+            Text{ .content = "The dialog verifies root layers, backdrop blending, input scopes, and nested panel layout.", .style = &.{ .width = .fixed(560), .wrap = true, .foreground = .dimmed }, .key = .str("overlay-copy") },
         },
-        Dialog{ .is_open = &self.dialog_open, .width = .fixed(430), .padding = .init(24, 24, 24, 24), .gap = 14, .key = .str("overlay-dialog") },
+        Dialog{ .is_open = &self.dialog_open, .style = &.{ .width = .fixed(430), .padding = .all(24), .gap = 14 }, .key = .str("overlay-dialog") },
         .{
-            Text{ .content = "Snapshot dialog", .size = .lg, .key = .str("dialog-title") },
-            Text{ .content = "A deterministic open overlay rendered above the underlying scene.", .width = .fixed(360), .wrap = true, .color = .dimmed, .key = .str("dialog-copy") },
-            Button{ .key = .str("dialog-action"), .width = .fixed(140), .height = .fixed(38), .@"align" = .center, .justify = .center, .style = .{ .color = .primary, .corner_radius = .md }, .text = .{ .content = "Confirm" } },
+            Text{ .content = "Snapshot dialog", .style = &.{ .font_size = .lg }, .key = .str("dialog-title") },
+            Text{ .content = "A deterministic open overlay rendered above the underlying scene.", .style = &.{ .width = .fixed(360), .wrap = true, .foreground = .dimmed }, .key = .str("dialog-copy") },
+            Button{ .key = .str("dialog-action"), .label = "Confirm", .style = &.{ .width = .fixed(140), .height = .fixed(38), .radius = .md } },
         },
     });
 }
 
+const dimmed: ui.Style = .{ .foreground = .dimmed };
+const button_style: ui.Style = .{ .width = .fixed(150), .height = .fixed(42), .padding = .xy(16, 8), .radius = .md };
+
 fn page() Rect {
     return .{
-        .width = .fixed(WIDTH),
-        .height = .fixed(HEIGHT),
-        .padding = .init(28, 32, 28, 32),
-        .dir = .column,
-        .gap = 6,
-        .style = .{ .color = .bg, .corner_radius = .none },
+        // Returned from a function: the literal must be comptime so the pointer stays valid.
+        .style = comptime &.{
+            .width = .fixed(WIDTH),
+            .height = .fixed(HEIGHT),
+            .padding = .init(28, 32, 28, 32),
+            .direction = .column,
+            .gap = 6,
+            .background = .bg,
+        },
         .key = .str("page"),
     };
 }
 
-fn swatch(key: []const u8, color: ui.Color.Input, radius: ui.Radius.Input, width: f32) Rect {
-    return .{ .width = .fixed(width), .height = .fixed(72), .style = .{ .color = color, .corner_radius = radius }, .key = .str(key) };
+/// Comptime arguments keep the style literal static, so the returned pointer stays valid.
+fn swatch(comptime key: []const u8, comptime color: ui.Color.Input, comptime radius: ui.Radius.Input, comptime width: f32) Rect {
+    return .{ .style = comptime &.{ .width = .fixed(width), .height = .fixed(72), .background = color, .radius = radius }, .key = .str(key) };
 }
 
 const checker = makeChecker();
@@ -255,18 +262,18 @@ fn renderGraphics(app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{
-            Text{ .content = "Canvas, images, and layers", .size = .xl, .key = .str("graphics-title") },
-            Spacer{ .height = .fixed(18), .key = .str("graphics-space") },
-            Rect{ .width = .grow(), .height = .fixed(250), .dir = .row, .gap = 24, .key = .str("graphics-row") },
+            Text{ .content = "Canvas, images, and layers", .style = &.{ .font_size = .xl }, .key = .str("graphics-title") },
+            Spacer{ .style = &.{ .height = .fixed(18) }, .key = .str("graphics-space") },
+            Rect{ .style = &.{ .width = .grow(), .height = .fixed(250), .direction = .row, .gap = 24 }, .key = .str("graphics-row") },
             .{
-                Canvas{ .width = .fixed(340), .height = .fixed(230), .style = .{ .color = .muted, .corner_radius = .lg, .border_width = .all(1), .border_color = .toned }, .commands = &canvas_commands, .key = .str("graphics-canvas") },
-                Rect{ .width = .fixed(230), .height = .fixed(230), .dir = .column, .gap = 16, .key = .str("graphics-side") },
+                Canvas{ .style = &.{ .width = .fixed(340), .height = .fixed(230), .background = .muted, .radius = .lg, .border_width = .all(1), .border_color = .toned }, .commands = &canvas_commands, .key = .str("graphics-canvas") },
+                Rect{ .style = &.{ .width = .fixed(230), .height = .fixed(230), .direction = .column, .gap = 16 }, .key = .str("graphics-side") },
                 .{
-                    Image{ .source = .{ .pixels = .{ .data = &checker, .width = 16, .height = 16, .upload_policy = .versioned } }, .width = .fixed(150), .height = .fixed(100), .key = .str("graphics-image") },
-                    Rect{ .width = .fixed(180), .height = .fixed(90), .dir = .layer, .key = .str("graphics-layer") },
+                    Image{ .source = .{ .pixels = .{ .data = &checker, .width = 16, .height = 16, .upload_policy = .versioned } }, .style = &.{ .width = .fixed(150), .height = .fixed(100) }, .key = .str("graphics-image") },
+                    Rect{ .style = &.{ .width = .fixed(180), .height = .fixed(90), .direction = .layer }, .key = .str("graphics-layer") },
                     .{
-                        Rect{ .width = .fixed(120), .height = .fixed(80), .style = .{ .color = .secondary, .corner_radius = .lg }, .key = .str("layer-back") },
-                        Rect{ .width = .fixed(80), .height = .fixed(54), .style = .{ .color = .warning, .corner_radius = .{ .fixed = 27 } }, .key = .str("layer-front") },
+                        Rect{ .style = &.{ .width = .fixed(120), .height = .fixed(80), .background = .secondary, .radius = .lg }, .key = .str("layer-back") },
+                        Rect{ .style = &.{ .width = .fixed(80), .height = .fixed(54), .background = .warning, .radius = .{ .fixed = 27 } }, .key = .str("layer-front") },
                     },
                 },
             },
@@ -303,22 +310,22 @@ fn renderLayout(app: *ui.Frame) !void {
     try app.e(.{
         page(),
         .{
-            Text{ .content = "Layout, text, and clipping", .size = .xl, .key = .str("layout-title") },
-            Text{ .content = "One frame covers sizing, alignment, wrapping, borders, radii, nested clipping, and primitive batching.", .width = .fixed(600), .wrap = true, .size = .sm, .color = .dimmed, .key = .str("layout-copy") },
-            Spacer{ .height = .fixed(20), .key = .str("layout-space-1") },
-            Rect{ .width = .grow(), .height = .fixed(96), .dir = .row, .gap = 14, .key = .str("layout-row") },
+            Text{ .content = "Layout, text, and clipping", .style = &.{ .font_size = .xl }, .key = .str("layout-title") },
+            Text{ .content = "One frame covers sizing, alignment, wrapping, borders, radii, nested clipping, and primitive batching.", .style = &.{ .width = .fixed(600), .wrap = true, .foreground = .dimmed }, .key = .str("layout-copy") },
+            Spacer{ .style = &.{ .height = .fixed(20) }, .key = .str("layout-space-1") },
+            Rect{ .style = &.{ .width = .grow(), .height = .fixed(96), .direction = .row, .gap = 14 }, .key = .str("layout-row") },
             .{
                 swatch("layout-a", .primary, .sm, 110),
                 swatch("layout-b", .secondary, .lg, 170),
                 swatch("layout-c", .warning, .xl, 80),
-                Rect{ .width = .grow(), .height = .fixed(72), .style = .{ .color = .success, .corner_radius = .md, .border_width = .all(3), .border_color = .toned }, .key = .str("layout-grow") },
+                Rect{ .style = &.{ .width = .grow(), .height = .fixed(72), .background = .success, .radius = .md, .border_width = .all(3), .border_color = .toned }, .key = .str("layout-grow") },
             },
-            Spacer{ .height = .fixed(24), .key = .str("layout-space-2") },
-            Rect{ .width = .fixed(460), .height = .fixed(170), .padding = .init(14, 14, 14, 14), .overflow = .hidden, .style = .{ .color = .muted, .corner_radius = .xl, .border_width = .all(2), .border_color = .primary }, .key = .str("clip-outer") },
+            Spacer{ .style = &.{ .height = .fixed(24) }, .key = .str("layout-space-2") },
+            Rect{ .style = &.{ .width = .fixed(460), .height = .fixed(170), .padding = .all(14), .overflow = .hidden, .background = .muted, .radius = .xl, .border_width = .all(2), .border_color = .primary }, .key = .str("clip-outer") },
             .{
-                Rect{ .width = .fixed(620), .height = .fixed(80), .padding = .init(12, 18, 12, 18), .style = .{ .color = .accented, .corner_radius = .lg }, .key = .str("clip-wide") },
-                .{Text{ .content = "This oversized child and its text are clipped by a rounded parent.", .size = .md, .key = .str("clip-text") }},
-                Rect{ .width = .fixed(390), .height = .fixed(48), .style = .{ .color = .info, .corner_radius = .{ .fixed = 24 } }, .key = .str("clip-pill") },
+                Rect{ .style = &.{ .width = .fixed(620), .height = .fixed(80), .padding = .xy(18, 12), .background = .accented, .radius = .lg }, .key = .str("clip-wide") },
+                .{Text{ .content = "This oversized child and its text are clipped by a rounded parent.", .style = &.{ .font_size = .md }, .key = .str("clip-text") }},
+                Rect{ .style = &.{ .width = .fixed(390), .height = .fixed(48), .background = .info, .radius = .{ .fixed = 24 } }, .key = .str("clip-pill") },
             },
         },
     });

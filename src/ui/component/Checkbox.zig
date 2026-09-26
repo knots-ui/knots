@@ -1,31 +1,46 @@
-const Frame = @import("../root.zig").Frame;
-
-const Element = @import("layout").Element;
 const ui_mod = @import("../root.zig");
-const Text = @import("Text.zig");
-
-const Color = ui_mod.Color;
+const Frame = ui_mod.Frame;
 const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
-const Size = ui_mod.Size;
 const Style = ui_mod.Style;
+const Element = @import("layout").Element;
 
 checked: *bool,
-key: Key,
 label: ?[]const u8 = null,
+key: Key,
+style: *const Style = &.{},
+parts: Parts = .{},
 
-width: Element.sizing.Axis = .fit(),
-height: Element.sizing.Axis = .fit(),
-box_size: f32 = 18,
-gap: f32 = 8,
-label_size: Size.Input = .sm,
-label_color: Color.Input = .text,
-unchecked_style: Style = .{ .color = .muted, .corner_radius = .sm, .border_color = .toned, .border_width = .all(1) },
-checked_style: Style = .{ .color = .primary, .corner_radius = .sm, .border_color = .primary, .border_width = .all(1) },
-check_color: Color.Input = .on_primary,
-hover_border_color: Color.Input = .primary,
+pub const Parts = struct {
+    box: *const Style = &.{},
+    /// `foreground` colors the check mark.
+    indicator: *const Style = &.{},
+    label: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
+    pub const box: Style = .{
+        .width = .fixed(18),
+        .height = .fixed(18),
+        .background = .muted,
+        .radius = .sm,
+        .border_width = .all(1),
+        .border_color = .toned,
+        .hover = &.{ .border_color = .accent },
+        .focus = &.{ .border_color = .accent },
+        .checked = &.{ .background = .accent, .border_color = .accent },
+        .transition = .{ .duration_ms = 100 },
+    };
+    pub const indicator: Style = .{ .width = .grow(), .height = .grow(), .foreground = .on_accent };
+    pub const label: Style = .{};
+};
 
 const Checkbox = @This();
+
+const BOX_INDEX: usize = 1;
+const LABEL_INDEX: usize = 2;
+const INDICATOR_INDEX: usize = 3;
 
 pub const Response = struct {
     id: Element.Id,
@@ -46,31 +61,28 @@ pub fn open(self: *const Checkbox, frame: *Frame) !Element.Id {
 /// Containers like `Button` expose `openResponse` instead.
 fn openResponse(self: *const Checkbox, frame: *Frame) !Response {
     const ui = frame.ui();
-
-    const min_height = @max(self.box_size, try ui.lineHeight(self.label_size.resolve(), null));
-    const id = try ui.open(self.key, .{
-        .width = self.width,
-        .height = .{ .kind = self.height.kind, .value = self.height.value, .min = @max(self.height.min, min_height), .max = self.height.max },
-        .direction = .row,
-        .alignment = .center,
-        .gap = self.gap,
-        .interactive = true,
-        .focusable = true,
-    }, .none);
-    try ui.setAccessibility(id, .{
-        .role = .checkbox,
-        .name = self.label orelse &.{},
-        .state = .{ .checked = self.checked.* },
-    });
+    const id = self.key.hash();
 
     const key_activate = ui.focused(id) and
         (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
     const changed = ui.leftClicked(id, .within) or key_activate or ui.consumeAccessibilityAction(id, .click) != null;
     if (changed) {
         self.checked.* = !self.checked.*;
-        try ui.setAccessibility(id, .{ .role = .checkbox, .name = self.label orelse &.{}, .state = .{ .checked = self.checked.* } });
         if (key_activate) ui.input.consumeKeyboard();
     }
+
+    const st = ui.states(id, .{ .checked = self.checked.* });
+    const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, st, null);
+    const box = ui.resolveStyle(self.key.indexed(BOX_INDEX).hash(), .{ .base = &base.box, .user = self.parts.box }, st, null);
+    var config = root.element(.{ .interactive = true, .focusable = true });
+    const box_h = if (box.layout.height.kind == .fixed) box.layout.height.value else 0;
+    config.height.min = @max(config.height.min, @max(box_h, try ui.lineHeight(root.content.font_size, root.content.font)));
+    _ = try ui.openResolved(self.key, &root, config, null);
+    try ui.setAccessibility(id, .{
+        .role = .checkbox,
+        .name = self.label orelse &.{},
+        .state = .{ .checked = self.checked.* },
+    });
 
     return .{ .id = id, .changed = changed };
 }
@@ -78,67 +90,25 @@ fn openResponse(self: *const Checkbox, frame: *Frame) !Response {
 pub fn close(self: *const Checkbox, frame: *Frame) !void {
     const ui = frame.ui();
     const id = self.key.hash();
-    const hovered = ui.hovering(id) or ui.isHoveredWithin(id);
-    const focused = ui.focused(id);
-    const t = ui.anim(id, "hover", if (hovered or focused) 1.0 else 0.0, .{ .duration_ms = 100 });
+    const st = ui.states(id, .{ .checked = self.checked.* });
 
-    const base_style = if (self.checked.*) self.checked_style else self.unchecked_style;
-    var rect = base_style.toRect(&ui.theme);
-    const hover_border = self.hover_border_color.resolve(&ui.theme);
-    rect.border_color = .{
-        rect.border_color[0] + (hover_border[0] - rect.border_color[0]) * t,
-        rect.border_color[1] + (hover_border[1] - rect.border_color[1]) * t,
-        rect.border_color[2] + (hover_border[2] - rect.border_color[2]) * t,
-        rect.border_color[3] + (hover_border[3] - rect.border_color[3]) * t,
-    };
-
-    const check_color = if (self.checked.*) self.check_color.resolve(&ui.theme) else .{ 0, 0, 0, 0 };
-    const cmds = try frame.arena().alloc(Decoration.DrawCmd, 4);
-    cmds[0] = .{ .fill_rect = .{
-        .x = 0,
-        .y = 0,
-        .w = self.box_size,
-        .h = self.box_size,
-        .color = rect.color,
-        .corner_radius = rect.corner_radius,
-    } };
-    cmds[1] = .{ .stroke_rect = .{
-        .x = 0.5,
-        .y = 0.5,
-        .w = self.box_size - 1,
-        .h = self.box_size - 1,
-        .color = rect.border_color,
-        .corner_radius = rect.corner_radius.shrink(0.5),
-        .thickness = rect.border_width.max(),
-        .edge_widths = rect.border_width,
-    } };
-    cmds[2] = .{ .line = .{
-        .from = .{ self.box_size * 0.28, self.box_size * 0.53 },
-        .to = .{ self.box_size * 0.43, self.box_size * 0.68 },
-        .color = check_color,
-        .thickness = 2,
-    } };
-    cmds[3] = .{ .line = .{
-        .from = .{ self.box_size * 0.43, self.box_size * 0.68 },
-        .to = .{ self.box_size * 0.74, self.box_size * 0.34 },
-        .color = check_color,
-        .thickness = 2,
-    } };
-
-    _ = try ui.open(self.key.indexed(1), .{
-        .width = .fixed(self.box_size),
-        .height = .fixed(self.box_size),
-    }, .{ .canvas = .{ .cmds = cmds } });
+    const box = try ui.openStyled(self.key.indexed(BOX_INDEX), .{ .base = &base.box, .user = self.parts.box }, st, .{});
+    {
+        const indicator = ui.resolveStyle(self.key.indexed(INDICATOR_INDEX).hash(), .{ .base = &base.indicator, .user = self.parts.indicator }, st, null);
+        const w = if (box.resolved.layout.width.kind == .fixed) box.resolved.layout.width.value else 18;
+        const h = if (box.resolved.layout.height.kind == .fixed) box.resolved.layout.height.value else 18;
+        const color = indicator.content.foreground;
+        const cmds: []const Decoration.DrawCmd = if (self.checked.*) try frame.arena().dupe(Decoration.DrawCmd, &[_]Decoration.DrawCmd{
+            .{ .line = .{ .from = .{ w * 0.28, h * 0.53 }, .to = .{ w * 0.43, h * 0.68 }, .color = color, .thickness = 2 } },
+            .{ .line = .{ .from = .{ w * 0.43, h * 0.68 }, .to = .{ w * 0.74, h * 0.34 }, .color = color, .thickness = 2 } },
+        }) else &.{};
+        _ = try ui.openWith(self.key.indexed(INDICATOR_INDEX), indicator.element(.{}), .{ .canvas = .{ .cmds = cmds } }, .{ .content = indicator.content });
+        ui.close();
+    }
     ui.close();
 
     if (self.label) |label| {
-        try frame.e(Text{
-            .content = label,
-            .size = self.label_size,
-            .color = self.label_color,
-            .selectable = false,
-            .key = self.key.indexed(2),
-        });
+        _ = try ui.styledText(self.key.indexed(LABEL_INDEX), label, .{ .base = &base.label, .user = self.parts.label }, st);
     }
 
     ui.close();

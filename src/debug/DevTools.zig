@@ -20,6 +20,33 @@ const Rect = component.Rect;
 const SelectInput = component.SelectInput;
 const Text = component.Text;
 const Layer = ui.Layer;
+const Style = ui.Style;
+
+const panel_style: Style = .{
+    .padding = .all(14),
+    .direction = .column,
+    .gap = 12,
+    .overflow = .scroll_y,
+    .layer = panel_z,
+    .background = .elevated,
+    .radius = .lg,
+    .border_width = .all(1),
+    .border_color = .toned,
+};
+const card_style: Style = .{
+    .width = .grow(),
+    .padding = .xy(10, 8),
+    .direction = .column,
+    .gap = 8,
+    .background = .muted,
+    .radius = .sm,
+    .border_width = .all(1),
+    .border_color = .toned,
+};
+const metric_card_style: Style = card_style.with(.{ .padding = .xy(8, 5), .gap = 0 });
+const caption_style: Style = .{ .font_size = .xs, .foreground = .dimmed };
+const tab_style: Style = .{ .width = .grow(), .height = .grow(), .padding = .all(0), .font_size = .xs };
+const inactive_tab_style: Style = tab_style.with(.{ .background = .muted, .foreground = .text, .hover = &.{ .background = .toned } });
 
 /// Enables the Renderer tab, null hides it. `reconfigure_error` is `anyerror` so
 /// `debug` needs no dependency on a concrete renderer.
@@ -138,22 +165,22 @@ pub fn render(self: *const DevTools, app: *Frame, info: HostInfo) anyerror!void 
 }
 
 fn renderTrigger(_: *const DevTools, app: *Frame, x: f32, y: f32) !void {
-    _ = try app.ui().openRoot(trigger_key, x, y, .{
+    _ = try app.ui().openWith(trigger_key, .{
         .width = .fixed(trigger_size),
         .height = .fixed(trigger_size),
         .z_index = trigger_z.index(),
-    }, .none);
+    }, .none, .{ .root = .{ x, y } });
 
     try app.e(Button{
         .key = trigger_button_key,
-        .width = .grow(),
-        .height = .grow(),
-        .justify = .center,
-        .@"align" = .center,
-        .style = .{ .color = .primary, .corner_radius = .{ .fixed = trigger_size / 2.0 } },
-        .hover_anim = .{},
-        .text = .{ .content = ">_", .size = .xs },
-        .padding = .init(0, 0, 18, 0),
+        .label = ">_",
+        .style = &.{
+            .width = .grow(),
+            .height = .grow(),
+            .padding = .init(0, 0, 18, 0),
+            .radius = .{ .fixed = trigger_size / 2.0 },
+            .font_size = .xs,
+        },
     });
 
     app.ui().close();
@@ -168,41 +195,28 @@ fn renderPanel(self: *const DevTools, app: *Frame, info: HostInfo, window_w: f32
     const height = @min(desired_h, max_h);
     const y = @max(margin, trigger_y - height - panel_gap);
 
-    _ = try app.ui().openRoot(panel_key, x, y, .{
-        .width = .fixed(width),
-        .height = if (is_landscape) .fixed(height) else .{ .kind = .fit, .max = height },
-        .padding = .init(14, 14, 14, 14),
-        .direction = .column,
-        .gap = 12,
-        .overflow = .scroll_y,
-        .z_index = panel_z.index(),
-    }, .{ .rect = .{
-        .color = app.ui().theme.elevated.value,
-        .corner_radius = app.ui().theme.radius.scale(1.5),
-        .border_width = .all(1),
-        .border_color = app.ui().theme.toned.value,
-    } });
+    const panel = app.ui().resolveStyle(panel_key.hash(), .{ .base = &panel_style, .user = &.{} }, .{}, null);
+    var panel_config = panel.element(.{});
+    panel_config.width = .fixed(width);
+    panel_config.height = if (is_landscape) .fixed(height) else .{ .kind = .fit, .max = height };
+    _ = try app.ui().openResolved(panel_key, &panel, panel_config, .{ x, y });
 
     try app.e(.{
         Rect{
-            .width = .grow(),
             .key = .src(@src()),
-            .@"align" = .center,
-            .justify = .space_between,
+            .style = &.{ .width = .grow(), .@"align" = .center, .justify = .space_between },
         },
         .{
             Text{
                 .content = std.fmt.comptimePrint("knots v{s}", .{config.version}),
-                .size = .xs,
                 .key = .src(@src()),
-                .color = .dimmed,
+                .style = &caption_style,
                 .selectable = false,
             },
             Text{
                 .content = std.fmt.comptimePrint("{s}-{s}", .{ @tagName(builtin.target.os.tag), @tagName(builtin.target.cpu.arch) }),
-                .size = .xs,
                 .key = .src(@src()),
-                .color = .dimmed,
+                .style = &caption_style,
                 .selectable = false,
             },
         },
@@ -239,39 +253,21 @@ fn renderTabs(self: *const DevTools, app: *Frame, show_renderer_tab: bool) !void
 
     try app.e(Button{
         .key = metrics_tab_key,
-        .width = .grow(),
-        .height = .grow(),
-        .justify = .center,
-        .@"align" = .center,
-        .style = .{ .color = if (self.state.active_tab == .metrics) .primary else .muted, .corner_radius = .sm },
-        .hover_style = if (self.state.active_tab == .metrics) null else .{ .color = .toned },
-        .hover_anim = .{},
-        .text = .{ .content = "Metrics", .size = .xs },
+        .label = "Metrics",
+        .style = if (self.state.active_tab == .metrics) &tab_style else &inactive_tab_style,
     });
 
     try app.e(Button{
         .key = runtime_tab_key,
-        .width = .grow(),
-        .height = .grow(),
-        .justify = .center,
-        .@"align" = .center,
-        .style = .{ .color = if (self.state.active_tab == .runtime) .primary else .muted, .corner_radius = .sm },
-        .hover_style = if (self.state.active_tab == .runtime) null else .{ .color = .toned },
-        .hover_anim = .{},
-        .text = .{ .content = "Runtime", .size = .xs },
+        .label = "Runtime",
+        .style = if (self.state.active_tab == .runtime) &tab_style else &inactive_tab_style,
     });
 
     if (show_renderer_tab) {
         try app.e(Button{
             .key = renderer_tab_key,
-            .width = .grow(),
-            .height = .grow(),
-            .justify = .center,
-            .@"align" = .center,
-            .style = .{ .color = if (self.state.active_tab == .renderer) .primary else .muted, .corner_radius = .sm },
-            .hover_style = if (self.state.active_tab == .renderer) null else .{ .color = .toned },
-            .hover_anim = .{},
-            .text = .{ .content = "Renderer", .size = .xs },
+            .label = "Renderer",
+            .style = if (self.state.active_tab == .renderer) &tab_style else &inactive_tab_style,
         });
     }
 
@@ -378,16 +374,13 @@ fn renderSparkline(self: *const DevTools, app: *Frame, width: f32) !void {
     try app.e(Text{
         .key = spark_key.indexed(2),
         .content = "ms",
-        .size = .xs,
-        .color = .dimmed,
+        .style = &caption_style,
         .selectable = false,
     });
 
     try app.e(Graph{
         .key = spark_key,
-        .width = .grow(),
-        .height = .fixed(68),
-        .inset = .init(8, 0, 8, 0),
+        .style = &.{ .height = .fixed(68), .padding = .init(8, 0, 8, 0) },
         .y_domain = .{ .min = 0, .max = max_ms },
         .rules = &.{
             .{ .axis = .y, .value = max_ms * 0.5 },
@@ -420,17 +413,7 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
         .gap = 8,
     }, .none);
 
-    _ = try app.ui().open(panel_key.indexed(21), .{
-        .width = .grow(),
-        .padding = .init(8, 10, 8, 10),
-        .direction = .column,
-        .gap = 8,
-    }, .{ .rect = .{
-        .color = app.ui().theme.muted.value,
-        .corner_radius = app.ui().theme.radius.scale(0.5),
-        .border_width = .all(1),
-        .border_color = app.ui().theme.toned.value,
-    } });
+    _ = try app.ui().openStyled(panel_key.indexed(21), .{ .base = &card_style, .user = &.{} }, .{}, .{});
     _ = try app.ui().open(panel_key.indexed(22), .{
         .width = .grow(),
         .direction = .column,
@@ -439,15 +422,13 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
     try app.e(Text{
         .key = panel_key.indexed(23),
         .content = "GPU API",
-        .size = .xs,
-        .color = .dimmed,
+        .style = &caption_style,
         .selectable = false,
     });
     try app.e(Text{
         .key = panel_key.indexed(26),
         .content = @tagName(gpu.Backend),
-        .size = .sm,
-        .width = .grow(),
+        .style = &.{ .width = .grow() },
         .selectable = false,
     });
     app.ui().close();
@@ -460,16 +441,14 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
     try app.e(Text{
         .key = panel_key.indexed(25),
         .content = "Present mode",
-        .size = .xs,
-        .color = .dimmed,
+        .style = &caption_style,
         .selectable = false,
     });
     if (mode_count == 1) {
         try app.e(Text{
             .key = present_mode_key,
             .content = mode_labels[0],
-            .size = .sm,
-            .width = .grow(),
+            .style = &.{ .width = .grow() },
             .selectable = false,
         });
     } else if (mode_count > 1) {
@@ -478,9 +457,8 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
             .labels = mode_labels[0..mode_count],
             .values = mode_values[0..mode_count],
             .initial_selected = mustFindIdx(mode_values[0..mode_count], self.state.present_mode),
-            .width = .grow(),
-            .dropdown_z_index = popup_z,
-            .size = .sm,
+            .style = &.{ .font_size = .sm },
+            .parts = .{ .popup = &.{ .layer = popup_z } },
         });
     }
     app.ui().close();
@@ -488,13 +466,8 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
     if (mode_count > 1) {
         try app.e(Button{
             .key = apply_key,
-            .width = .grow(),
-            .height = .fixed(32),
-            .justify = .center,
-            .@"align" = .center,
-            .style = .{ .color = .primary, .corner_radius = .sm },
-            .hover_anim = .{},
-            .text = .{ .content = "Apply" },
+            .label = "Apply",
+            .style = &.{ .width = .grow(), .height = .fixed(32) },
         });
     }
 
@@ -502,8 +475,7 @@ fn renderRenderer(self: *const DevTools, app: *Frame, renderer_info: RendererInf
         try app.e(Text{
             .key = panel_key.indexed(27),
             .content = try std.fmt.allocPrint(app.arena(), "Reconfigure failed: {s}", .{@errorName(err)}),
-            .size = .xs,
-            .color = .@"error",
+            .style = &.{ .font_size = .xs, .foreground = .@"error" },
             .selectable = false,
         });
     }
@@ -537,8 +509,7 @@ fn label(app: *Frame, key: ui.Key, content: []const u8) !void {
     try app.e(Text{
         .key = key,
         .content = content,
-        .size = .xs,
-        .color = .dimmed,
+        .style = &caption_style,
         .selectable = false,
     });
 }
@@ -574,7 +545,7 @@ fn metricGridColumns(app: *Frame, key: ui.Key, columns: usize, items: []const st
                     .value = items[item_idx][1],
                 });
             } else {
-                try app.e(Rect{ .key = key.indexed(200 + item_idx), .width = .grow() });
+                try app.e(Rect{ .key = key.indexed(200 + item_idx), .style = &.{ .width = .grow() } });
             }
         }
 
@@ -595,14 +566,11 @@ const MetricCard = struct {
         try app.e(.{
             Rect{
                 .key = self.key,
-                .width = .grow(),
-                .padding = .init(5, 8, 5, 8),
-                .dir = .column,
-                .style = .{ .color = .muted, .corner_radius = .sm, .border_width = .all(1), .border_color = .toned },
+                .style = &metric_card_style,
             },
             .{
-                Text{ .key = self.name_key, .content = self.name, .size = .xs, .color = .dimmed, .selectable = false },
-                Text{ .key = self.value_key, .content = self.value, .size = .xs, .selectable = false },
+                Text{ .key = self.name_key, .content = self.name, .style = &caption_style, .selectable = false },
+                Text{ .key = self.value_key, .content = self.value, .style = &.{ .font_size = .xs }, .selectable = false },
             },
         });
     }
@@ -658,7 +626,7 @@ test "render accepts plain renderer state without callbacks" {
     dev_tools.state.panel_open = true;
     dev_tools.state.active_tab = .renderer;
 
-    var supported_modes: gpu.Context.PresentModes = .initEmpty();
+    var supported_modes: gpu.Context.PresentModes = .empty;
     supported_modes.insert(.fifo);
     supported_modes.insert(.mailbox);
 

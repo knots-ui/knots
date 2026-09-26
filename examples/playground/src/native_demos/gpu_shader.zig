@@ -94,22 +94,17 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
 
     try app.e(Text{
         .content = "A live T(3,4) torus knot built from thousands of indexed, instanced icosahedra. Drag the canvas to orbit it and reshape the sculpture in real time.",
-        .size = .sm,
-        .color = .dimmed,
-        .wrap = true,
-        .width = .grow(),
         .key = .src(@src()),
+        .style = &.{ .font_size = .sm, .foreground = .dimmed, .wrap = true, .width = .grow() },
     });
     try app.e(Text{
         .content = "INDEXED INSTANCING  ·  PERSISTENT BUFFERS  ·  LIVE UNIFORMS",
-        .size = .xs,
-        .color = .accented,
-        .width = .grow(),
         .key = .src(@src()),
+        .style = &.{ .font_size = .xs, .foreground = .accented, .width = .grow() },
     });
-    try app.e(Spacer{ .height = .fixed(12), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
-    const first_row = Rect{ .width = .grow(), .dir = .row, .gap = 14, .key = .src(@src()) };
+    const first_row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .gap = 14 } };
     _ = try first_row.open(app);
     try slider(app, "Density", &state.gpu_density, 1024, max_particles, 256);
     try slider(app, "Strand width", &state.gpu_strand_width, 0.02, 0.32, 0);
@@ -117,38 +112,28 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
     try slider(app, "Twist", &state.gpu_twist, 0, 12, 0.25);
     try first_row.close(app);
 
-    try app.e(Spacer{ .height = .fixed(10), .key = .src(@src()) });
-    const second_row = Rect{ .width = .grow(), .dir = .row, .gap = 14, .key = .src(@src()) };
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
+    const second_row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .gap = 14 } };
     _ = try second_row.open(app);
     try slider(app, "Zoom", &state.gpu_zoom, 0.65, 1.65, 0);
     try slider(app, "Perspective", &state.gpu_perspective, 30, 75, 1);
     try slider(app, "Spin", &state.gpu_spin, 0, 1.2, 0);
     try second_row.close(app);
 
-    try app.e(Spacer{ .height = .fixed(14), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(14) } });
     const canvas_panel = Rect{
-        .width = .grow(),
-        .height = .grow(),
-        .padding = .init(1, 1, 1, 1),
-        .overflow = .hidden,
-        .style = .{
-            .color = .{ .color = canvas_background },
-            .border_color = .toned,
-            .border_width = .all(1),
-            .corner_radius = .sm,
-        },
         .key = .src(@src()),
+        .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(1, 1, 1, 1), .overflow = .hidden, .background = .{ .color = canvas_background }, .border_color = .toned, .border_width = .all(1), .radius = .sm },
     };
     _ = try canvas_panel.open(app);
     const canvas = GPUCanvas{
-        .width = .grow(),
-        .height = .grow(),
         .interactive = true,
         .paint = renderer.gpu.paintCallback(self, drawKnot),
         .key = .src(@src()),
+        .style = &.{ .width = .grow(), .height = .grow() },
     };
     const canvas_id = try canvas.open(app);
-    const raw_mouse = app.ui().mousePosition();
+    const raw_mouse = app.ui().input.mouse_pos;
     const mouse = [2]f32{ @floatCast(raw_mouse[0]), @floatCast(raw_mouse[1]) };
     const left = app.ui().input.mouseButton(.left);
     if (app.ui().leftPressed(canvas_id, .exact)) {
@@ -177,13 +162,11 @@ fn body(desktop: *knots.App, app: *ui.Frame) !void {
 fn control(app: *ui.Frame, comptime label: []const u8, value: anytype) !void {
     try app.e(.{
         Rect{
-            .width = .grow(),
-            .dir = .column,
-            .gap = 6,
             .key = .str("gpu-control:" ++ label),
+            .style = &.{ .width = .grow(), .direction = .column, .gap = 6 },
         },
         .{
-            Text{ .content = label, .size = .xs, .color = .dimmed, .key = .str("gpu-label:" ++ label) },
+            Text{ .content = label, .key = .str("gpu-label:" ++ label), .style = &.{ .font_size = .xs, .foreground = .dimmed } },
             value,
         },
     });
@@ -195,8 +178,8 @@ fn slider(app: *ui.Frame, comptime label: []const u8, value: *f32, min: f32, max
         .min = min,
         .max = max,
         .steps = steps,
-        .width = .grow(),
         .key = .str("gpu-slider:" ++ label),
+        .style = &.{ .width = .grow() },
     });
 }
 

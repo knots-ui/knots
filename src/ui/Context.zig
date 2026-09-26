@@ -86,14 +86,14 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
     self.packet_commands.clearRetainingCapacity();
     self.overlay_commands.clearRetainingCapacity();
     self.frame_input = input;
-    if (try self.state_bridge.read(@import("Theme.zig"), theme_state_key)) |theme| {
+    if (try self.state_bridge.read(@import("style").Theme, theme_state_key)) |theme| {
         self.ui.theme = theme;
     } else {
-        try self.state_bridge.write(@import("Theme.zig"), theme_state_key, self.ui.theme);
+        try self.state_bridge.write(@import("style").Theme, theme_state_key, self.ui.theme);
     }
     try self.ui.state.importBridge(&self.state_bridge);
     try self.ui.resolveWindow(input.input, input.now_ms, input.content_scale);
-    const previous_nodes = self.ui.accessibilitySnapshot();
+    const previous_nodes = self.ui.accessibility_nodes.items;
     var focused_action: ?@import("layout").Element.Id = null;
     for (self.accessibility_pending.items) |request| {
         if (request.action != .focus) continue;
@@ -161,7 +161,7 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
         self.semantic_digest = digest;
     }
     try frame.commitState();
-    try self.state_bridge.write(@import("Theme.zig"), theme_state_key, self.ui.theme);
+    try self.state_bridge.write(@import("style").Theme, theme_state_key, self.ui.theme);
     self.draw_list.reset();
     try self.ui.tessellate(self.frame_arena.allocator(), &self.draw_list);
     const hover_changed = self.ui.resolveHit();
@@ -312,7 +312,7 @@ pub fn endDependencyCollection(self: *Context) []const StateBridge.Dependency {
 
 pub fn applyState(self: *Context, values: []const StateBridge.Value) !void {
     try self.state_bridge.load(values);
-    if (try self.state_bridge.read(@import("Theme.zig"), theme_state_key)) |theme| self.ui.theme = theme;
+    if (try self.state_bridge.read(@import("style").Theme, theme_state_key)) |theme| self.ui.theme = theme;
 }
 
 // Child geometry is already placed. Extend its clip ancestry with the parent's
@@ -540,9 +540,7 @@ test "embedded regions run after layout and reject repeated instances" {
             defer child_frame.deinit();
             try child_frame.e(@import("component/Rect.zig"){
                 .key = .str("child"),
-                .width = .fixed(120),
-                .height = .fixed(80),
-                .style = .{ .color = .primary },
+                .style = &.{ .width = .fixed(120), .height = .fixed(80), .background = .primary },
             });
             const output = try self.child.endFrame(&child_frame);
             return .{
@@ -571,17 +569,17 @@ test "embedded regions run after layout and reject repeated instances" {
         .content_scale = 1,
     });
     defer frame.deinit();
-    const root: @import("component/Rect.zig") = .{ .key = .str("parent"), .width = .fixed(120), .height = .fixed(80) };
+    const root: @import("component/Rect.zig") = .{ .key = .str("parent"), .style = &.{ .width = .fixed(120), .height = .fixed(80) } };
     _ = try root.open(&frame);
     try frame.contribute(.str("region"), 1, &callback, Callback.draw);
     try std.testing.expectError(error.RepeatedModule, frame.contribute(.str("duplicate"), 1, &callback, Callback.draw));
     try root.close(&frame);
-    _ = try frame.ui().openRoot(.str("host.overlay"), 0, 0, .{
+    _ = try frame.ui().openWith(.str("host.overlay"), .{
         .width = .fixed(120),
         .height = .fixed(80),
         .interactive = true,
         .z_index = Frame.host_overlay_layer_min,
-    }, .{ .rect = .{ .color = .{ 0, 0, 0, 1 } } });
+    }, .{ .rect = .{ .color = .{ 0, 0, 0, 1 } } }, .{ .root = .{ 0, 0 } });
     frame.ui().close();
     try std.testing.expectEqual(@as(u32, 0), callback.calls);
     const output = try parent.endFrame(&frame);

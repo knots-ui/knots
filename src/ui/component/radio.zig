@@ -3,12 +3,9 @@ const std = @import("std");
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("../root.zig");
-const Text = @import("Text.zig");
 
-const Color = ui_mod.Color;
 const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
-const Size = ui_mod.Size;
 const Style = ui_mod.Style;
 
 fn enumTagNames(comptime T: type, comptime values: []const T) [][]const u8 {
@@ -34,22 +31,46 @@ pub fn defaultLabels(comptime T: type) []const []const u8 {
     };
 }
 
+const radio_parts = struct {
+    box: *const Style = &.{},
+    /// `foreground` colors the dot.
+    indicator: *const Style = &.{},
+    label: *const Style = &.{},
+};
+
+const radio_base = struct {
+    pub const root: Style = .{ .direction = .row, .@"align" = .center, .gap = 8 };
+    pub const box: Style = .{
+        .width = .fixed(18),
+        .height = .fixed(18),
+        .background = .elevated,
+        .radius = .{ .fixed = 9 },
+        .border_width = .all(1),
+        .border_color = .toned,
+        .hover = &.{ .border_color = .accent },
+        .focus = &.{ .border_color = .accent },
+        .checked = &.{ .border_color = .accent },
+        .transition = .{ .duration_ms = 100 },
+    };
+    pub const indicator: Style = .{ .width = .grow(), .height = .grow(), .foreground = .accent };
+    pub const label: Style = .{};
+};
+
+const BOX_INDEX: usize = 1;
+const LABEL_INDEX: usize = 2;
+const INDICATOR_INDEX: usize = 3;
+
 pub fn RadioButton(comptime T: type) type {
     return struct {
         selected: *T,
         value: T,
-        key: Key,
         label: ?[]const u8 = null,
-        width: Element.sizing.Axis = .fit(),
-        height: Element.sizing.Axis = .fit(),
-        dot_size: f32 = 18,
-        gap: f32 = 8,
-        label_size: Size.Input = .sm,
-        label_color: Color.Input = .text,
-        unchecked_style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
-        checked_style: Style = .{ .color = .elevated, .border_color = .primary, .border_width = .all(1) },
-        dot_color: Color.Input = .primary,
-        hover_border_color: Color.Input = .primary,
+        key: Key,
+        style: *const Style = &.{},
+        parts: Parts = .{},
+
+        pub const Parts = radio_parts;
+        pub const base = radio_base;
 
         const Self = @This();
 
@@ -70,22 +91,7 @@ pub fn RadioButton(comptime T: type) type {
 
         pub fn open(self: *const Self, frame: *Frame) !Element.Id {
             const ui = frame.ui();
-
-            const min_height = @max(self.dot_size, try ui.lineHeight(self.label_size.resolve(), null));
-            const id = try ui.open(self.key, .{
-                .width = self.width,
-                .height = .{ .kind = self.height.kind, .value = self.height.value, .min = @max(self.height.min, min_height), .max = self.height.max },
-                .direction = .row,
-                .alignment = .center,
-                .gap = self.gap,
-                .interactive = true,
-                .focusable = true,
-            }, .none);
-            try ui.setAccessibility(id, .{
-                .role = .radio,
-                .name = self.label orelse &.{},
-                .state = .{ .checked = std.meta.eql(self.selected.*, self.value) },
-            });
+            const id = self.key.hash();
 
             const key_activate = ui.focused(id) and
                 (ui.input.containsKey(.space) or ui.input.containsKey(.enter) or ui.input.containsKey(.kp_enter));
@@ -94,10 +100,22 @@ pub fn RadioButton(comptime T: type) type {
                 if (!std.meta.eql(self.selected.*, self.value)) {
                     self.selected.* = self.value;
                 }
-                try ui.setAccessibility(id, .{ .role = .radio, .name = self.label orelse &.{}, .state = .{ .checked = true } });
                 if (key_activate) ui.input.consumeKeyboard();
             }
 
+            const selected = std.meta.eql(self.selected.*, self.value);
+            const st = ui.states(id, .{ .checked = selected });
+            const root = ui.resolveStyle(id, .{ .base = &radio_base.root, .user = self.style }, st, null);
+            const box = ui.resolveStyle(self.key.indexed(BOX_INDEX).hash(), .{ .base = &radio_base.box, .user = self.parts.box }, st, null);
+            var config = root.element(.{ .interactive = true, .focusable = true });
+            const box_h = if (box.layout.height.kind == .fixed) box.layout.height.value else 0;
+            config.height.min = @max(config.height.min, @max(box_h, try ui.lineHeight(root.content.font_size, root.content.font)));
+            _ = try ui.openResolved(self.key, &root, config, null);
+            try ui.setAccessibility(id, .{
+                .role = .radio,
+                .name = self.label orelse &.{},
+                .state = .{ .checked = selected },
+            });
             return id;
         }
 
@@ -105,58 +123,22 @@ pub fn RadioButton(comptime T: type) type {
             const ui = frame.ui();
             const id = self.key.hash();
             const selected = std.meta.eql(self.selected.*, self.value);
-            const hovered = ui.hovering(id) or ui.isHoveredWithin(id);
-            const focused = ui.focused(id);
-            const t = ui.anim(id, "hover", if (hovered or focused) 1.0 else 0.0, .{ .duration_ms = 100 });
+            const st = ui.states(id, .{ .checked = selected });
 
-            const base_style = if (selected) self.checked_style else self.unchecked_style;
-            var rect = base_style.toRect(&ui.theme);
-            const hover_border = self.hover_border_color.resolve(&ui.theme);
-            rect.border_color = .{
-                rect.border_color[0] + (hover_border[0] - rect.border_color[0]) * t,
-                rect.border_color[1] + (hover_border[1] - rect.border_color[1]) * t,
-                rect.border_color[2] + (hover_border[2] - rect.border_color[2]) * t,
-                rect.border_color[3] + (hover_border[3] - rect.border_color[3]) * t,
-            };
-
-            const cmds = try frame.arena().alloc(Decoration.DrawCmd, 3);
-            const center = self.dot_size * 0.5;
-            const outer_radius = @max(0, self.dot_size * 0.5 - 1);
-            const inner_radius = @max(0, self.dot_size * 0.27);
-            cmds[0] = .{ .fill_circle = .{
-                .cx = center,
-                .cy = center,
-                .radius = outer_radius,
-                .color = rect.color,
-            } };
-            cmds[1] = .{ .stroke_circle = .{
-                .cx = center,
-                .cy = center,
-                .radius = outer_radius,
-                .color = rect.border_color,
-                .thickness = @max(1, rect.border_width.max()),
-            } };
-            cmds[2] = .{ .fill_circle = .{
-                .cx = center,
-                .cy = center,
-                .radius = inner_radius,
-                .color = if (selected) self.dot_color.resolve(&ui.theme) else .{ 0, 0, 0, 0 },
-            } };
-
-            _ = try ui.open(self.key.indexed(1), .{
-                .width = .fixed(self.dot_size),
-                .height = .fixed(self.dot_size),
-            }, .{ .canvas = .{ .cmds = cmds } });
+            const box = try ui.openStyled(self.key.indexed(BOX_INDEX), .{ .base = &radio_base.box, .user = self.parts.box }, st, .{});
+            {
+                const indicator = ui.resolveStyle(self.key.indexed(INDICATOR_INDEX).hash(), .{ .base = &radio_base.indicator, .user = self.parts.indicator }, st, null);
+                const size = if (box.resolved.layout.width.kind == .fixed) box.resolved.layout.width.value else 18;
+                const cmds: []const Decoration.DrawCmd = if (selected) try frame.arena().dupe(Decoration.DrawCmd, &[_]Decoration.DrawCmd{
+                    .{ .fill_circle = .{ .cx = size * 0.5, .cy = size * 0.5, .radius = @max(0, size * 0.27), .color = indicator.content.foreground } },
+                }) else &.{};
+                _ = try ui.openWith(self.key.indexed(INDICATOR_INDEX), indicator.element(.{}), .{ .canvas = .{ .cmds = cmds } }, .{ .content = indicator.content });
+                ui.close();
+            }
             ui.close();
 
             if (self.label) |label| {
-                try frame.e(Text{
-                    .content = label,
-                    .size = self.label_size,
-                    .color = self.label_color,
-                    .selectable = false,
-                    .key = self.key.indexed(2),
-                });
+                _ = try ui.styledText(self.key.indexed(LABEL_INDEX), label, .{ .base = &radio_base.label, .user = self.parts.label }, st);
             }
 
             ui.close();
@@ -173,21 +155,17 @@ pub fn RadioGroup(comptime T: type) type {
         key: Key,
         values: []const T = enum_values,
         labels: []const []const u8 = enum_labels,
-        width: Element.sizing.Axis = .fit(),
-        height: Element.sizing.Axis = .fit(),
-        padding: Element.Padding = .init(0, 0, 0, 0),
-        dir: Element.Direction = .column,
-        gap: f32 = 6,
-        @"align": Element.Align = .start,
-        justify: Element.Justify = .start,
+        style: *const Style = &.{},
+        parts: GroupParts = .{},
 
-        dot_size: f32 = 18,
-        label_size: Size.Input = .sm,
-        label_color: Color.Input = .text,
-        unchecked_style: Style = .{ .color = .elevated, .border_color = .toned, .border_width = .all(1) },
-        checked_style: Style = .{ .color = .elevated, .border_color = .primary, .border_width = .all(1) },
-        dot_color: Color.Input = .primary,
-        hover_border_color: Color.Input = .primary,
+        pub const Parts = GroupParts;
+        pub const base = struct {
+            pub const root: Style = .{ .direction = .column, .gap = 6 };
+            pub const option = radio_base.root;
+            pub const box = radio_base.box;
+            pub const indicator = radio_base.indicator;
+            pub const label = radio_base.label;
+        };
 
         const Self = @This();
 
@@ -233,15 +211,7 @@ pub fn RadioGroup(comptime T: type) type {
                     frame.ui().input.consumeKeyboard();
                 }
             }
-            return try frame.ui().open(self.key, .{
-                .width = self.width,
-                .height = self.height,
-                .padding = self.padding,
-                .direction = self.dir,
-                .gap = self.gap,
-                .alignment = self.@"align",
-                .justify = self.justify,
-            }, .none);
+            return (try frame.ui().openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{}, .{})).id;
         }
 
         pub fn close(self: *const Self, frame: *Frame) !void {
@@ -251,16 +221,19 @@ pub fn RadioGroup(comptime T: type) type {
                     .value = value,
                     .key = self.key.indexed(1 + i),
                     .label = label,
-                    .dot_size = self.dot_size,
-                    .label_size = self.label_size,
-                    .label_color = self.label_color,
-                    .unchecked_style = self.unchecked_style,
-                    .checked_style = self.checked_style,
-                    .dot_color = self.dot_color,
-                    .hover_border_color = self.hover_border_color,
+                    .style = self.parts.option,
+                    .parts = .{ .box = self.parts.box, .indicator = self.parts.indicator, .label = self.parts.label },
                 });
             }
             frame.ui().close();
         }
     };
 }
+
+const GroupParts = struct {
+    /// Each option's root style.
+    option: *const Style = &.{},
+    box: *const Style = &.{},
+    indicator: *const Style = &.{},
+    label: *const Style = &.{},
+};

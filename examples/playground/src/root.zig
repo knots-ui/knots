@@ -10,6 +10,23 @@ const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Spacer = ui.component.Spacer;
+const Style = ui.Style;
+
+const card: Style = .{ .background = .elevated, .radius = .lg, .border_width = .all(1), .border_color = .toned };
+const nav_button: Style = .{
+    .width = .grow(),
+    .height = .fixed(28),
+    .padding = .xy(10, 0),
+    .justify = .start,
+    .font_size = .sm,
+    .hover = &.{ .state_layer = 0 },
+    .transition = .{ .duration_ms = 80 },
+};
+const nav_button_inactive: Style = nav_button.with(.{
+    .background = .transparent,
+    .foreground = .dimmed,
+    .hover = &.{ .background = .muted, .state_layer = 0 },
+});
 
 pub const DemoState = @import("native_demos/State.zig");
 
@@ -105,14 +122,14 @@ fn frame(view: *knots.View, context: *ui.Frame) !void {
     const indices = try self.orderedIndices(context.arena());
     const active_index = self.activeIndex(indices);
     const size = context.input().logical_extent;
-    const root: Rect = .{ .width = .fixed(@floatFromInt(size.width)), .height = .fixed(@floatFromInt(size.height)), .padding = .init(16, 16, 16, 16), .dir = .column, .key = .str("playground.root"), .style = .{ .color = .bg, .corner_radius = .none } };
+    const root: Rect = .{ .key = .str("playground.root"), .style = &.{ .width = .fixed(@floatFromInt(size.width)), .height = .fixed(@floatFromInt(size.height)), .padding = .all(16), .direction = .column, .background = .bg } };
     _ = try root.open(context);
     try renderHeader(context);
-    try context.e(Spacer{ .height = .fixed(12), .key = .str("playground.header-space") });
-    const body: Rect = .{ .width = .grow(), .height = .grow(), .dir = .row, .key = .str("playground.body") };
+    try context.e(Spacer{ .style = &.{ .height = .fixed(12) }, .key = .str("playground.header-space") });
+    const body: Rect = .{ .key = .str("playground.body"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .row } };
     _ = try body.open(context);
     try self.renderNav(context, indices, active_index);
-    try context.e(Spacer{ .width = .fixed(12), .key = .str("playground.nav-space") });
+    try context.e(Spacer{ .style = &.{ .width = .fixed(12) }, .key = .str("playground.nav-space") });
     if (active_index) |index| try self.renderActiveDemo(context, index) else try context.e(Text{ .key = .str("playground.waiting"), .content = "Waiting for UI modules..." });
     try body.close(context);
     try root.close(context);
@@ -154,32 +171,30 @@ fn activeIndex(self: *Self, indices: []const u32) ?u32 {
 }
 
 fn renderHeader(context: *ui.Frame) !void {
-    try context.e(.{ Rect{ .width = .grow(), .height = .fixed(48), .padding = .init(8, 16, 8, 16), .justify = .space_between, .@"align" = .center, .key = .str("playground.header"), .style = .{ .corner_radius = .none } }, .{Text{ .content = "knots playground", .size = .lg, .key = .str("playground.title"), .selectable = false }} });
+    try context.e(.{ Rect{ .key = .str("playground.header"), .style = &.{ .width = .grow(), .height = .fixed(48), .padding = .xy(16, 8), .justify = .space_between, .@"align" = .center } }, .{Text{ .content = "knots playground", .style = &.{ .font_size = .lg }, .key = .str("playground.title"), .selectable = false }} });
 }
 
 fn renderNav(self: *Self, context: *ui.Frame, indices: []const u32, active_index: ?u32) !void {
-    const nav: Rect = .{ .width = .fixed(220), .height = .grow(), .padding = .init(8, 8, 8, 8), .dir = .column, .gap = 4, .overflow = .scroll_y, .key = .str("playground.nav"), .style = .{ .corner_radius = .none } };
+    const nav: Rect = .{ .key = .str("playground.nav"), .style = &.{ .width = .fixed(220), .height = .grow(), .padding = .all(8), .direction = .column, .gap = 4, .overflow = .scroll_y } };
     _ = try nav.open(context);
-    var inactive_background = context.ui().theme.muted.value;
-    inactive_background[3] = 0;
     for (indices) |index| {
         const entry = self.catalogEntry(index);
         const label = try std.fmt.allocPrint(context.arena(), "{s} {s}", .{ entry.icon, entry.name });
         const active = active_index != null and active_index.? == index;
-        const response = try context.interact(Button{ .key = .str(self.demoId(index)), .width = .grow(), .height = .fixed(28), .padding = .init(0, 10, 0, 10), .@"align" = .center, .justify = .start, .style = .{ .color = if (active) .primary else .{ .color = ui.Color{ .value = inactive_background } }, .corner_radius = .sm }, .hover_style = if (active) .{} else .{ .color = .muted }, .hover_anim = .{ .opts = .{ .duration_ms = 80 } }, .text = .{ .content = label, .size = .sm, .color = if (active) null else .dimmed } });
+        const response = try context.interact(Button{ .key = .str(self.demoId(index)), .label = label, .style = if (active) &nav_button else &nav_button_inactive });
         if (response.clicked) self.active = std.hash.Wyhash.hash(0, self.demoId(index));
     }
     try nav.close(context);
 }
 
 fn renderActiveDemo(self: *Self, context: *ui.Frame, index: u32) !void {
-    const root: Rect = .{ .width = .grow(), .height = .grow(), .dir = .column, .gap = 10, .key = .str("playground.demo") };
+    const root: Rect = .{ .key = .str("playground.demo"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .column, .gap = 10 } };
     _ = try root.open(context);
     try self.renderDemoSummary(context, index);
-    const body: Rect = .{ .width = .grow(), .height = .grow(), .dir = .row, .gap = 12, .key = .str("playground.demo-body") };
+    const body: Rect = .{ .key = .str("playground.demo-body"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .row, .gap = 12 } };
     _ = try body.open(context);
     if (index < self.modules.count()) {
-        const panel: Rect = .{ .width = .grow(), .height = .grow(), .padding = .init(16, 16, 16, 16), .dir = .column, .overflow = .scroll, .key = .str("playground.demo-panel"), .style = .{ .color = .elevated, .corner_radius = .lg, .border_width = .all(1), .border_color = .toned } };
+        const panel: Rect = .{ .key = .str("playground.demo-panel"), .style = &comptime card.with(.{ .width = .grow(), .height = .grow(), .padding = .all(16), .direction = .column, .overflow = .scroll }) };
         _ = try panel.open(context);
         try self.modules.render(index, context);
         try panel.close(context);
@@ -194,7 +209,7 @@ fn renderActiveDemo(self: *Self, context: *ui.Frame, index: u32) !void {
 fn renderDemoSummary(self: *Self, context: *ui.Frame, index: u32) !void {
     const entry = self.catalogEntry(index);
     const title = try std.fmt.allocPrint(context.arena(), "{s} {s}", .{ entry.icon, entry.name });
-    try context.e(.{ Rect{ .width = .grow(), .height = .fixed(64), .padding = .init(10, 14, 10, 14), .dir = .row, .@"align" = .center, .justify = .space_between, .key = .str("playground.summary"), .style = .{ .color = .elevated, .corner_radius = .lg, .border_width = .all(1), .border_color = .toned } }, .{ Rect{ .width = .grow(), .dir = .column, .gap = 2, .key = .str("playground.summary-copy") }, .{ Text{ .content = title, .size = .lg, .key = .str("playground.summary-title") }, Text{ .content = entry.description, .size = .xs, .color = .dimmed, .wrap = true, .width = .grow(), .key = .str("playground.summary-description") } } } });
+    try context.e(.{ Rect{ .key = .str("playground.summary"), .style = &comptime card.with(.{ .width = .grow(), .height = .fixed(64), .padding = .xy(14, 10), .direction = .row, .@"align" = .center, .justify = .space_between }) }, .{ Rect{ .key = .str("playground.summary-copy"), .style = &.{ .width = .grow(), .direction = .column, .gap = 2 } }, .{ Text{ .content = title, .style = &.{ .font_size = .lg }, .key = .str("playground.summary-title") }, Text{ .content = entry.description, .style = &.{ .font_size = .xs, .foreground = .dimmed, .wrap = true, .width = .grow() }, .key = .str("playground.summary-description") } } } });
 }
 
 fn renderSourcePane(self: *Self, context: *ui.Frame, index: u32) !void {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const Element = @import("layout").Element;
-const Layer = @import("Layer.zig");
+const Layer = @import("layout").Layer;
 
 const InputScope = @This();
 

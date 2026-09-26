@@ -62,10 +62,12 @@ pub fn main(init: std.process.Init) !void {
 fn frame(_: *knots.View, frame_context: *ui.Frame) !void {
     const size = frame_context.input().logical_extent;
     try frame_context.e(ui.component.Rect{
-        .width = .fixed(@floatFromInt(size.width)),
-        .height = .fixed(@floatFromInt(size.height)),
-        .padding = .init(16, 16, 16, 16),
         .key = .src(@src()),
+        .style = &.{
+            .width = .fixed(@floatFromInt(size.width)),
+            .height = .fixed(@floatFromInt(size.height)),
+            .padding = .all(16),
+        },
     });
 }
 ```

@@ -5,10 +5,8 @@ const Element = @import("layout").Element;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
 
-const Color = ui_mod.Color;
 const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
-const Size = ui_mod.Size;
 const Style = ui_mod.Style;
 const animation = ui_mod.animation;
 
@@ -21,8 +19,7 @@ is_open: *bool,
 title: []const u8,
 key: Key,
 
-width: f32 = 480,
-height: f32 = 320,
+initial_size: math.Vec2 = .{ 480, 320 },
 min_size: math.Vec2 = .{ 240, 140 },
 max_size: ?math.Vec2 = null,
 initial_position: ?math.Vec2 = null,
@@ -32,16 +29,51 @@ closable: bool = true,
 close_on_escape: bool = true,
 maximizable: bool = true,
 
-title_bar_height: f32 = 36,
-title_size: Size.Input = .sm,
-title_padding: Element.Padding = .init(0, 12, 0, 12),
-content_padding: Element.Padding = .init(12, 12, 12, 12),
-content_gap: f32 = 0,
-content_direction: Element.Direction = .column,
-content_overflow: Element.Overflow = .scroll_y,
+/// The window frame.
+style: *const Style = &.{},
+parts: Parts = .{},
 
-panel_style: Style = .{ .color = .elevated, .corner_radius = .md, .border_color = .toned, .border_width = .all(1) },
-title_bar_style: Style = .{ .color = .muted },
+pub const Parts = struct {
+    /// A fixed `height` sets the bar height; `font_size` and `foreground` style the title.
+    title_bar: *const Style = &.{},
+    /// Maximize and close buttons; `foreground` colors the icons.
+    title_button: *const Style = &.{},
+    /// Hosts the children.
+    content: *const Style = &.{},
+};
+
+pub const base = struct {
+    pub const root: Style = .{
+        .direction = .column,
+        .overflow = .hidden,
+        .background = .elevated,
+        .foreground = .text,
+        .radius = .md,
+        .border_width = .all(1),
+        .border_color = .toned,
+    };
+    pub const title_bar: Style = .{
+        .width = .grow(),
+        .height = .fixed(36),
+        .direction = .row,
+        .@"align" = .center,
+        .padding = .xy(12, 0),
+        .background = .muted,
+    };
+    pub const title_button: Style = .{
+        .@"align" = .center,
+        .justify = .center,
+        .hover = &.{ .foreground = .accent },
+        .transition = .{ .duration_ms = 100 },
+    };
+    pub const content: Style = .{
+        .width = .grow(),
+        .height = .grow(),
+        .direction = .column,
+        .overflow = .scroll_y,
+        .padding = .all(12),
+    };
+};
 
 const FloatingWindow = @This();
 
@@ -68,7 +100,6 @@ const CASCADE_STEP: f32 = 24;
 const CASCADE_COUNT: u32 = 8;
 const RESIZE_HIT_SIZE: f32 = 20;
 const WINDOW_ANIM_OPTIONS: animation.Options = .{ .duration_ms = 180, .ease = .ease_out_cubic };
-const ICON_HOVER_ANIM_OPTIONS: animation.Options = .{ .duration_ms = 100 };
 
 pub fn open(self: *const FloatingWindow, frame: *Frame) !Element.Id {
     return (try self.openResponse(frame)).id;
@@ -87,7 +118,8 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
     const close_id = self.key.indexed(CLOSE_INDEX).hash();
     const resize_id = self.key.indexed(RESIZE_INDEX).hash();
     const state = try ui.state.touchFloatingWindow(id);
-    const title_bar_height = self.titleBarHeight();
+    const title_bar = ui.resolveStyle(title_id, .{ .base = &base.title_bar, .user = self.parts.title_bar }, .{}, null);
+    const title_bar_height = titleBarHeight(&title_bar);
     const input = frame.input();
     const viewport_size = input.logical_extent;
     const viewport = math.Rect.init(0, 0, @floatFromInt(viewport_size.width), @floatFromInt(viewport_size.height));
@@ -101,7 +133,7 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
     window_bounds.setY(std.math.clamp(window_bounds.y(), viewport_min[1], bounds_max[1]));
 
     if (!state.initialized) {
-        state.size = clampSizeToBounds(.{ self.width, self.height }, self.effectiveMinSize(), self.max_size, window_bounds);
+        state.size = clampSizeToBounds(self.initial_size, self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
         if (self.initial_position) |position| {
             state.position = position;
         } else {
@@ -121,7 +153,7 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
 
     if (state.maximized and !self.maximizable) {
         state.maximized = false;
-        state.size = clampSizeToBounds(state.restore_size, self.effectiveMinSize(), self.max_size, window_bounds);
+        state.size = clampSizeToBounds(state.restore_size, self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
         state.position = clampPosition(state.restore_position, state.size, window_bounds);
         frame.requestRedraw();
     }
@@ -131,12 +163,12 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
         if (maximize_from_keyboard) ui.input.consumeKeyboard();
         if (state.maximized) {
             state.maximized = false;
-            state.size = clampSizeToBounds(state.restore_size, self.effectiveMinSize(), self.max_size, window_bounds);
+            state.size = clampSizeToBounds(state.restore_size, self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
             state.position = clampPosition(state.restore_position, state.size, window_bounds);
         } else {
             state.restore_position = state.position;
             state.restore_size = state.size;
-            state.size = clampSizeToBounds(window_bounds.size(), self.effectiveMinSize(), self.max_size, window_bounds);
+            state.size = clampSizeToBounds(window_bounds.size(), self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
             state.position = clampPosition(window_bounds.min(), state.size, window_bounds);
             state.dragging = false;
             state.resizing = false;
@@ -178,10 +210,10 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
     } else if (state.dragging) {
         state.position = mouse - state.drag_offset;
     }
-    state.size = clampSizeToBounds(state.size, self.effectiveMinSize(), self.max_size, window_bounds);
+    state.size = clampSizeToBounds(state.size, self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
     state.position = clampPosition(state.position, state.size, window_bounds);
     if (state.maximized) {
-        state.size = clampSizeToBounds(window_bounds.size(), self.effectiveMinSize(), self.max_size, window_bounds);
+        state.size = clampSizeToBounds(window_bounds.size(), self.effectiveMinSize(title_bar_height), self.max_size, window_bounds);
         state.position = clampPosition(window_bounds.min(), state.size, window_bounds);
     }
     const rect_anim_options: animation.Options = if (state.dragging or state.resizing)
@@ -203,32 +235,28 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
         ui.requestCursor(.move);
 
     const z_index = try ui.state.floatingWindowZ(id);
-    const root_id = try ui.openRoot(self.key, state.render_position[0], state.render_position[1], .{
-        .width = .fixed(state.render_size[0]),
-        .height = .fixed(state.render_size[1]),
-        .direction = .column,
-        .overflow = .hidden,
-        .interactive = true,
-        .z_index = z_index.index(),
-    }, .{ .rect = self.panel_style.toRect(&ui.theme) });
+    const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, .{}, null);
+    var root_config = root.element(.{ .interactive = true });
+    root_config.width = .fixed(state.render_size[0]);
+    root_config.height = .fixed(state.render_size[1]);
+    root_config.z_index = z_index.index();
+    const root_id = try ui.openResolved(self.key, &root, root_config, .{ state.render_position[0], state.render_position[1] });
     try ui.setAccessibility(root_id, .{
         .role = .dialog,
         .name = self.title,
         .state = .{ .expanded = true },
     });
 
-    _ = try ui.open(self.key.indexed(TITLE_INDEX), .{
-        .width = .grow(),
-        .height = .fixed(title_bar_height),
-        .direction = .row,
-        .alignment = .center,
-        .padding = self.title_padding,
-        .interactive = true,
-    }, .{ .rect = self.title_bar_style.toRect(&ui.theme) });
+    {
+        // Re-resolve inside the frame so the title bar inherits the frame's content.
+        const bar = ui.resolveStyle(title_id, .{ .base = &base.title_bar, .user = self.parts.title_bar }, .{}, null);
+        const bar_config = bar.element(.{ .interactive = true });
+        _ = try ui.openResolved(self.key.indexed(TITLE_INDEX), &bar, bar_config, null);
+    }
 
-    const text_color = @as(Color.Input, .text).resolve(&ui.theme);
-    var title_decoration = try ui.textDecoration(self.title, self.title_size.resolve(), null, false);
-    title_decoration.text.color = text_color;
+    const bar_content = ui.contents.items[ui.currentSlot()];
+    var title_decoration = try ui.textDecoration(self.title, bar_content.font_size, bar_content.font, false);
+    title_decoration.text.color = bar_content.foreground;
     _ = try ui.open(self.key.indexed(TITLE_TEXT_INDEX), .{
         .width = .grow(),
         .height = .fit(),
@@ -236,26 +264,19 @@ pub fn openResponse(self: *const FloatingWindow, frame: *Frame) !OpenResponse {
     ui.close();
 
     if (self.maximizable) {
-        try self.openTitleButton(frame, MAXIMIZE_INDEX, if (state.maximized) "Restore" else "Maximize");
-        try self.openTitleIcon(frame, MAXIMIZE_INDEX, if (state.maximized) .restore else .maximize, title_bar_height, text_color);
+        try self.openTitleButton(frame, MAXIMIZE_INDEX, if (state.maximized) "Restore" else "Maximize", title_bar_height);
+        try self.openTitleIcon(frame, if (state.maximized) .restore else .maximize, title_bar_height);
         ui.close();
     }
 
     if (self.closable) {
-        try self.openTitleButton(frame, CLOSE_INDEX, "Close");
-        try self.openTitleIcon(frame, CLOSE_INDEX, .close, title_bar_height, text_color);
+        try self.openTitleButton(frame, CLOSE_INDEX, "Close", title_bar_height);
+        try self.openTitleIcon(frame, .close, title_bar_height);
         ui.close();
     }
     ui.close();
 
-    _ = try ui.open(self.key.indexed(CONTENT_INDEX), .{
-        .width = .grow(),
-        .height = .grow(),
-        .direction = self.content_direction,
-        .overflow = self.content_overflow,
-        .padding = self.content_padding,
-        .gap = self.content_gap,
-    }, .none);
+    _ = try ui.openStyled(self.key.indexed(CONTENT_INDEX), .{ .base = &base.content, .user = self.parts.content }, .{}, .{});
     return .{ .id = root_id, .close_reason = null };
 }
 
@@ -277,41 +298,31 @@ pub fn closeResponse(self: *const FloatingWindow, frame: *Frame) !?CloseReason {
     }
 
     if (self.resizable and !state.maximized) {
-        _ = try ui.openAt(
-            self.key.indexed(RESIZE_INDEX),
-            state.render_size[0] - RESIZE_HIT_SIZE,
-            state.render_size[1] - RESIZE_HIT_SIZE,
-            RESIZE_HIT_SIZE,
-            RESIZE_HIT_SIZE,
-            .{ .interactive = true },
-            .none,
-        );
+        var hit_config: Element.Config = .at(state.render_size[0] - RESIZE_HIT_SIZE, state.render_size[1] - RESIZE_HIT_SIZE, RESIZE_HIT_SIZE, RESIZE_HIT_SIZE);
+        hit_config.interactive = true;
+        _ = try ui.open(self.key.indexed(RESIZE_INDEX), hit_config, .none);
         ui.close();
     }
     ui.close();
     return response;
 }
 
-fn openTitleButton(self: *const FloatingWindow, frame: *Frame, comptime index: usize, name: []const u8) !void {
+fn openTitleButton(self: *const FloatingWindow, frame: *Frame, comptime index: usize, name: []const u8, title_bar_height: f32) !void {
     const ui = frame.ui();
     const button_id = self.key.indexed(index).hash();
-    const button_size = @max(1, self.titleBarHeight() - 8);
-    _ = try ui.open(self.key.indexed(index), .{
-        .width = .fixed(button_size),
-        .height = .fixed(button_size),
-        .alignment = .center,
-        .justify = .center,
-        .interactive = true,
-        .focusable = true,
-    }, .none);
+    const button_size = @max(1, title_bar_height - 8);
+    const button = ui.resolveStyle(button_id, .{ .base = &base.title_button, .user = self.parts.title_button }, ui.states(button_id, .{}), null);
+    var config = button.element(.{ .interactive = true, .focusable = true });
+    if (config.width.kind == .fit) config.width = .fixed(button_size);
+    if (config.height.kind == .fit) config.height = .fixed(button_size);
+    _ = try ui.openResolved(self.key.indexed(index), &button, config, null);
     try ui.setAccessibility(button_id, .{ .role = .button, .name = name });
 }
 
-fn openTitleIcon(self: *const FloatingWindow, frame: *Frame, comptime button_index: usize, icon: TitleIcon, title_bar_height: f32, color: [4]f32) !void {
+fn openTitleIcon(self: *const FloatingWindow, frame: *Frame, icon: TitleIcon, title_bar_height: f32) !void {
     const ui = frame.ui();
-    const button_id = self.key.indexed(button_index).hash();
-    const hover_t = ui.anim(button_id, "icon_hover", if (ui.hovering(button_id)) 1.0 else 0.0, ICON_HOVER_ANIM_OPTIONS);
-    const icon_color: [4]f32 = math.lerp(@as(math.Vec4, color), @as(math.Vec4, @as(Color.Input, .primary).resolve(&ui.theme)), hover_t);
+    // The icon draws in the title button's (transitioned) foreground.
+    const icon_color = ui.contents.items[ui.currentSlot()].foreground;
     const icon_size = @max(10, title_bar_height * 0.34);
     const cmds = try frame.arena().alloc(Decoration.DrawCmd, switch (icon) {
         .close => 2,
@@ -349,12 +360,13 @@ fn openTitleIcon(self: *const FloatingWindow, frame: *Frame, comptime button_ind
     ui.close();
 }
 
-fn effectiveMinSize(self: *const FloatingWindow) math.Vec2 {
-    return .{ self.min_size[0], @max(self.min_size[1], self.titleBarHeight()) };
+fn effectiveMinSize(self: *const FloatingWindow, title_bar_height: f32) math.Vec2 {
+    return .{ self.min_size[0], @max(self.min_size[1], title_bar_height) };
 }
 
-fn titleBarHeight(self: *const FloatingWindow) f32 {
-    return @max(1, self.title_bar_height);
+fn titleBarHeight(title_bar: *const Style.Resolved) f32 {
+    const h = title_bar.layout.height;
+    return @max(1, if (h.kind == .fixed) h.value else 36);
 }
 
 fn requestClose(self: *const FloatingWindow, frame: *Frame, reason: CloseReason) ?CloseReason {

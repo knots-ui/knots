@@ -61,11 +61,7 @@ fn frameCb(view: *knots.View, frame: *ui.Frame) !void {
     try frame.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .fixed(w),
-            .height = .fixed(h),
-            .padding = .init(8, 8, 8, 8),
-            .dir = .column,
-            .gap = 8,
+            .style = &.{ .width = .fixed(w), .height = .fixed(h), .padding = .init(8, 8, 8, 8), .direction = .column, .gap = 8 },
         },
         .{
             renderHeader,
@@ -89,14 +85,7 @@ fn renderHeader(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .grow(),
-            .height = .fixed(48),
-            .padding = .init(8, 16, 8, 16),
-            .dir = .row,
-            .@"align" = .center,
-            .justify = .space_between,
-            .gap = 16,
-            .style = .{ .color = .bg, .border_width = .all(1), .border_color = .toned, .corner_radius = .sm },
+            .style = &.{ .width = .grow(), .height = .fixed(48), .padding = .init(8, 16, 8, 16), .direction = .row, .@"align" = .center, .justify = .space_between, .gap = 16, .background = .bg, .border_width = .all(1), .border_color = .toned, .radius = .sm },
         },
         .{Text{ .key = .src(@src()), .content = title }},
     });
@@ -106,10 +95,7 @@ fn renderBody(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .grow(),
-            .height = .grow(),
-            .dir = .row,
-            .gap = 8,
+            .style = &.{ .width = .grow(), .height = .grow(), .direction = .row, .gap = 8 },
         },
         .{
             renderSidebar,
@@ -124,13 +110,7 @@ fn renderSidebar(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .fixed(260),
-            .height = .grow(),
-            .padding = .init(8, 8, 8, 8),
-            .dir = .column,
-            .gap = 4,
-            .overflow = .scroll_y,
-            .style = .{ .color = .bg, .border_width = .all(1), .border_color = .toned, .corner_radius = .sm },
+            .style = &.{ .width = .fixed(260), .height = .grow(), .padding = .init(8, 8, 8, 8), .direction = .column, .gap = 4, .overflow = .scroll_y, .background = .bg, .border_width = .all(1), .border_color = .toned, .radius = .sm },
         },
         .{renderSidebarItems},
     });
@@ -144,14 +124,8 @@ fn renderSidebarItems(app: *ui.Frame) !void {
         try app.e(.{
             Button{
                 .key = ui.Key.src(@src()).indexed(i),
-                .width = .grow(),
-                .height = .fixed(22),
-                .padding = .init(2, 8, 2, 8),
-                .@"align" = .center,
-                .justify = .start,
-                .style = .{ .color = if (i & 1 == 0) .muted else .toned, .corner_radius = .sm },
-                .hover_anim = .{},
-                .text = .{ .content = label, .size = .xs },
+                .label = label,
+                .style = &.{ .width = .grow(), .height = .fixed(22), .padding = .init(2, 8, 2, 8), .justify = .start, .background = if (i & 1 == 0) .muted else .toned, .font_size = .xs },
             },
         });
     }
@@ -161,13 +135,7 @@ fn renderGrid(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .grow(),
-            .height = .grow(),
-            .padding = .init(8, 8, 8, 8),
-            .dir = .column,
-            .gap = 2,
-            .overflow = .scroll_y,
-            .style = .{ .color = .bg, .border_width = .all(1), .border_color = .toned, .corner_radius = .sm },
+            .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(8, 8, 8, 8), .direction = .column, .gap = 2, .overflow = .scroll_y, .background = .bg, .border_width = .all(1), .border_color = .toned, .radius = .sm },
         },
         .{renderGridRows},
     });
@@ -189,10 +157,7 @@ fn renderGridRow(app: *ui.Frame, r: usize) !void {
     try app.e(.{
         Rect{
             .key = row_key,
-            .width = .grow(),
-            .height = .fixed(cell_size),
-            .dir = .row,
-            .gap = 2,
+            .style = &.{ .width = .grow(), .height = .fixed(cell_size), .direction = .row, .gap = 2 },
         },
         .{GridCells{ .row = r }},
     });
@@ -215,16 +180,8 @@ const GridCells = struct {
             try app.e(.{
                 Button{
                     .key = k,
-                    .width = .fixed(cell_size),
-                    .height = .fixed(cell_size),
-                    .@"align" = .center,
-                    .justify = .center,
-                    .style = .{
-                        .color = .{ .color = .{ .value = color } },
-                        .corner_radius = .sm,
-                    },
-                    .hover_anim = .{ .brighten = 0.35 },
-                    .text = .{ .content = label, .size = .{ .size = 9 } },
+                    .label = label,
+                    .style = &.{ .width = .fixed(cell_size), .height = .fixed(cell_size), .background = .{ .color = .{ .value = color } }, .font_size = .{ .px = 9 } },
                 },
             });
         }
@@ -245,16 +202,12 @@ fn renderCanvasStrip(app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),
-            .width = .grow(),
-            .height = .fixed(160),
-            .style = .{ .color = .bg, .border_width = .all(1), .border_color = .toned, .corner_radius = .sm },
-            .overflow = .scroll_x,
+            .style = &.{ .width = .grow(), .height = .fixed(160), .background = .bg, .border_width = .all(1), .border_color = .toned, .radius = .sm, .overflow = .scroll_x },
         },
         .{Canvas{
             .key = .src(@src()),
-            .width = .grow(),
-            .height = .grow(),
             .commands = commands.items,
+            .style = &.{ .width = .grow(), .height = .grow() },
         }},
     });
 }

@@ -23,31 +23,52 @@ pub const Input = union(enum) {
     highlighted,
     toned,
     dimmed,
+    /// The inherited tone's color (primary by default).
+    accent,
+    /// Readable content on `accent`.
+    on_accent,
+    /// The resolved foreground of the element (CSS currentColor).
+    current,
+    transparent,
     color: Color,
 
+    /// Resolve with the default scope: primary tone, theme text as `current`.
     pub fn resolve(self: Input, theme: *const Theme) [4]f32 {
+        return self.resolveIn(theme, .primary, theme.text.value);
+    }
+
+    pub fn resolveIn(self: Input, theme: *const Theme, tone: Tone, current: [4]f32) [4]f32 {
         return switch (self) {
             .color => |c| c.value,
+            .transparent => transparent.value,
+            .current => current,
+            .accent => tone.accent(theme).value,
+            .on_accent => tone.onAccent(theme).value,
             inline else => |_, tag| @field(theme.*, @tagName(tag)).value,
         };
     }
+};
 
-    pub fn isTransparent(self: Input) bool {
+pub const Tone = enum {
+    primary,
+    secondary,
+    success,
+    info,
+    warning,
+    @"error",
+    neutral,
+
+    pub fn accent(self: Tone, theme: *const Theme) Color {
         return switch (self) {
-            .color => |c| c.value[3] == 0,
-            else => false,
+            .neutral => theme.accented,
+            inline else => |tag| @field(theme.*, @tagName(tag)),
         };
     }
 
-    pub fn onColor(self: Input) ?Input {
+    pub fn onAccent(self: Tone, theme: *const Theme) Color {
         return switch (self) {
-            .primary => .on_primary,
-            .secondary => .on_secondary,
-            .success => .on_success,
-            .info => .on_info,
-            .warning => .on_warning,
-            .@"error" => .on_error,
-            else => null,
+            .neutral => theme.inverted,
+            inline else => |tag| @field(theme.*, "on_" ++ @tagName(tag)),
         };
     }
 };

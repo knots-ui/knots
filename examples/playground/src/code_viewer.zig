@@ -177,34 +177,32 @@ pub fn render(
 
     if (!expanded and panel_w <= 1) {
         const response = try app.interact(Button{
-            .padding = .init(3, 8, 3, 8),
-            .@"align" = .center,
-            .justify = .center,
             .key = .src(@src()),
-            .style = .{
-                .color = .muted,
-                .corner_radius = .sm,
+            .label = icon_expand_source,
+            .style = &.{
+                .padding = .xy(8, 3),
+                .background = .muted,
+                .foreground = .text,
                 .border_width = .all(1),
                 .border_color = .toned,
+                .font_size = .xs,
+                .hover = &.{ .border_color = .accent },
             },
-            .hover_style = .{ .border_color = .primary },
-            .hover_anim = .{},
-            .text = .{ .content = icon_expand_source, .size = .xs },
         });
         return response.clicked;
     }
 
     const panel = Rect{
-        .width = .fixed(panel_w),
-        .height = .grow(),
-        .padding = .init(12, 12, 12, 12),
-        .dir = .column,
-        .gap = 10,
-        .overflow = .hidden,
         .key = panel_key,
-        .style = .{
-            .color = .elevated,
-            .corner_radius = .lg,
+        .style = &.{
+            .width = .fixed(panel_w),
+            .height = .grow(),
+            .padding = .all(12),
+            .direction = .column,
+            .gap = 10,
+            .overflow = .hidden,
+            .background = .elevated,
+            .radius = .lg,
             .border_width = .all(1),
             .border_color = .toned,
         },
@@ -212,24 +210,22 @@ pub fn render(
     _ = try panel.open(app);
 
     const toggle = try app.interact(Button{
-        .padding = .init(3, 8, 3, 8),
-        .@"align" = .center,
-        .justify = .center,
         .key = .src(@src()),
-        .style = .{ .color = .primary, .corner_radius = .sm },
-        .hover_anim = .{},
-        .text = .{ .content = icon_collapse_source, .size = .xs },
+        .label = icon_collapse_source,
+        .style = &.{ .padding = .xy(8, 3), .font_size = .xs },
     });
 
     const body = Rect{
-        .width = .grow(),
-        .height = .grow(),
-        .dir = .column,
-        .overflow = .scroll,
         .key = ui.Key.str(source_path).indexed(0),
-        .style = .{
-            .corner_radius = .md,
-            .border_color = .toned,
+        // Every line inherits the monospace font and size from here.
+        .style = &.{
+            .width = .grow(),
+            .height = .grow(),
+            .direction = .column,
+            .overflow = .scroll,
+            .radius = .md,
+            .font = "jetbrains-mono",
+            .font_size = .xs,
         },
     };
     _ = try body.open(app);
@@ -252,33 +248,25 @@ fn renderLines(app: *ui.Frame, highlighted: Highlighted, source_path: []const u8
 
 fn renderLine(app: *ui.Frame, row_item: Row, line_idx: usize) !void {
     const row = Rect{
-        .width = .fit(),
-        .height = .fixed(line_height),
-        .dir = .row,
         .key = ui.Key.str("code.line").indexed(line_idx),
-        .style = .{ .corner_radius = .none },
+        .style = &.{ .height = .fixed(line_height), .direction = .row },
     };
     _ = try row.open(app);
 
     try app.e(.{
         Rect{
-            .width = .fixed(gutter_width),
-            .height = .fixed(line_height),
-            .justify = .end,
-            .padding = .init(0, 0, 0, 0),
             .key = ui.Key.str("code.gutter").indexed(line_idx),
+            .style = &.{ .width = .fixed(gutter_width), .height = .fixed(line_height), .justify = .end },
         },
         .{
             Text{
                 .content = row_item.gutter_label,
-                .size = .xs,
-                .color = .dimmed,
+                .style = &.{ .foreground = .dimmed },
                 .selectable = false,
-                .font = "jetbrains-mono",
                 .key = ui.Key.str("code.gutter.text").indexed(line_idx),
             },
         },
-        Spacer{ .width = .fixed(12), .key = ui.Key.str("code.gutter.space").indexed(line_idx) },
+        Spacer{ .style = &.{ .width = .fixed(12) }, .key = ui.Key.str("code.gutter.space").indexed(line_idx) },
     });
 
     for (row_item.spans, 0..) |span, span_idx| {
@@ -287,11 +275,9 @@ fn renderLine(app: *ui.Frame, row_item: Row, line_idx: usize) !void {
 
         try app.e(Text{
             .content = span.content,
-            .size = .xs,
-            .color = span.color,
+            .style = &.{ .foreground = span.color },
             .selectable = false,
             .key = ui.Key.str("code.span").indexed(line_idx).indexed(span_idx),
-            .font = "jetbrains-mono",
         });
     }
 

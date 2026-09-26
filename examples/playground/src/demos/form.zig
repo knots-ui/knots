@@ -36,10 +36,8 @@ pub fn main(app: *knots.Frame) !void {
     const arena = app.arena();
 
     const form = Rect{
-        .width = .fixed(420),
-        .dir = .column,
-        .gap = 12,
         .key = .src(@src()),
+        .style = &.{ .width = .fixed(420), .direction = .column, .gap = 12 },
     };
     _ = try form.open(app);
     try emailField(app);
@@ -49,22 +47,17 @@ pub fn main(app: *knots.Frame) !void {
     try deliveryField(app);
     try volumeField(app);
     try colorField(app);
-    try app.e(Spacer{ .height = .fixed(4), .key = .src(@src()) });
+    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(4) } });
     const tooltip = Tooltip{
         .key = .src(@src()),
-        .@"align" = .center,
         .content = "Open the confirmation dialog.",
+        .style = &.{ .@"align" = .center },
     };
     _ = try tooltip.open(app);
     if ((try app.interact(Button{
-        .width = .fixed(120),
-        .height = .fixed(34),
-        .style = .{ .color = .{ .color = form_state.color }, .corner_radius = .sm },
-        .hover_anim = .{},
         .key = .src(@src()),
-        .justify = .center,
-        .@"align" = .center,
-        .text = .{ .content = "submit" },
+        .label = "submit",
+        .style = &.{ .width = .fixed(120), .height = .fixed(34), .background = .{ .color = form_state.color } },
     })).clicked) {
         form_state.confirm_open = true;
         app.requestRedraw();
@@ -72,51 +65,37 @@ pub fn main(app: *knots.Frame) !void {
     try tooltip.close(app);
     try app.e(Text{
         .content = try std.fmt.allocPrint(arena, "current volume: {d:.0}%", .{form_state.volume * 100}),
-        .size = .xs,
-        .color = .dimmed,
         .key = .src(@src()),
+        .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
     try form.close(app);
 
     const dialog = Dialog{
         .is_open = &form_state.confirm_open,
         .key = .src(@src()),
-        .width = .fixed(320),
-        .gap = 16,
+        .style = &.{ .width = .fixed(320), .gap = 16 },
     };
     if (form_state.confirm_open) {
         _ = try dialog.open(app);
         try app.e(Text{
             .content = "Are you sure?",
-            .size = .lg,
             .key = .src(@src()),
+            .style = &.{ .font_size = .lg },
         });
         const actions = Rect{
-            .width = .grow(),
-            .dir = .row,
-            .gap = 8,
-            .justify = .end,
             .key = .src(@src()),
+            .style = &.{ .width = .grow(), .direction = .row, .gap = 8, .justify = .end },
         };
         _ = try actions.open(app);
         if ((try app.interact(Button{
-            .width = .fixed(80),
-            .height = .fixed(32),
-            .style = .{ .color = .success, .corner_radius = .sm },
-            .hover_anim = .{},
             .key = .src(@src()),
-            .justify = .center,
-            .@"align" = .center,
-            .text = .{ .content = "Yes", .color = .on_success },
+            .label = "Yes",
+            .style = &.{ .width = .fixed(80), .height = .fixed(32), .tone = .success },
         })).clicked) submit(app);
         if ((try app.interact(Button{
-            .width = .fixed(80),
-            .height = .fixed(32),
-            .style = .{ .color = .@"error", .corner_radius = .sm },
             .key = .src(@src()),
-            .justify = .center,
-            .@"align" = .center,
-            .text = .{ .content = "Cancel", .color = .on_error },
+            .label = "Cancel",
+            .style = &.{ .width = .fixed(80), .height = .fixed(32), .tone = .@"error" },
         })).clicked) closeConfirm(app);
         try actions.close(app);
         _ = try dialog.closeResponse(app);
@@ -124,9 +103,10 @@ pub fn main(app: *knots.Frame) !void {
 }
 
 fn openLabeled(app: *ui.Frame, comptime label: []const u8) !Rect {
-    const field = Rect{ .width = .grow(), .dir = .column, .gap = 2, .key = .str("form.field:" ++ label) };
+    // Returned to the caller: the style literal must be comptime so the pointer outlives this call.
+    const field = Rect{ .key = .str("form.field:" ++ label), .style = comptime &.{ .width = .grow(), .direction = .column, .gap = 2 } };
     _ = try field.open(app);
-    try app.e(Text{ .content = label, .size = .xs, .color = .dimmed, .key = .str("form.label:" ++ label) });
+    try app.e(Text{ .content = label, .key = .str("form.label:" ++ label), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
     return field;
 }
 
@@ -175,15 +155,14 @@ fn deliveryField(app: *ui.Frame) !void {
         .selected = &form_state.delivery_cadence,
         .values = &delivery_values,
         .labels = &delivery_labels,
-        .dir = .row,
-        .gap = 14,
+        .style = &.{ .direction = .row, .gap = 14 },
     });
     try field.close(app);
 }
 
 fn volumeField(app: *ui.Frame) !void {
     const field = try openLabeled(app, "notification volume");
-    const slider = Rect{ .width = .grow(), .height = .fixed(20), .padding = .init(8, 0, 8, 0), .key = .src(@src()) };
+    const slider = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(20), .padding = .init(8, 0, 8, 0) } };
     _ = try slider.open(app);
     _ = try app.interact(SliderInput{
         .key = .src(@src()),

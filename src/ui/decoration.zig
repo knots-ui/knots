@@ -1,5 +1,5 @@
-const Radius = @import("Radius.zig");
-const BorderWidth = @import("BorderWidth.zig");
+const Radius = @import("style").Radius;
+const BorderWidth = @import("style").BorderWidth;
 const DrawList = @import("render").DrawList;
 
 pub const Decoration = union(enum) {
@@ -11,12 +11,7 @@ pub const Decoration = union(enum) {
     image: Image,
     range: Range,
 
-    pub const Rect = struct {
-        color: [4]f32 = .{ 0, 0, 0, 0 },
-        corner_radius: Radius = .zero,
-        border_width: BorderWidth = .zero,
-        border_color: [4]f32 = .{ 0, 0, 0, 0 },
-    };
+    pub const Rect = @import("style").Surface;
 
     pub const Text = struct {
         content: []const u8 = "",

@@ -23,20 +23,22 @@ pub fn main(app: *knots.Frame) !void {
             ),
             .key = .src(@src()),
         },
-        Spacer{ .height = .fixed(12), .key = .src(@src()) },
+        Spacer{ .style = &.{ .height = .fixed(12) }, .key = .src(@src()) },
     });
 
     const grid = Rect{
-        .width = .grow(),
-        .height = .grow(),
-        .dir = .grid,
-        .gap = 12,
-        .padding = .init(8, 8, 8, 8),
-        .grid_template = .{
-            .cols = &.{ .{ .fr = 1 }, .{ .fr = 1 } },
-            .rows = &.{ .{ .fr = 1 }, .{ .fr = 1 } },
-        },
         .key = .src(@src()),
+        .style = &.{
+            .width = .grow(),
+            .height = .grow(),
+            .direction = .grid,
+            .gap = 12,
+            .padding = .all(8),
+            .grid = .{
+                .cols = &.{ .{ .fr = 1 }, .{ .fr = 1 } },
+                .rows = &.{ .{ .fr = 1 }, .{ .fr = 1 } },
+            },
+        },
     };
 
     _ = try grid.open(app);
@@ -63,30 +65,27 @@ fn card(
                 .duplicate_key = .str(key_prefix ++ ".duplicate"),
                 .archive_key = .str(key_prefix ++ ".archive"),
             },
-            .width = .grow(),
-            .height = .grow(),
-            .dir = .column,
-            .grid_placement = placement,
-            .menu_width = 168,
+            .style = &.{ .width = .grow(), .height = .grow(), .direction = .column, .grid_cell = placement },
+            .parts = .{ .popup = &.{ .width = .fixed(168) } },
         },
         .{
             Rect{
-                .width = .grow(),
-                .height = .grow(),
-                .padding = .init(14, 14, 14, 14),
-                .dir = .column,
-                .justify = .space_between,
                 .key = .str(key_prefix ++ ".card"),
-                .style = .{
-                    .color = .muted,
-                    .corner_radius = .md,
+                .style = &.{
+                    .width = .grow(),
+                    .height = .grow(),
+                    .padding = .all(14),
+                    .direction = .column,
+                    .justify = .space_between,
+                    .background = .muted,
+                    .radius = .md,
                     .border_width = .all(1),
                     .border_color = .toned,
                 },
             },
             .{
-                Text{ .content = title, .size = .md, .selectable = false, .key = .str(key_prefix ++ ".title") },
-                Text{ .content = "Right-click inside this area.", .size = .xs, .color = .dimmed, .selectable = false, .key = .str(key_prefix ++ ".hint") },
+                Text{ .content = title, .style = &.{ .font_size = .md }, .selectable = false, .key = .str(key_prefix ++ ".title") },
+                Text{ .content = "Right-click inside this area.", .style = &.{ .font_size = .xs, .foreground = .dimmed }, .selectable = false, .key = .str(key_prefix ++ ".hint") },
             },
         },
     });
@@ -113,24 +112,23 @@ const ActionRow = struct {
     label: []const u8,
     key: ui.Key,
 
+    /// Custom components get the same vocabulary and state handling as built-in ones.
+    const row_style: ui.Style = .{
+        .width = .grow(),
+        .height = .fixed(30),
+        .padding = .xy(10, 0),
+        .@"align" = .center,
+        .radius = .sm,
+        .font_size = .sm,
+        .hover = &.{ .background = .muted },
+    };
+
     pub fn open(self: *const ActionRow, app: *ui.Frame) !u64 {
         const id = self.key.hash();
-        const hovered = app.ui().hovering(id);
-
-        _ = try app.ui().open(self.key, .{
-            .width = .grow(),
-            .height = .fixed(30),
-            .padding = .init(0, 10, 0, 10),
-            .alignment = .center,
-            .interactive = true,
-        }, .{ .rect = .{
-            .color = (if (hovered) app.ui().theme.muted else app.ui().theme.elevated).value,
-            .corner_radius = app.ui().theme.radius.scale(0.5),
-        } });
+        _ = try app.ui().openStyled(self.key, .{ .base = &row_style, .user = &.{} }, app.ui().states(id, .{}), .{ .interactive = true });
 
         try app.e(Text{
             .content = self.label,
-            .size = .sm,
             .selectable = false,
             .key = self.key.indexed(1),
         });
