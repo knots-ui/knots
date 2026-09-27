@@ -36,6 +36,7 @@ const theme_state_key = StateBridge.key("knots.ui.theme");
 pub const Config = struct {
     ui: UI.Config = .{},
     arena_reset_mode: std.heap.ArenaAllocator.ResetMode = .retain_capacity,
+    accessibility: bool = true,
 };
 
 const Context = @This();
@@ -58,11 +59,14 @@ region_identities: [Frame.modules_max]u64 = @splat(0),
 accessibility_pending: std.ArrayList(Accessibility.ActionRequest) = .empty,
 accessibility_frame: std.ArrayList(Accessibility.ActionRequest) = .empty,
 semantic_revision: u64 = 0,
+/// While unchanged, widget state already matches the bridge, so import is skipped.
+bridge_synced_mutation: ?u64 = null,
 semantic_digest: u64 = 0,
 
 pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
     var ui = try UI.init(allocator, cfg.ui);
     errdefer ui.deinit();
+    ui.accessibility_enabled = cfg.accessibility;
 
     return .{
         .allocator = allocator,
@@ -115,7 +119,8 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
     } else {
         try self.state_bridge.write(@import("style").Theme, theme_state_key, self.ui.theme);
     }
-    try self.ui.state.importBridge(&self.state_bridge);
+    if (self.bridge_synced_mutation != self.state_bridge.mutation) try self.ui.state.importBridge(&self.state_bridge);
+    self.bridge_synced_mutation = null;
     try resolveWindow(&self.ui, input.input, input.now_ms, input.content_scale);
     const previous_nodes = self.ui.accessibility_nodes.items;
     var focused_action: ?@import("layout").Element.Id = null;
@@ -178,7 +183,7 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     errdefer self.frame_state.?.active = false;
     try endStateFrame(&self.ui);
     try resolve(&self.ui);
-    const digest = semanticDigest(semanticSnapshot(&self.ui));
+    const digest = if (self.cfg.accessibility) semanticDigest(semanticSnapshot(&self.ui)) else 0;
     if (self.semantic_revision == 0 or digest != self.semantic_digest) {
         if (self.semantic_revision == std.math.maxInt(u64)) return error.AccessibilityRevisionExhausted;
         self.semantic_revision += 1;
@@ -190,6 +195,7 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     try tessellate(&self.ui, self.frame_arena.allocator(), &self.draw_list);
     const hover_changed = resolveHit(&self.ui);
     try self.ui.state.exportBridge(&self.state_bridge);
+    self.bridge_synced_mutation = self.state_bridge.mutation;
     self.frame_state.?.active = false;
     const atlas = self.glyphAtlas();
     const packet = try self.draw_list.buildPacketRange(&self.packet_commands, atlas, 0, Frame.host_overlay_layer_min);
@@ -433,6 +439,8 @@ fn validateInput(input: *const input_types.FrameInput) !void {
 }
 
 fn reset(ui: *UI) void {
+    ui.cull_depth = 0;
+    ui.culled_count = 0;
     ui.layout_ctx.reset();
     ui.decorations.clearRetainingCapacity();
     ui.contents.clearRetainingCapacity();
@@ -478,6 +486,7 @@ fn resolve(ui: *UI) !void {
 
     try ui.layout_ctx.buildZOrder();
     syncStateBounds(ui);
+    try ui.recordCulling();
     try syncAccessibility(ui);
 }
 
@@ -1456,6 +1465,76 @@ test "wheel scroll over container updates offset" {
     const root_id = root_key.hash();
     const s = ui.state.get(.scroll, root_id).?;
     try testing.expectApproxEqAbs(25, s.offset[1], 0.001);
+}
+
+const CullingTest = struct {
+    const rows = 100;
+    const row_height = 40;
+
+    fn build(u: *UI) !void {
+        _ = try u.open(.str("list"), .{ .width = .fixed(300), .height = .fixed(200), .direction = .column, .overflow = .scroll_y }, .none);
+        for (0..rows) |i| {
+            _ = try u.open(Key.str("row").indexed(i), .{ .width = .grow(), .direction = .column }, .none);
+            if (!u.culling()) {
+                _ = try u.open(Key.str("cell").indexed(i), .{ .width = .grow(), .height = .fixed(row_height) }, .none);
+                u.close();
+            }
+            u.close();
+        }
+        u.close();
+    }
+
+    fn frame(u: *UI) !void {
+        reset(u);
+        try build(u);
+        try resolve(u);
+    }
+
+    fn rowBox(u: *UI, i: usize) math.Rect {
+        const slot = u.layout_ctx.slotForId(Key.str("row").indexed(i).hash()).?;
+        return u.layout_ctx.pool.get(slot).box;
+    }
+};
+
+test "rows far outside a scroll container are culled and keep their size" {
+    var ui = try UI.init(testing.allocator, .{});
+    defer ui.deinit();
+    ui.accessibility_enabled = false;
+
+    try CullingTest.frame(&ui);
+    try testing.expectEqual(0, ui.culled_count);
+    const full_elements = ui.layout_ctx.pool.elements.items.len;
+    const last_row = CullingTest.rowBox(&ui, CullingTest.rows - 1);
+
+    try CullingTest.frame(&ui);
+    try testing.expectEqual(CullingTest.rows - 10, ui.culled_count);
+    try testing.expectEqual(full_elements - ui.culled_count, ui.layout_ctx.pool.elements.items.len);
+    try testing.expectEqual(last_row, CullingTest.rowBox(&ui, CullingTest.rows - 1));
+}
+
+test "scrolling rebuilds culled rows near the new offset" {
+    var ui = try UI.init(testing.allocator, .{});
+    defer ui.deinit();
+    ui.accessibility_enabled = false;
+
+    try CullingTest.frame(&ui);
+    try CullingTest.frame(&ui);
+    (try ui.state.getOrCreate(.scroll, ui.allocator, Key.str("list").hash())).offset = .{ 0, 3000 };
+    try CullingTest.frame(&ui);
+
+    const visible = CullingTest.rowBox(&ui, 75);
+    try testing.expectEqual(@as(f32, CullingTest.row_height), visible.h());
+    try testing.expect(ui.layout_ctx.slotForId(Key.str("cell").indexed(75).hash()) != null);
+    try testing.expect(ui.layout_ctx.slotForId(Key.str("cell").indexed(0).hash()) == null);
+}
+
+test "no culling while accessibility is enabled" {
+    var ui = try UI.init(testing.allocator, .{});
+    defer ui.deinit();
+
+    try CullingTest.frame(&ui);
+    try CullingTest.frame(&ui);
+    try testing.expectEqual(0, ui.culled_count);
 }
 
 test "frame lifecycle rejects invalid ordering and supports abort" {

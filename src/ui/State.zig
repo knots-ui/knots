@@ -331,6 +331,10 @@ pub fn forEach(
     self.storage.forEach(name, ctx, f);
 }
 
+fn bridged(comptime field_name: []const u8) bool {
+    return !std.mem.eql(u8, field_name, "style_transition");
+}
+
 /// Restore widget values from the host-owned bridge. Transient hit/focus
 /// scalars remain frame-local because the host input router owns them.
 pub fn importBridge(self: *State, bridge: *StateBridge) !void {
@@ -348,7 +352,7 @@ pub fn importBridge(self: *State, bridge: *StateBridge) !void {
                 target.* = value;
             }
         };
-        try bridge.forEachDomain(stateDomain(field_name), Context{ .state = self }, Context.restore);
+        if (comptime bridged(field_name)) try bridge.forEachDomain(stateDomain(field_name), Context{ .state = self }, Context.restore);
     }
 }
 
@@ -356,6 +360,7 @@ pub fn importBridge(self: *State, bridge: *StateBridge) !void {
 pub fn exportBridge(self: *State, bridge: *StateBridge) !void {
     const field_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
     inline for (field_names) |field_name| {
+        if (comptime !bridged(field_name)) continue;
         const pool = &@field(self.storage.pools, field_name);
         var iterator = pool.map.iterator();
         while (iterator.next()) |entry| {

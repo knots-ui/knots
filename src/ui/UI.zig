@@ -77,6 +77,7 @@ press_ancestors: std.ArrayList(Element.Id),
 hover_ancestors: std.ArrayList(Element.Id),
 focus_order: std.ArrayList(Element.Id),
 accessibility_nodes: std.ArrayList(Accessibility.Node),
+accessibility_enabled: bool = true,
 accessibility_children: std.ArrayList(Element.Id) = .empty,
 accessibility_node_indices: std.AutoHashMapUnmanaged(Element.Id, u32) = .empty,
 accessibility_actions: []const Accessibility.ActionRequest = &.{},
@@ -88,6 +89,12 @@ slot_clips: std.ArrayList(Clip.State),
 child_clips: std.ArrayList(Clip.State),
 clip_nodes: std.ArrayList(Clip.Node),
 input_scopes: InputScope,
+cull_prev: std.AutoHashMapUnmanaged(Element.Id, CullRecord) = .empty,
+cull_next: std.AutoHashMapUnmanaged(Element.Id, CullRecord) = .empty,
+cull_ancestors: std.ArrayList(Element.Slot) = .empty,
+/// 1 inside a culled element, plus one per nested open, which creates no element.
+cull_depth: u32 = 0,
+culled_count: u32 = 0,
 content_scale: f32,
 scroll_line_size: FontSize.Input,
 anim_active: bool,
@@ -149,6 +156,9 @@ pub fn deinit(self: *UI) void {
     self.child_clips.deinit(self.allocator);
     self.clip_nodes.deinit(self.allocator);
     self.input_scopes.deinit(self.allocator);
+    self.cull_prev.deinit(self.allocator);
+    self.cull_next.deinit(self.allocator);
+    self.cull_ancestors.deinit(self.allocator);
 }
 
 pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration) !Element.Id {
@@ -164,7 +174,23 @@ pub const OpenOptions = struct {
 };
 
 pub fn openWith(self: *UI, key: Key, element: Element.Config, decoration: Decoration, options: OpenOptions) !Element.Id {
+    if (self.cull_depth > 0) {
+        self.cull_depth += 1;
+        return INVALID_ID;
+    }
     var cfg = element;
+    var decoration_used = decoration;
+    if (options.root == null) {
+        if (self.cullRecord(key.hash())) |record| {
+            if (cfg.width.kind == .fit) cfg.width = .fixed(record.size[0]);
+            if (cfg.height.kind == .fit) cfg.height = .fixed(record.size[1]);
+            cfg.interactive = false;
+            cfg.focusable = false;
+            decoration_used = .none;
+            self.cull_depth = 1;
+            self.culled_count += 1;
+        }
+    }
     if (options.root != null and self.layout_ctx.stack.items.len > 0) {
         cfg.z_index = State.overlayWithin(self.currentLayer(), Layer.fromIndex(cfg.z_index)).index();
     }
@@ -180,25 +206,92 @@ pub fn openWith(self: *UI, key: Key, element: Element.Config, decoration: Decora
     std.debug.assert(self.decorations.items.len == slot_index);
     std.debug.assert(self.contents.items.len == slot_index);
     std.debug.assert(self.clip_shapes.items.len == slot_index);
-    self.decorations.appendAssumeCapacity(decoration);
+    self.decorations.appendAssumeCapacity(decoration_used);
     self.contents.appendAssumeCapacity(content);
-    self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration));
+    self.clip_shapes.appendAssumeCapacity(clipShapeFromDecoration(decoration_used));
     const el = self.layout_ctx.pool.get(slot);
     el.input_scope = self.input_scopes.current();
     if (options.root) |pos| {
         el.box.setX(pos[0]);
         el.box.setY(pos[1]);
     }
-    if (decoration == .text) {
-        el.intrinsic_w = decoration.text.intrinsic_w;
-        el.intrinsic_h = decoration.text.intrinsic_h;
+    if (decoration_used == .text) {
+        el.intrinsic_w = decoration_used.text.intrinsic_w;
+        el.intrinsic_h = decoration_used.text.intrinsic_h;
     }
     if (cfg.focusable) self.focus_order.appendAssumeCapacity(id);
     return id;
 }
 
 pub fn close(self: *UI) void {
+    if (self.cull_depth > 1) {
+        self.cull_depth -= 1;
+        return;
+    }
+    self.cull_depth = 0;
     self.layout_ctx.close();
+}
+
+pub fn culling(self: *const UI) bool {
+    return self.cull_depth > 0;
+}
+
+pub const CullRecord = struct {
+    container: Element.Id,
+    position: [2]f32,
+    size: [2]f32,
+    offset: [2]f32,
+    viewport: [2]f32,
+};
+
+/// Culls elements more than one viewport outside their scroll container, judged from the last layout.
+fn cullRecord(self: *UI, id: Element.Id) ?CullRecord {
+    if (!self.cullEnabled()) return null;
+    const record = self.cull_prev.get(id) orelse return null;
+    if (id == self.state.focused or id == self.state.active) return null;
+    const offset = if (self.state.get(.scroll, record.container)) |scroll| scroll.offset else record.offset;
+    inline for (0..2) |axis| {
+        const start = record.position[axis] - (offset[axis] - record.offset[axis]);
+        const margin = record.viewport[axis];
+        if (start >= record.viewport[axis] + margin or start + record.size[axis] <= -margin) return record;
+    }
+    return null;
+}
+
+fn cullEnabled(self: *const UI) bool {
+    // Screen readers need the whole tree.
+    return !self.accessibility_enabled and self.cull_prev.count() > 0;
+}
+
+pub fn recordCulling(self: *UI) !void {
+    self.cull_next.clearRetainingCapacity();
+    if (self.accessibility_enabled) return self.swapCullRecords();
+    const elements = self.layout_ctx.pool.elements.items;
+    try self.cull_ancestors.resize(self.allocator, elements.len);
+    const ancestors = self.cull_ancestors.items;
+    for (elements, 0..) |*el, slot| {
+        ancestors[slot] = Element.INVALID_SLOT;
+        if (el.parent == Element.INVALID_SLOT) continue;
+        const parent = &elements[el.parent];
+        ancestors[slot] = if (parent.overflow.isScroll()) el.parent else ancestors[el.parent];
+        const container_slot = ancestors[slot];
+        if (container_slot == Element.INVALID_SLOT or el.id == INVALID_ID) continue;
+        if (el.position == .absolute) continue;
+        const container = &elements[container_slot];
+        const offset = if (self.state.get(.scroll, container.id)) |scroll| scroll.offset else math.Vec2{ 0, 0 };
+        try self.cull_next.put(self.allocator, el.id, .{
+            .container = container.id,
+            .position = .{ el.box.x() - container.box.x(), el.box.y() - container.box.y() },
+            .size = .{ el.box.w(), el.box.h() },
+            .offset = .{ offset[0], offset[1] },
+            .viewport = .{ container.box.w(), container.box.h() },
+        });
+    }
+    self.swapCullRecords();
+}
+
+fn swapCullRecords(self: *UI) void {
+    std.mem.swap(std.AutoHashMapUnmanaged(Element.Id, CullRecord), &self.cull_prev, &self.cull_next);
 }
 
 /// Layer of the element being built.
@@ -335,6 +428,7 @@ pub fn textDecorationStyled(self: *UI, content: []const u8, resolved: *const sty
 
 /// Open and close a non-interactive text leaf styled by `cascade`.
 pub fn styledText(self: *UI, key: Key, content: []const u8, cascade: style.Cascade, st: style.States) !Element.Id {
+    if (self.cull_depth > 0) return INVALID_ID;
     const resolved = self.resolveStyle(key.hash(), cascade, st, null);
     const decoration = try self.textDecorationStyled(content, &resolved);
     const id = try self.openWith(key, resolved.element(.{}), decoration, .{ .content = resolved.content });
@@ -372,6 +466,7 @@ fn sampleTransition(s: *const State.StyleTransition, now_ms: i64) struct { visua
 /// Replaces only the draw decoration.
 /// Overflow clip shape is captured when the slot is opened so canvas-like components can replace their drawing later.
 pub fn setDecoration(self: *UI, slot: Element.Slot, decoration: Decoration) void {
+    if (self.cull_depth > 0) return;
     self.decorations.items[slot] = decoration;
 }
 
@@ -449,6 +544,7 @@ fn sampleAnim(s: *const State.Anim, now_ms: i64) AnimSample {
 }
 
 pub fn setAccessibility(self: *UI, id: Element.Id, meta: Accessibility.Metadata) !void {
+    if (!self.accessibility_enabled) return;
     if (id == Element.INVALID_ID) return;
     if (id == Accessibility.root_id) return error.ReservedAccessibilityId;
     const existing_index = self.accessibility_node_indices.get(id);

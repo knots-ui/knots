@@ -234,7 +234,7 @@ pub fn e(self: *Frame, tree: anytype) !void {
                     isChildren(structure.field_types[index + 1]))
                 {
                     const id = try value.open(self);
-                    if (id != UI.INVALID_ID) {
+                    if (id != UI.INVALID_ID and !self.ui().culling()) {
                         try self.e(@field(tree, structure.field_names[index + 1]));
                     }
                     try value.close(self);

@@ -21,7 +21,7 @@ const Face = @This();
 
 // Bounds keep cache memory and end-of-frame eviction latency predictable.
 const cache_evict_age_frames: u32 = 2;
-const cache_entry_count_max: u32 = 4096;
+const cache_entry_count_max: u32 = 65536;
 const cache_evictions_per_frame_max: u32 = 256;
 pub const text_bytes_max: u32 = 1024 * 1024;
 const quantized_pixel_exclusive_max: f32 = 4294967296.0;

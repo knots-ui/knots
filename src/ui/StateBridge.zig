@@ -44,6 +44,11 @@ const SignalEntry = struct {
     signal: signal.Id,
 };
 
+const EntryKey = struct {
+    domain: u64,
+    key: u64,
+};
+
 const SubscriberEntry = struct {
     identity: u64,
     subscriber: signal.Subscriber,
@@ -52,7 +57,10 @@ const SubscriberEntry = struct {
 allocator: std.mem.Allocator,
 graph: Graph,
 entries: std.ArrayList(Entry) = .empty,
+entry_indices: std.AutoHashMapUnmanaged(EntryKey, u32) = .empty,
 signals: std.ArrayList(SignalEntry) = .empty,
+signal_indices: std.AutoHashMapUnmanaged(EntryKey, u32) = .empty,
+mutation: u64 = 0,
 subscribers: std.ArrayList(SubscriberEntry) = .empty,
 dependencies: std.ArrayList(Dependency) = .empty,
 scope: u64 = 0,
@@ -80,8 +88,10 @@ pub fn deinit(self: *StateBridge) void {
     }
     self.subscribers.deinit(self.allocator);
     self.signals.deinit(self.allocator);
+    self.signal_indices.deinit(self.allocator);
     self.dependencies.deinit(self.allocator);
     self.entries.deinit(self.allocator);
+    self.entry_indices.deinit(self.allocator);
     if (comptime host_graph_enabled) self.graph.deinit();
     self.* = undefined;
 }
@@ -91,10 +101,13 @@ pub fn clear(self: *StateBridge) void {
     std.debug.assert(!self.collecting_dependencies);
     for (self.entries.items) |entry| self.allocator.free(entry.bytes);
     self.entries.clearRetainingCapacity();
+    self.entry_indices.clearRetainingCapacity();
     if (comptime host_graph_enabled) {
         for (self.signals.items) |entry| self.graph.destroySignal(entry.signal) catch @panic("signal cleanup failed");
     }
     self.signals.clearRetainingCapacity();
+    self.signal_indices.clearRetainingCapacity();
+    self.mutation +%= 1;
     self.dependencies.clearRetainingCapacity();
     if (comptime host_graph_enabled) self.graph.markAllDirty();
 }
@@ -115,14 +128,15 @@ pub fn load(self: *StateBridge, snapshot: []const Value) !void {
         replacement.deinit(self.allocator);
     }
     try replacement.ensureTotalCapacity(self.allocator, snapshot.len);
+    var replacement_indices: std.AutoHashMapUnmanaged(EntryKey, u32) = .empty;
+    errdefer replacement_indices.deinit(self.allocator);
+    try replacement_indices.ensureTotalCapacity(self.allocator, @intCast(snapshot.len));
 
     for (snapshot, 0..) |value, index| {
         try validateValue(value);
-        for (snapshot[0..index]) |previous| {
-            if (previous.domain == value.domain) {
-                if (previous.key == value.key) return error.DuplicateStateKey;
-            }
-        }
+        const slot = replacement_indices.getOrPutAssumeCapacity(.{ .domain = value.domain, .key = value.key });
+        if (slot.found_existing) return error.DuplicateStateKey;
+        slot.value_ptr.* = @intCast(index);
         replacement.appendAssumeCapacity(.{
             .domain = value.domain,
             .key = value.key,
@@ -141,6 +155,9 @@ pub fn load(self: *StateBridge, snapshot: []const Value) !void {
     for (self.entries.items) |entry| self.allocator.free(entry.bytes);
     self.entries.deinit(self.allocator);
     self.entries = replacement;
+    self.entry_indices.deinit(self.allocator);
+    self.entry_indices = replacement_indices;
+    self.mutation +%= 1;
 }
 
 pub fn values(self: *const StateBridge, allocator: std.mem.Allocator) ![]Value {
@@ -198,6 +215,7 @@ pub fn writeDomain(self: *StateBridge, comptime T: type, domain: u64, key_value:
         if (entry.bytes.len != bytes.len) return error.StateSchemaMismatch;
         if (std.mem.eql(u8, entry.bytes, &bytes)) return;
         @memcpy(entry.bytes, &bytes);
+        self.mutation +%= 1;
         try self.bumpSignal(entry.signal);
         return;
     }
@@ -206,7 +224,11 @@ pub fn writeDomain(self: *StateBridge, comptime T: type, domain: u64, key_value:
     const state_signal = try self.ensureSignal(scoped_domain, key_value);
     const owned = try self.allocator.dupe(u8, &bytes);
     errdefer self.allocator.free(owned);
-    try self.entries.append(self.allocator, .{
+    try self.entry_indices.ensureUnusedCapacity(self.allocator, 1);
+    try self.entries.ensureUnusedCapacity(self.allocator, 1);
+    self.entry_indices.putAssumeCapacityNoClobber(.{ .domain = scoped_domain, .key = key_value }, @intCast(self.entries.items.len));
+    self.mutation +%= 1;
+    self.entries.appendAssumeCapacity(.{
         .domain = scoped_domain,
         .key = key_value,
         .schema = schemaFor(T),
@@ -376,26 +398,20 @@ fn trackDependency(self: *StateBridge, domain: u64, key_value: u64) !void {
 fn ensureSignal(self: *StateBridge, domain: u64, key_value: u64) !signal.Id {
     std.debug.assert(key_value != 0);
     if (comptime !host_graph_enabled) return .{ .index = 0, .generation = 0 };
-    for (self.signals.items) |entry| {
-        if (entry.domain == domain) {
-            if (entry.key == key_value) return entry.signal;
-        }
-    }
+    if (self.findSignal(domain, key_value)) |state_signal| return state_signal;
     if (self.signals.items.len == entries_max) return error.TooManyStateSignals;
+    try self.signal_indices.ensureUnusedCapacity(self.allocator, 1);
+    try self.signals.ensureUnusedCapacity(self.allocator, 1);
     const state_signal = try self.graph.createSignal(self.revision);
-    errdefer self.graph.destroySignal(state_signal) catch @panic("signal rollback failed");
-    try self.signals.append(self.allocator, .{ .domain = domain, .key = key_value, .signal = state_signal });
+    self.signal_indices.putAssumeCapacityNoClobber(.{ .domain = domain, .key = key_value }, @intCast(self.signals.items.len));
+    self.signals.appendAssumeCapacity(.{ .domain = domain, .key = key_value, .signal = state_signal });
     return state_signal;
 }
 
 fn findSignal(self: *const StateBridge, domain: u64, key_value: u64) ?signal.Id {
     std.debug.assert(key_value != 0);
-    for (self.signals.items) |entry| {
-        if (entry.domain == domain) {
-            if (entry.key == key_value) return entry.signal;
-        }
-    }
-    return null;
+    const index = self.signal_indices.get(.{ .domain = domain, .key = key_value }) orelse return null;
+    return self.signals.items[index].signal;
 }
 
 fn bumpSignal(self: *StateBridge, state_signal: signal.Id) !void {
@@ -444,22 +460,14 @@ fn scopedDomain(self: *const StateBridge, domain: u64) u64 {
 
 fn find(self: *const StateBridge, domain: u64, key_value: u64) ?*const Entry {
     std.debug.assert(key_value != 0);
-    for (self.entries.items) |*entry| {
-        if (entry.domain == domain) {
-            if (entry.key == key_value) return entry;
-        }
-    }
-    return null;
+    const index = self.entry_indices.get(.{ .domain = domain, .key = key_value }) orelse return null;
+    return &self.entries.items[index];
 }
 
 fn findMutable(self: *StateBridge, domain: u64, key_value: u64) ?*Entry {
     std.debug.assert(key_value != 0);
-    for (self.entries.items) |*entry| {
-        if (entry.domain == domain) {
-            if (entry.key == key_value) return entry;
-        }
-    }
-    return null;
+    const index = self.entry_indices.get(.{ .domain = domain, .key = key_value }) orelse return null;
+    return &self.entries.items[index];
 }
 
 fn validateValue(value: Value) !void {

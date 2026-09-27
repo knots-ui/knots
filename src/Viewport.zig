@@ -49,7 +49,7 @@ contribution_painters: std.AutoHashMapUnmanaged(u64, *render.Painter) = .empty,
 accessibility: ?*NativeAccessibility = null,
 
 fn init(self: *Viewport, allocator: std.mem.Allocator, id: Id, window_value: Window, renderer_value: *render.Renderer, cfg: Config) !void {
-    var ui_ctx = try Context.init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode });
+    var ui_ctx = try Context.init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode, .accessibility = cfg.accessibility });
     errdefer ui_ctx.deinit();
 
     const overlay_painter = try renderer_value.createLayerPainter();
