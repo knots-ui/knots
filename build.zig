@@ -117,6 +117,7 @@ pub fn build(b: *std.Build) void {
             const vulkan = b.dependency("vulkan", .{
                 .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
             });
+            buildTool(vulkan.artifact("vulkan-zig-generator"));
             break :blk b.createModule(.{
                 .target = target,
                 .optimize = optimize,
@@ -191,6 +192,7 @@ pub fn build(b: *std.Build) void {
             },
             .linux => {
                 const scanner = WaylandScanner.create(b, .{});
+                buildTool(scanner.run.producer.?);
                 scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
                 scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
                 scanner.generate("wl_compositor", 6);
@@ -593,8 +595,14 @@ fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build
         }),
         .use_llvm = false,
     });
+    buildTool(spv);
 
     mod.addAnonymousImport(name, .{ .root_source_file = spv.getEmittedBin() });
+}
+
+/// Outside `--watch`, incremental compiles skip the build cache and would rebuild these tools every time.
+fn buildTool(compile: *std.Build.Step.Compile) void {
+    compile.incremental = false;
 }
 
 /// Portable modules have no window, GPU, JavaScript, or operating-system imports.
