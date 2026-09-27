@@ -167,3 +167,83 @@ pub fn computeSlugUniforms(width: f32, height: f32, physical_width: f32, physica
         .viewport = .{ width, height, physical_width, physical_height },
     };
 }
+
+/// Per-pass data for one Dual Kawase blur step, in source UV.
+pub const BlurInstance = extern struct {
+    /// xy = origin, zw = extent of the source region.
+    source: [4]f32,
+    /// Tap clamp: xy = min, zw = max.
+    bounds: [4]f32,
+    /// Tap distance; zero copies.
+    tap: [2]f32,
+};
+
+/// One backdrop-filtered rounded rect, in logical pixels.
+pub const GlassInstance = extern struct {
+    rect: [4]f32,
+    corner_radius: [4]f32,
+    /// xy = logical origin of the filtered region, zw = its UV per logical pixel.
+    sample_map: [4]f32,
+    /// x = saturation, y = clip node.
+    params: [4]f32,
+    /// x = refraction, y = bezel, z = dispersion, w = specular.
+    optics: [4]f32,
+};
+
+pub const BlurStep = enum { down, up };
+
+const blur_attrs = gpu.Pipeline.attrsFromStruct(BlurInstance);
+const glass_attrs = gpu.Pipeline.attrsFromStruct(GlassInstance);
+
+const blur_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
+    .stride = @sizeOf(BlurInstance),
+    .step_mode = .instance,
+    .attributes = &blur_attrs,
+}};
+
+const glass_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
+    .stride = @sizeOf(GlassInstance),
+    .step_mode = .instance,
+    .attributes = &glass_attrs,
+}};
+
+// Identical to the primitives layouts, so their bind groups are interchangeable.
+const blur_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ primitives_uniform_bgl, primitives_texture_bgl };
+
+/// Renders into a scene-format blur level; no blending and no depth.
+pub fn blurDesc(step: BlurStep, target_format: ?gpu.Texture.Format) gpu.Pipeline.Desc {
+    const fs_entry: []const u8 = switch (step) {
+        .down => "fs_blur_down",
+        .up => "fs_blur_up",
+    };
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+        .webgpu => .{ .wgsl = shaders.backdrop_wgsl },
+        .vulkan => .{ .spirv = .{ .vs = shaders.backdrop_blur_vert_spv, .fs = shaders.backdrop_blur_frag_spv, .fs_entry = fs_entry } },
+    };
+    return .{
+        .label = "backdrop_blur",
+        .shader = shader,
+        .vs_entry = "vs_blur",
+        .fs_entry = fs_entry,
+        .vertex_buffers = &blur_buffers,
+        .bind_group_layouts = &blur_bgls,
+        .color_target = .{ .format = target_format },
+    };
+}
+
+/// Draws filtered backdrop into the scene target, which stores display encoding.
+pub fn glassDesc(target_format: ?gpu.Texture.Format) gpu.Pipeline.Desc {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+        .webgpu => .{ .wgsl = shaders.backdrop_wgsl },
+        .vulkan => .{ .spirv = .{ .vs = shaders.backdrop_glass_vert_spv, .fs = shaders.backdrop_glass_frag_spv, .fs_entry = "fs_glass" } },
+    };
+    return .{
+        .label = "backdrop_glass",
+        .shader = shader,
+        .vs_entry = "vs_glass",
+        .fs_entry = "fs_glass",
+        .vertex_buffers = &glass_buffers,
+        .bind_group_layouts = &primitives_bgls,
+        .color_target = .{ .format = target_format, .blend = standard_blend },
+    };
+}

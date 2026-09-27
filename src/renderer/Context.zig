@@ -17,7 +17,11 @@ text_pipeline: gpu_impl.Pipeline,
 linear_pipeline: ?gpu_impl.Pipeline,
 linear_instance_pipeline: ?gpu_impl.Pipeline,
 linear_text_pipeline: ?gpu_impl.Pipeline,
-linear_sampler: ?gpu_impl.Sampler,
+/// Bilinear, for the scene target, its composite and backdrop blur levels.
+scene_sampler: gpu_impl.Sampler,
+blur_down_pipeline: gpu_impl.Pipeline,
+blur_up_pipeline: gpu_impl.Pipeline,
+glass_pipeline: gpu_impl.Pipeline,
 atlas: *Texture,
 unit_index_buf: gpu_impl.Buffer,
 
@@ -66,11 +70,17 @@ pub fn createForDevice(allocator: std.mem.Allocator, device: *gpu_impl.Device, d
     else
         null;
     errdefer if (self.linear_text_pipeline) |*p| p.deinit();
-    self.linear_sampler = if (use_linear_target)
-        try self.device.createSampler(.{ .mag_filter = .nearest, .min_filter = .nearest, .label = "linear_sampler" })
-    else
-        null;
-    errdefer if (self.linear_sampler) |*s| s.deinit();
+    self.scene_sampler = try self.device.createSampler(.{ .label = "scene_sampler" });
+    errdefer self.scene_sampler.deinit();
+
+    // Blur levels are offscreen color-only passes, so these skip the depth state.
+    const scene_format: ?gpu.Texture.Format = if (use_linear_target) .rgba8 else null;
+    self.blur_down_pipeline = try self.device.createPipeline(pipelines.blurDesc(.down, scene_format));
+    errdefer self.blur_down_pipeline.deinit();
+    self.blur_up_pipeline = try self.device.createPipeline(pipelines.blurDesc(.up, scene_format));
+    errdefer self.blur_up_pipeline.deinit();
+    self.glass_pipeline = try self.createPipeline(pipelines.glassDesc(scene_format));
+    errdefer self.glass_pipeline.deinit();
 
     self.atlas = try Texture.create(allocator, self.device, &self.pipeline, 1, 1, .r8, .nearest, "atlas_texture");
     errdefer self.atlas.destroyAfterWait();
@@ -87,6 +97,11 @@ pub fn createForDevice(allocator: std.mem.Allocator, device: *gpu_impl.Device, d
 
     self.allocator = allocator;
     return self;
+}
+
+/// Color format of offscreen scene targets and backdrop levels.
+pub fn sceneFormat(self: *const Context) gpu.Texture.Format {
+    return if (self.linear_pipeline != null) .rgba8 else self.device.surfaceFormat();
 }
 
 pub fn createPipeline(self: *Context, desc: gpu.Pipeline.Desc) !gpu_impl.Pipeline {
@@ -109,7 +124,10 @@ pub fn destroy(self: *Context) void {
     self.device.waitIdle() catch {};
     self.unit_index_buf.deinit();
     self.atlas.destroyAfterWait();
-    if (self.linear_sampler) |*s| s.deinit();
+    self.glass_pipeline.deinit();
+    self.blur_up_pipeline.deinit();
+    self.blur_down_pipeline.deinit();
+    self.scene_sampler.deinit();
     if (self.linear_text_pipeline) |*p| p.deinit();
     if (self.linear_instance_pipeline) |*p| p.deinit();
     if (self.linear_pipeline) |*p| p.deinit();

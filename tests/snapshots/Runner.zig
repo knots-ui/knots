@@ -18,7 +18,7 @@ const Dialog = ui.component.Dialog;
 const WIDTH = 800;
 const HEIGHT = 600;
 const MAX_CHANNEL_DELTA = 2;
-const scene_names = [_][]const u8{ "layout", "components", "graphics", "overlay" };
+const scene_names = [_][]const u8{ "layout", "components", "graphics", "overlay", "backdrop" };
 
 io: std.Io,
 allocator: std.mem.Allocator,
@@ -82,6 +82,7 @@ fn frame(view: *knots.View, app: *ui.Frame) !void {
         1 => try self.renderComponents(app),
         2 => try renderGraphics(app),
         3 => try self.renderOverlay(app),
+        4 => try renderBackdrop(app),
         else => unreachable,
     }
     try view.app.requestReadback(view.id, self.allocator);
@@ -279,6 +280,77 @@ fn renderGraphics(app: *ui.Frame) !void {
             },
         },
     });
+}
+
+fn renderBackdrop(app: *ui.Frame) !void {
+    const background = comptime blk: {
+        var commands: [21]Canvas.DrawCmd = undefined;
+        for (commands[0..20], 0..) |*command, index| {
+            const t: f32 = @as(f32, @floatFromInt(index)) / 19.0;
+            command.* = .{ .fill_rect = .{
+                .x = @as(f32, @floatFromInt(index)) * 40,
+                .y = 0,
+                .w = 20,
+                .h = 600,
+                .color = .{ 0.95 - 0.7 * t, 0.3 + 0.5 * t, 0.2 + 0.7 * t, 1 },
+            } };
+        }
+        commands[20] = .{ .fill_circle = .{ .cx = 400, .cy = 300, .radius = 120, .color = .{ 1, 0.85, 0.2, 1 } } };
+        break :blk commands;
+    };
+    try app.e(.{
+        Rect{ .style = &.{ .width = .fixed(WIDTH), .height = .fixed(HEIGHT), .direction = .layer }, .key = .str("backdrop-root") },
+        .{
+            Canvas{ .commands = &background, .style = &.{ .width = .fixed(WIDTH), .height = .fixed(HEIGHT) }, .key = .str("backdrop-scene") },
+            // Heavy blur with a light tint.
+            glassPane("backdrop-frosted", .{ 60, 60 }, .{ 320, 200 }, 28, .{ .blur = 12, .saturation = 1.3 }, .base, ui.Color.rgba(255, 255, 255, 30)),
+            // No blur: a sharp, desaturated copy.
+            glassPane("backdrop-sharp", .{ 420, 80 }, .{ 300, 160 }, 80, .{ .saturation = 0 }, .base, null),
+            // Light blur with a refracting rim.
+            glassPane("backdrop-pill", .{ 300, 330 }, .{ 400, 90 }, 45, .{ .blur = 4, .refraction = 14, .bezel = 30, .dispersion = 0.2, .specular = 0.5 }, .base, null),
+            // Clear lens.
+            glassPane("backdrop-lens", .{ 60, 320 }, .{ 180, 180 }, 90, .{ .refraction = 24, .bezel = 40, .dispersion = 0.3, .specular = 0.8 }, .base, null),
+            // A later layer gets its own snapshot, which includes the panes below.
+            glassPane("backdrop-popup", .{ 460, 400 }, .{ 260, 140 }, 20, .{ .blur = 24, .refraction = 10, .bezel = 18, .specular = 0.6 }, .popup, null),
+            Rect{ .style = &.{
+                .width = .fixed(220),
+                .height = .fixed(64),
+                .position = .absolute,
+                .offset = .{ 260, 520 },
+                .padding = .all(20),
+                .radius = .{ .fixed = 32 },
+                .backdrop = .glass,
+                .background = .{ .color = ui.Color.rgba(255, 255, 255, 24) },
+            }, .key = .str("backdrop-labelled") },
+            .{
+                Text{ .content = "Backdrop refraction", .style = &.{ .foreground = .{ .color = ui.Color.rgba(20, 24, 32, 255) } }, .key = .str("backdrop-label") },
+            },
+        },
+    });
+}
+
+fn glassPane(
+    comptime key: []const u8,
+    comptime offset: [2]f32,
+    comptime size: [2]f32,
+    comptime radius: f32,
+    comptime material: ui.Material,
+    comptime layer: ui.Layer,
+    comptime tint: ?ui.Color,
+) Rect {
+    const static = struct {
+        const value: ui.Style = .{
+            .width = .fixed(size[0]),
+            .height = .fixed(size[1]),
+            .position = .absolute,
+            .offset = offset,
+            .layer = layer,
+            .radius = .{ .fixed = radius },
+            .backdrop = material,
+            .background = if (tint) |color| .{ .color = color } else null,
+        };
+    };
+    return .{ .style = &static.value, .key = .str(key) };
 }
 
 fn ensureDiffDir(io: std.Io) !void {

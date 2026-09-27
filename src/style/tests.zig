@@ -124,3 +124,26 @@ test "visual lerp interpolates surface and foreground" {
     try expectEqual([4]f32{ 0.5, 0.5, 0.5, 0.5 }, mid.surface.color);
     try expectEqual([4]f32{ 0.5, 0, 0, 0.5 }, mid.foreground);
 }
+
+test "material presets, validity and interpolation" {
+    const Material = style.Material;
+    try std.testing.expect(!Material.none.isActive());
+    try std.testing.expect(Material.frosted.isActive() and Material.glass.isActive());
+    try std.testing.expect(!(Material{ .refraction = 10 }).isActive());
+    try std.testing.expect(Material.glass.isValid());
+    try std.testing.expect(!(Material{ .blur = -1 }).isValid());
+    try std.testing.expect(!(Material{ .blur = std.math.nan(f32) }).isValid());
+    try expectEqual(@as(f32, 8), Material.lerp(.none, .frosted, 0.5).blur);
+}
+
+test "backdrop resolves, fades with opacity, and animates" {
+    const Material = style.Material;
+    const r = resolveWith(&.{ .backdrop = .frosted }, &.{ .opacity = 0.5 }, .{});
+    try expectEqual(Material.lerp(.none, .frosted, 0.5), r.surface.backdrop);
+    try std.testing.expect(r.surface.isVisible());
+    const hovered = resolveWith(&.{ .backdrop = .frosted }, &.{ .hover = &.{ .backdrop = .glass } }, .{ .hover = true });
+    try expectEqual(Material.glass, hovered.surface.backdrop);
+    const mid = style.Visual.lerp(r.visual(), hovered.visual(), 0.5);
+    try expectEqual(Material.lerp(r.surface.backdrop, .glass, 0.5), mid.surface.backdrop);
+    try std.testing.expect(!resolveWith(&.{}, &.{}, .{}).surface.isVisible());
+}

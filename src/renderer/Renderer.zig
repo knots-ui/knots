@@ -28,10 +28,10 @@ cfg: Config,
 surface: *gpu_impl.Surface,
 frame: gpu_impl.Frame,
 painter: *Painter,
-linear_target: ?gpu_impl.Texture = null,
-linear_target_bg: ?gpu_impl.BindGroup = null,
-linear_target_width: u32 = 0,
-linear_target_height: u32 = 0,
+scene_target: ?gpu_impl.Texture = null,
+scene_target_bg: ?gpu_impl.BindGroup = null,
+scene_target_width: u32 = 0,
+scene_target_height: u32 = 0,
 depth_target: ?gpu_impl.Texture = null,
 depth_target_width: u32 = 0,
 depth_target_height: u32 = 0,
@@ -78,7 +78,7 @@ pub fn create(allocator: std.mem.Allocator, context: *Context, window_handle: gp
     return self;
 }
 pub fn destroy(self: *Renderer) void {
-    std.debug.assert(self.linearTargetStateValid());
+    std.debug.assert(self.sceneTargetStateValid());
     switch (self.readback) {
         .ready => |*readback| readback.deinit(),
         else => {},
@@ -87,8 +87,8 @@ pub fn destroy(self: *Renderer) void {
 
     self.painter.destroyAfterWait();
 
-    if (self.linear_target_bg) |*bg| bg.deinit();
-    if (self.linear_target) |*t| t.deinit();
+    if (self.scene_target_bg) |*bg| bg.deinit();
+    if (self.scene_target) |*t| t.deinit();
     if (self.depth_target) |*t| t.deinit();
     self.frame.deinit();
     self.surface.deinit();
@@ -176,7 +176,10 @@ pub fn renderGraph(self: *Renderer, graph: []const CompositionNode, content_scal
         for (graph[0..index]) |previous| std.debug.assert(previous.painter != node.painter);
     }
     const linear = self.context.linear_pipeline != null;
-    if (linear) try self.ensureLinearTarget(self.context.device, self.context);
+    // Backdrops sample what is drawn, so they need the offscreen target.
+    var offscreen = linear;
+    for (graph) |node| offscreen = offscreen or node.packet.hasBackdrop();
+    if (offscreen) try self.ensureSceneTarget(self.context.device, self.context);
     try self.syncDepthTarget(self.context.device);
     var frame_context = try self.frame.begin();
     var prepared: [32]Painter.Prepared = undefined;
@@ -188,18 +191,15 @@ pub fn renderGraph(self: *Renderer, graph: []const CompositionNode, content_scal
             .upload_slot = frame_context.upload_slot,
             .frame_context = frame_context,
             .linear_target = linear,
+            .backdrops = offscreen,
         });
     }
-    var pass = try frame_context.beginRenderPass(.{
-        .label = "composition_graph",
-        .color_attachment = .{ .clear_color = self.cfg.clear_color, .target = if (linear) &self.linear_target.? else null },
-        .depth_attachment = if (self.depth_target) |*target| .{ .store_op = .discard, .target = target } else null,
-    });
-    {
-        defer pass.end();
-        for (graph, 0..) |node, index| try node.painter.encode(&prepared[index], &pass);
-    }
-    try self.finishFrame(&frame_context, &graph[0].painter.frame_uploads[frame_context.upload_slot], content_scale, linear);
+    var nodes: [32]EncodeNode = undefined;
+    for (graph, 0..) |node, index| nodes[index] = .{ .painter = node.painter, .prepared = &prepared[index] };
+    if (self.encodeFrame(&frame_context, nodes[0..graph.len], offscreen)) |failure| switch (failure) {
+        .callback, .renderer => |err| return err,
+    };
+    try self.finishFrame(&frame_context, &graph[0].painter.frame_uploads[frame_context.upload_slot], content_scale, offscreen);
 }
 
 /// Upload resources, encode, submit, and present to this renderer's owned surface.
@@ -286,6 +286,8 @@ fn draw(self: *Renderer, dl: *const Packet, content_scale: f32) ?RenderFailure {
     }
 
     const use_linear_target = context.linear_pipeline != null;
+    // Backdrops sample what is drawn, so they need the offscreen target.
+    const offscreen = use_linear_target or dl.hasBackdrop();
     const prepared = self.painter.prepare(dl, &.{
         .width = self.surface.cfg.window_width,
         .height = self.surface.cfg.window_height,
@@ -293,45 +295,68 @@ fn draw(self: *Renderer, dl: *const Packet, content_scale: f32) ?RenderFailure {
         .upload_slot = frame_ctx.upload_slot,
         .frame_context = frame_ctx,
         .linear_target = use_linear_target,
+        .backdrops = offscreen,
     }) catch |err| return .{ .renderer = err };
     const upload = &self.painter.frame_uploads[frame_ctx.upload_slot];
-    if (use_linear_target) self.ensureLinearTarget(device, context) catch |err| return .{ .renderer = err };
+    if (offscreen) self.ensureSceneTarget(device, context) catch |err| return .{ .renderer = err };
 
-    var pass = if (use_linear_target)
-        frame_ctx.beginRenderPass(.{
-            .label = "ui_linear",
-            .color_attachment = .{
-                .clear_color = self.cfg.clear_color,
-                .target = &self.linear_target.?,
+    const nodes = [_]EncodeNode{.{ .painter = self.painter, .prepared = &prepared }};
+    if (self.encodeFrame(&frame_ctx, &nodes, offscreen)) |failure| {
+        switch (failure) {
+            .callback => {
+                self.finishFrame(&frame_ctx, upload, content_scale, offscreen) catch |err| return .{ .renderer = err };
             },
-            .depth_attachment = if (self.depth_target) |*target|
-                .{ .store_op = .discard, .target = target }
-            else
-                null,
-        }) catch |err| return .{ .renderer = err }
-    else
-        frame_ctx.beginRenderPass(.{
-            .label = "ui",
-            .color_attachment = .{ .clear_color = self.cfg.clear_color },
-            .depth_attachment = if (self.depth_target) |*target|
-                .{ .store_op = .discard, .target = target }
-            else
-                null,
-        }) catch |err| return .{ .renderer = err };
+            .renderer => {},
+        }
+        return failure;
+    }
 
-    self.painter.encode(&prepared, &pass) catch |err| {
-        pass.end();
-        self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |failure| return .{ .renderer = failure };
-        return .{ .callback = err };
-    };
-    pass.end();
-
-    self.finishFrame(&frame_ctx, upload, content_scale, use_linear_target) catch |err| return .{ .renderer = err };
+    self.finishFrame(&frame_ctx, upload, content_scale, offscreen) catch |err| return .{ .renderer = err };
     return null;
 }
 
-fn finishFrame(self: *Renderer, frame_ctx: *gpu_impl.Frame.Context, upload: *FrameUploads, content_scale: f32, use_linear_target: bool) !void {
-    if (use_linear_target) try self.compositeLinearTarget(self.context, frame_ctx, upload, content_scale);
+const EncodeNode = struct {
+    painter: *Painter,
+    prepared: *const Painter.Prepared,
+};
+
+/// Begin the frame's main pass, encode every node in order, and end it. Each
+/// backdrop group splits the pass: the scene target is snapshotted and a pass
+/// that loads it resumes. On failure no pass remains open.
+fn encodeFrame(
+    self: *Renderer,
+    frame_ctx: *gpu_impl.Frame.Context,
+    nodes: []const EncodeNode,
+    offscreen: bool,
+) ?RenderFailure {
+    const target: ?*gpu_impl.Texture = if (offscreen) &self.scene_target.? else null;
+    var pass = frame_ctx.beginRenderPass(self.mainPassDesc(target, .clear)) catch |err| return .{ .renderer = err };
+    for (nodes) |node| {
+        var cursor: Painter.Cursor = .{};
+        while (true) {
+            const group = node.painter.encodeSegment(node.prepared, &pass, &cursor) catch |err| {
+                pass.end();
+                return .{ .callback = err };
+            } orelse break;
+            pass.end();
+            node.painter.captureBackdrop(node.prepared, frame_ctx, &self.scene_target_bg.?, group, &cursor) catch |err| return .{ .renderer = err };
+            pass = frame_ctx.beginRenderPass(self.mainPassDesc(target, .load)) catch |err| return .{ .renderer = err };
+        }
+    }
+    pass.end();
+    return null;
+}
+
+fn mainPassDesc(self: *Renderer, target: ?*gpu_impl.Texture, load_op: gpu_impl.RenderPass.LoadOp) gpu_impl.RenderPass.Desc {
+    return .{
+        .label = "ui",
+        .color_attachment = .{ .load_op = load_op, .clear_color = self.cfg.clear_color, .target = target },
+        .depth_attachment = if (self.depth_target) |*depth| .{ .store_op = .discard, .target = depth } else null,
+    };
+}
+
+fn finishFrame(self: *Renderer, frame_ctx: *gpu_impl.Frame.Context, upload: *FrameUploads, content_scale: f32, offscreen: bool) !void {
+    if (offscreen) try self.compositeSceneTarget(self.context, frame_ctx, upload, content_scale);
     try self.submitFrame(frame_ctx);
 }
 
@@ -344,13 +369,13 @@ fn submitFrame(self: *Renderer, frame: *gpu_impl.Frame.Context) !void {
     self.readback = .{ .ready = try frame.submitReadback(allocator) };
 }
 
-fn ensureLinearTarget(self: *Renderer, device: *gpu_impl.Device, context: *Context) !void {
+fn ensureSceneTarget(self: *Renderer, device: *gpu_impl.Device, context: *Context) !void {
     const w = self.surface.cfg.window_width;
     const h = self.surface.cfg.window_height;
-    std.debug.assert(self.linearTargetStateValid());
-    if (self.linear_target != null) {
-        if (self.linear_target_width == w) {
-            if (self.linear_target_height == h) return;
+    std.debug.assert(self.sceneTargetStateValid());
+    if (self.scene_target != null) {
+        if (self.scene_target_width == w) {
+            if (self.scene_target_height == h) return;
         }
     }
 
@@ -358,44 +383,44 @@ fn ensureLinearTarget(self: *Renderer, device: *gpu_impl.Device, context: *Conte
     var new_target = try device.createTexture(.{
         .width = w,
         .height = h,
-        .format = .rgba8,
+        .format = context.sceneFormat(),
         .usage = .{ .texture_binding = true, .render_attachment = true },
-        .label = "linear_ui_target",
+        .label = "ui_scene_target",
     });
     errdefer new_target.deinit();
 
     var new_target_bg = try device.createBindGroup(.{
-        .label = "linear_ui_target_bg",
+        .label = "ui_scene_target_bg",
         .pipeline = &context.instance_pipeline,
         .layout_index = 1,
         .entries = &.{
             .{ .binding = 0, .resource = .{ .texture_view = &new_target } },
-            .{ .binding = 1, .resource = .{ .sampler = &context.linear_sampler.? } },
+            .{ .binding = 1, .resource = .{ .sampler = &context.scene_sampler } },
         },
     });
     errdefer new_target_bg.deinit();
 
-    var old_target = self.linear_target;
-    var old_target_bg = self.linear_target_bg;
-    self.linear_target = new_target;
-    self.linear_target_bg = new_target_bg;
-    self.linear_target_width = w;
-    self.linear_target_height = h;
+    var old_target = self.scene_target;
+    var old_target_bg = self.scene_target_bg;
+    self.scene_target = new_target;
+    self.scene_target_bg = new_target_bg;
+    self.scene_target_width = w;
+    self.scene_target_height = h;
     if (old_target_bg) |*bind_group| bind_group.deinit();
     if (old_target) |*target| target.deinit();
-    std.debug.assert(self.linearTargetStateValid());
+    std.debug.assert(self.sceneTargetStateValid());
 }
 
-fn linearTargetStateValid(self: *const Renderer) bool {
-    if (self.linear_target) |_| {
-        if (self.linear_target_bg == null) return false;
-        if (self.linear_target_width == 0) return false;
-        if (self.linear_target_height == 0) return false;
+fn sceneTargetStateValid(self: *const Renderer) bool {
+    if (self.scene_target) |_| {
+        if (self.scene_target_bg == null) return false;
+        if (self.scene_target_width == 0) return false;
+        if (self.scene_target_height == 0) return false;
         return true;
     }
-    if (self.linear_target_bg != null) return false;
-    if (self.linear_target_width != 0) return false;
-    if (self.linear_target_height != 0) return false;
+    if (self.scene_target_bg != null) return false;
+    if (self.scene_target_width != 0) return false;
+    if (self.scene_target_height != 0) return false;
     return true;
 }
 
@@ -434,8 +459,8 @@ fn syncDepthTarget(self: *Renderer, device: *gpu_impl.Device) !void {
     self.depth_target_height = height;
 }
 
-fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
-    std.debug.assert(self.linearTargetStateValid());
+fn compositeSceneTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl.Frame.Context, uploads: *FrameUploads, content_scale: f32) !void {
+    std.debug.assert(self.sceneTargetStateValid());
     const width = self.surface.cfg.window_width;
     const height = self.surface.cfg.window_height;
     const logical_w: f32 = @as(f32, @floatFromInt(width)) / content_scale;
@@ -463,7 +488,7 @@ fn compositeLinearTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_imp
     });
     pass.bindPipeline(&context.instance_pipeline);
     pass.setBindGroup(0, &uploads.instance_uniform_bg);
-    pass.setBindGroup(1, &self.linear_target_bg.?);
+    pass.setBindGroup(1, &self.scene_target_bg.?);
     pass.setBindGroup(2, &uploads.instance_clip_bg);
     pass.setVertexBuffer(0, &uploads.composite_instance_buf, 0, @sizeOf(gpu.Instance));
     pass.setIndexBuffer(&context.unit_index_buf, 0, 6 * @sizeOf(u32));

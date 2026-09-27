@@ -308,6 +308,10 @@ pub fn build(b: *std.Build) void {
         embedSpirV(b, optimize, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
         embedSpirV(b, optimize, render_mod, "primitives_frag_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_fragment.zig"));
         embedSpirV(b, optimize, render_mod, "slug_frag_spv", b.path("src/gpu/backend/vulkan/shaders/slug_fragment.zig"));
+        embedSpirV(b, optimize, render_mod, "backdrop_blur_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_vertex.zig"));
+        embedSpirV(b, optimize, render_mod, "backdrop_blur_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_fragment.zig"));
+        embedSpirV(b, optimize, render_mod, "backdrop_glass_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_vertex.zig"));
+        embedSpirV(b, optimize, render_mod, "backdrop_glass_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_fragment.zig"));
     }
 
     const layout_mod = b.createModule(.{
@@ -324,6 +328,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "math", .module = math_mod },
+            .{ .name = "render_types", .module = render_types_mod },
         },
     });
 
@@ -540,6 +545,7 @@ fn addRenderShaderSources(b: *std.Build, render_mod: *std.Build.Module) void {
     const vulkan_dir = "src/gpu/backend/vulkan/shaders/";
     addShaderSource(b, render_mod, "primitives_wgsl", webgpu_dir ++ "ui_primitives.wgsl");
     addShaderSource(b, render_mod, "slug_wgsl", webgpu_dir ++ "slug.wgsl");
+    addShaderSource(b, render_mod, "backdrop_wgsl", webgpu_dir ++ "backdrop.wgsl");
     addShaderSource(
         b,
         render_mod,
@@ -626,6 +632,7 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
         .imports = &.{
             .{ .name = "layout", .module = layout },
             .{ .name = "math", .module = math },
+            .{ .name = "render_types", .module = types },
         },
     });
     const truetype = b.dependency("TrueType", .{ .target = target, .optimize = optimize });

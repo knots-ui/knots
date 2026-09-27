@@ -14,6 +14,7 @@ pub const Accessibility = @import("Accessibility.zig");
 pub const Color = style.Color;
 pub const Radius = style.Radius;
 pub const BorderWidth = style.BorderWidth;
+pub const Material = style.Material;
 pub const FontSize = style.FontSize;
 pub const Tone = style.Tone;
 pub const animation = @import("animation.zig");

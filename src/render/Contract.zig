@@ -7,6 +7,10 @@ const types = @import("render_types");
 /// Commands are triangle lists, use `u32` indices, disable culling, and must be
 /// encoded in packet order. A command's scissor is also expressed in logical
 /// pixels and must be intersected with the render target after content scaling.
+///
+/// A `backdrop` command filters pixels already painted inside its rounded rect
+/// and is an ordering barrier. Renderers that cannot sample their target may
+/// skip it; the element's own surface is emitted separately.
 pub const geometry = struct {
     pub const text_quad_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
     pub const front_face: types.Pipeline.FrontFace = .ccw;

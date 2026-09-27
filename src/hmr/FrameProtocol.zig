@@ -198,6 +198,17 @@ pub fn encodeResponse(writer: *Writer, response: *const Response) Error!void {
                 try writer.int(u32, draw.offset);
                 try writer.int(u32, draw.count);
             },
+            .backdrop => |draw| {
+                if (!draw.material.isValid()) return error.InvalidWire;
+                try writer.int(u32, 3);
+                try writer.int(u32, draw.group);
+                try writer.int(u32, 0);
+                for (@as([4]f32, draw.bounds.v)) |value| try writer.float(f32, value);
+                for (draw.corner_radius) |value| try writer.float(f32, value);
+                inline for (@typeInfo(render.types.Material).@"struct".field_names) |name| {
+                    try writer.float(f32, @field(draw.material, name));
+                }
+            },
             .custom_draw => return error.InvalidWire,
         }
     }
@@ -281,6 +292,26 @@ pub fn decodeResponse(allocator: std.mem.Allocator, bytes: []const u8) Error!Res
                 try validateRange(offset, count, texts.len);
                 if (atlas == null) return error.InvalidWire;
                 command.payload = .{ .text = .{ .offset = offset, .count = count } };
+            },
+            3 => {
+                // `offset` carries the group.
+                if (count != 0 or offset >= render.Command.Backdrop.groups_max) return error.InvalidWire;
+                var bounds: [4]f32 = undefined;
+                for (&bounds) |*value| value.* = try reader.float(f32);
+                var radii: [4]f32 = undefined;
+                for (&radii) |*value| value.* = try reader.float(f32);
+                var material: render.types.Material = undefined;
+                inline for (@typeInfo(render.types.Material).@"struct".field_names) |name| {
+                    @field(material, name) = try reader.float(f32);
+                }
+                for (bounds ++ radii) |value| if (!std.math.isFinite(value)) return error.InvalidWire;
+                if (!material.isValid()) return error.InvalidWire;
+                command.payload = .{ .backdrop = .{
+                    .bounds = math.Rect.init(bounds[0], bounds[1], bounds[2], bounds[3]),
+                    .corner_radius = radii,
+                    .material = material,
+                    .group = offset,
+                } };
             },
             else => return error.InvalidWire,
         }
@@ -614,4 +645,36 @@ test "glyph references reject missing atlas data and unbounded shader loops" {
     try std.testing.expectError(error.LimitExceeded, validateGlyphs(std.testing.allocator, &atlas, &.{text}));
     text.glyph[0] = @bitCast(@as(u32, render.GlyphAtlas.width));
     try std.testing.expectError(error.InvalidWire, validateGlyphs(std.testing.allocator, &atlas, &.{text}));
+}
+
+test "backdrop commands round trip and reject invalid materials" {
+    const backdrop: render.Command.Backdrop = .{
+        .bounds = .init(4, 8, 120, 40),
+        .corner_radius = .{ 12, 12, 6, 6 },
+        .material = .{ .blur = 8, .saturation = 1.4, .refraction = 10, .bezel = 14, .dispersion = 0.2, .specular = 0.5 },
+        .group = 0,
+    };
+    const commands = [_]render.Command{.{ .clip = .{}, .payload = .{ .backdrop = backdrop } }};
+    const response = testResponse(.init(&commands, &.{}, &.{}, &.{}, &.{}, &.{render.Clip.Node.empty}, null));
+    var writer: Writer = .{ .allocator = std.testing.allocator };
+    defer writer.deinit();
+    try encodeResponse(&writer, &response);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const decoded = try decodeResponse(arena.allocator(), writer.data.items);
+    try std.testing.expectEqualDeep(backdrop, decoded.contribution.packet.commands()[0].payload.backdrop);
+    for (0..writer.data.items.len) |length| {
+        _ = arena.reset(.free_all);
+        if (decodeResponse(arena.allocator(), writer.data.items[0..length])) |_| return error.TruncationAccepted else |_| {}
+    }
+
+    var invalid = commands;
+    invalid[0].payload.backdrop.material.blur = -1;
+    writer.data.clearRetainingCapacity();
+    try std.testing.expectError(error.InvalidWire, encodeResponse(&writer, &testResponse(.init(&invalid, &.{}, &.{}, &.{}, &.{}, &.{render.Clip.Node.empty}, null))));
+    invalid[0].payload.backdrop.material.blur = 0;
+    invalid[0].payload.backdrop.group = render.Command.Backdrop.groups_max;
+    writer.data.clearRetainingCapacity();
+    try encodeResponse(&writer, &testResponse(.init(&invalid, &.{}, &.{}, &.{}, &.{}, &.{render.Clip.Node.empty}, null)));
+    try std.testing.expectError(error.InvalidWire, decodeResponse(arena.allocator(), writer.data.items));
 }

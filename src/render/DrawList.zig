@@ -15,6 +15,7 @@ pub const TextureSource = @import("Command.zig").TextureSource;
 pub const CustomDrawCallback = @import("Command.zig").CustomDrawCallback;
 
 const LayerRange = struct { start: u32 = 0, len: u32 = 0 };
+const BackdropGroup = struct { layer: u8, blur: f32 };
 
 pub const TextBatch = struct {
     clip: Clip.State,
@@ -30,6 +31,8 @@ layer_cmds: std.ArrayList(Command),
 layer_ranges: [MAX_LAYERS]LayerRange,
 layers_dirty: std.StaticBitSet(MAX_LAYERS),
 current_layer: u8,
+/// Indexed by group id: one per layer and blur amount.
+backdrop_groups: std.ArrayList(BackdropGroup),
 
 const DrawList = @This();
 
@@ -45,6 +48,7 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
         .layer_ranges = @splat(.{}),
         .layers_dirty = .empty,
         .current_layer = 0,
+        .backdrop_groups = .empty,
     };
 }
 
@@ -55,6 +59,7 @@ pub fn deinit(self: *DrawList) void {
     self.text_instances.deinit(self.allocator);
     self.clip_nodes.deinit(self.allocator);
     self.layer_cmds.deinit(self.allocator);
+    self.backdrop_groups.deinit(self.allocator);
 }
 
 pub fn reset(self: *DrawList) void {
@@ -66,6 +71,7 @@ pub fn reset(self: *DrawList) void {
     self.layer_cmds.clearRetainingCapacity();
     self.layers_dirty = .empty;
     self.current_layer = 0;
+    self.backdrop_groups.clearRetainingCapacity();
 }
 
 pub fn setLayer(self: *DrawList, layer: u8) void {
@@ -113,7 +119,7 @@ pub fn buildPacketRange(
                 .vertex => |draw| try validateRange(draw.offset, draw.count, self.indices.items.len),
                 .instance => |draw| try validateRange(draw.offset, draw.count, self.instances.items.len),
                 .text => |draw| try validateRange(draw.offset, draw.count, self.text_instances.items.len),
-                .custom_draw => {},
+                .custom_draw, .backdrop => {},
             }
             portable_commands.appendAssumeCapacity(command);
         }
@@ -150,7 +156,7 @@ fn lastCmdMatches(
         .vertex => |cmd| textureSourceEql(cmd.texture, texture),
         .instance => |cmd| textureSourceEql(cmd.texture, texture),
         .text => texture == .atlas,
-        .custom_draw => false,
+        .custom_draw, .backdrop => false,
     };
 }
 
@@ -248,6 +254,33 @@ pub fn pushCustomDraw(
     } }, clip);
 }
 
+/// Filter what is already painted behind `bounds`. Backdrops in one layer with
+/// the same blur share the snapshot taken at the first of them.
+pub fn pushBackdrop(
+    self: *DrawList,
+    bounds: math.Rect,
+    corner_radius: [4]f32,
+    material: types.Material,
+    clip: Clip.State,
+) !void {
+    std.debug.assert(material.isValid());
+    if (bounds.isEmpty()) return;
+    const key: BackdropGroup = .{ .layer = self.current_layer, .blur = material.blur };
+    const group = for (self.backdrop_groups.items, 0..) |existing, index| {
+        if (std.meta.eql(existing, key)) break index;
+    } else blk: {
+        if (self.backdrop_groups.items.len == Command.Backdrop.groups_max) return error.TooManyBackdropGroups;
+        try self.backdrop_groups.append(self.allocator, key);
+        break :blk self.backdrop_groups.items.len - 1;
+    };
+    try self.beginCommand(.{ .backdrop = .{
+        .bounds = bounds,
+        .corner_radius = corner_radius,
+        .material = material,
+        .group = @intCast(group),
+    } }, clip);
+}
+
 pub fn beginTextBatch(self: *DrawList, glyph_count_max: usize, clip: Clip.State) !?TextBatch {
     if (glyph_count_max == 0) return null;
     try self.text_instances.ensureUnusedCapacity(self.allocator, glyph_count_max);
@@ -319,6 +352,35 @@ test "packet preserves layer order, images, and custom callbacks" {
     try draw_list.pushCustomDraw(&.{ .extension = .knots, .callback = testDrawCallback, .user_data = null }, .zero, .{});
     const custom_packet = try draw_list.buildPacket(&packet_commands, null);
     try std.testing.expectEqual(testDrawCallback, custom_packet.commands()[0].payload.custom_draw.paint.callback);
+}
+
+test "backdrops group per layer and blur" {
+    var draw_list = DrawList.init(std.testing.allocator);
+    defer draw_list.deinit();
+    var packet_commands: std.ArrayList(Command) = .empty;
+    defer packet_commands.deinit(std.testing.allocator);
+    const rect = math.Rect.init(0, 0, 10, 10);
+    const radii: [4]f32 = @splat(2);
+
+    draw_list.setLayer(3);
+    try draw_list.pushBackdrop(rect, radii, .{ .blur = 4 }, .{});
+    try draw_list.push(&.{std.mem.zeroes(types.Vertex)}, &.{0}, .atlas, .{});
+    try draw_list.pushBackdrop(rect, radii, .{ .blur = 4 }, .{});
+    try draw_list.pushBackdrop(rect, radii, .{ .blur = 8 }, .{});
+    draw_list.setLayer(1);
+    try draw_list.pushBackdrop(rect, radii, .{ .blur = 4 }, .{});
+    try draw_list.pushBackdrop(.zero, radii, .{ .blur = 4 }, .{});
+
+    const packet = try draw_list.buildPacket(&packet_commands, null);
+    try std.testing.expect(packet.hasBackdrop());
+    var groups: std.ArrayList(u32) = .empty;
+    defer groups.deinit(std.testing.allocator);
+    for (packet.commands()) |command| switch (command.payload) {
+        .backdrop => |backdrop| try groups.append(std.testing.allocator, backdrop.group),
+        else => {},
+    };
+    // Packet order puts layer 1 first; empty bounds are dropped.
+    try std.testing.expectEqualSlices(u32, &.{ 2, 0, 0, 1 }, groups.items);
 }
 
 fn testDrawCallback(_: ?*anyopaque, _: *anyopaque) !void {}

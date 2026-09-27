@@ -78,6 +78,14 @@ pub fn glyphAtlas(self: *const Packet) ?GlyphAtlas {
     return self.glyph_atlas_value;
 }
 
+/// Whether any command filters its backdrop, which needs a sampleable scene target.
+pub fn hasBackdrop(self: *const Packet) bool {
+    for (self.commands_value) |command| {
+        if (command.payload == .backdrop) return true;
+    }
+    return false;
+}
+
 /// Reject incompatible renderer extensions before interpreting erased data.
 pub fn validateExtensions(self: *const Packet, supported: ?@import("Command.zig").Extension) !void {
     if (self.commands_value.len > commands_max) return error.TooManyDrawCommands;
@@ -86,6 +94,10 @@ pub fn validateExtensions(self: *const Packet, supported: ?@import("Command.zig"
             .vertex => |draw| try validateTexture(draw.texture, supported),
             .instance => |draw| try validateTexture(draw.texture, supported),
             .text => {},
+            .backdrop => |draw| {
+                if (draw.group >= Command.Backdrop.groups_max) return error.InvalidBackdrop;
+                if (!draw.material.isValid()) return error.InvalidBackdrop;
+            },
             .custom_draw => |draw| {
                 const extension = supported orelse return error.UnsupportedRenderExtension;
                 if (draw.paint.extension != extension) return error.UnsupportedRenderExtension;

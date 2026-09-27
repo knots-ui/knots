@@ -28,7 +28,8 @@ recording: bool = false,
 pass_count: u32 = 0,
 surface_initialized: bool = false,
 
-pub const passes_max: u32 = 32;
+/// Each backdrop group adds up to 13 blur and resume passes.
+pub const passes_max: u32 = 1024;
 
 pub const ContextHandle = struct {
     frame: *Frame,

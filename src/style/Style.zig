@@ -14,6 +14,7 @@ const Color = @import("Color.zig");
 const Radius = @import("Radius.zig");
 const BorderWidth = @import("BorderWidth.zig");
 const FontSize = @import("FontSize.zig");
+const Material = @import("render_types").Material;
 const Theme = @import("Theme.zig");
 
 pub const Tone = Color.Tone;
@@ -61,8 +62,10 @@ border_color: ?Color.Input = null,
 radius: ?Radius.Input = null,
 /// Mix `foreground` over `background` by this amount: hover/press feedback that works on any background.
 state_layer: ?f32 = null,
-/// Multiplies all resolved alphas of this element.
+/// Multiplies all resolved alphas of this element, and fades `backdrop`.
 opacity: ?f32 = null,
+/// Blur or refract what is painted behind this element; `background` tints it.
+backdrop: ?Material = null,
 
 // Content (inherited by descendants when unset)
 /// Text, icons, check marks, image tint.
@@ -145,8 +148,10 @@ pub const Surface = struct {
     corner_radius: Radius = .zero,
     border_width: BorderWidth = .zero,
     border_color: [4]f32 = .{ 0, 0, 0, 0 },
+    backdrop: Material = .none,
 
     pub fn isVisible(self: Surface) bool {
+        if (self.backdrop.isActive()) return true;
         return self.color[3] > 0 or (!self.border_width.isZero() and self.border_color[3] > 0);
     }
 };
@@ -197,6 +202,7 @@ pub const Visual = struct {
                 .corner_radius = .lerp(a.surface.corner_radius, b.surface.corner_radius, t),
                 .border_width = .lerp(a.surface.border_width, b.surface.border_width, t),
                 .border_color = lerp4(a.surface.border_color, b.surface.border_color, t),
+                .backdrop = .lerp(a.surface.backdrop, b.surface.backdrop, t),
             },
             .foreground = lerp4(a.foreground, b.foreground, t),
         };
@@ -289,12 +295,14 @@ fn resolveProps(props: *const Style, parent: *const Content, theme: *const Theme
         .corner_radius = if (props.radius) |r| r.resolve(theme) else .zero,
         .border_width = props.border_width orelse .zero,
         .border_color = if (props.border_color) |c| c.resolveIn(theme, tone, fg) else Color.transparent.value,
+        .backdrop = props.backdrop orelse .none,
     };
     if (props.state_layer) |amount| surface.color = composite(surface.color, fg, amount);
     if (props.opacity) |o| {
         surface.color[3] *= o;
         surface.border_color[3] *= o;
         content.foreground[3] *= o;
+        surface.backdrop = .lerp(.none, surface.backdrop, std.math.clamp(o, 0, 1));
     }
 
     return .{
