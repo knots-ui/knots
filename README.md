@@ -1,39 +1,54 @@
 # Knots
 
-Knots is a cross-platform immediate-mode GUI library written in Zig. The UI
-engine is independent of windows and graphics APIs. `App` is the bundled window
-and renderer integration; `ui.Context` and `render.Packet` are the embedding
-boundary.
+Knots is a cross-platform immediate-mode GUI library for Zig. You write the
+interface as Zig code, and the same code runs on macOS, Windows, Linux, and in
+the browser.
+
+The UI engine does not depend on a window system or a graphics API. `App` is the
+bundled window and renderer. `ui.Context` and `render.Packet` let you embed
+Knots in your own window or renderer.
+
+- [Documentation](https://knotsui.com/docs/)
+- [Tutorial: build a todo app](https://knotsui.com/docs/tutorial.html)
+- [Web playground](https://playground.knotsui.com/)
 
 ## Supported platforms
 
-| Platform            | GPU APIs                  |
-| ------------------- | ------------------------- |
-| macOS               | WebGPU, Vulkan (MoltenVK) |
-| Linux               | WebGPU, Vulkan            |
-| Windows             | WebGPU, Vulkan            |
-| WASM (freestanding) | WebGPU                    |
+| Platform            | Default backend | Other backends    |
+| ------------------- | --------------- | ----------------- |
+| macOS               | WebGPU          | Vulkan (MoltenVK) |
+| Linux (Wayland)     | Vulkan          | WebGPU            |
+| Windows             | Vulkan          | WebGPU            |
+| WASM (freestanding) | WebGPU          | —                 |
+
+Select a backend with the `gpu_backend` dependency option. Read
+[GPU backends](https://knotsui.com/docs/gpu-backends.html).
 
 ## Known limitations
 
-- Linux windowing is Wayland-only.
-- Text rendering is UTF-8/codepoint based. HarfBuzz shaping, bidi layout, ligatures, font fallback, and IME composition are not implemented yet.
+- Linux windows use Wayland only. There is no X11 support.
+- Text uses one glyph for each Unicode codepoint. There is no complex shaping,
+  bidirectional text, ligatures, kerning, font fallback, or IME composition.
+- Accessibility (AccessKit) is available on macOS, Windows, and Linux. It is
+  not available in the browser.
+
+## Requirements
+
+- Zig. The minimum version is in [build.zig.zon](build.zig.zon). Knots follows
+  the Zig master branch.
+- On Linux: the Wayland development packages `wayland-client`,
+  `wayland-cursor`, `wayland-protocols`, `wayland-scanner`, `pkg-config`, and
+  `xkbcommon`.
+- For the Vulkan backend: a Vulkan 1.3 driver with dynamic rendering.
+- For the browser: a browser with WebGPU.
 
 ## Install
 
 ```sh
-zig fetch --save git+https://codeberg.org/shahwali/knots.git
+zig fetch --save git+https://github.com/knots-ui/knots.git
 ```
 
-## Requirements
-
-- Zig compiler, minimum version can be found in [build.zig.zon](build.zig.zon). I try to keep up with the master branch.
-- On Linux, Wayland development packages are required: wayland-client, wayland-cursor, wayland-protocols, wayland-scanner, pkg-config, and xkbcommon.
-
 ## Minimal app
-
-To develop with independently reloadable UI modules in a native window, see the
-[playground and HMR quick start](examples/playground/README.md).
 
 Add the `knots` and `ui` modules to your executable:
 
@@ -59,27 +74,37 @@ pub fn main(init: std.process.Init) !void {
     try app.start(frame);
 }
 
-fn frame(_: *knots.View, frame_context: *ui.Frame) !void {
-    const size = frame_context.input().logical_extent;
-    try frame_context.e(ui.component.Rect{
-        .key = .src(@src()),
-        .style = &.{
+fn frame(_: *knots.View, context: *ui.Frame) !void {
+    const size = context.input().logical_extent;
+    try context.e(.{
+        ui.component.Rect{ .key = .src(@src()), .style = &.{
             .width = .fixed(@floatFromInt(size.width)),
             .height = .fixed(@floatFromInt(size.height)),
             .padding = .all(16),
+            .background = .bg,
+        } },
+        .{
+            ui.component.Text{ .key = .src(@src()), .content = "Hello from Knots" },
         },
     });
 }
 ```
 
-`View` is callback data containing the owning `app`, the viewport `id`, and a
-renderer status snapshot. Use `view.app` for viewport actions. Application state
-can embed `knots.App` and recover itself with `@fieldParentPtr("app", view.app)`;
-keep the `App` at a stable address until `start` returns.
+`View` contains the owning `app`, the viewport `id`, and a snapshot of the
+renderer status. To get your own state, put `knots.App` in a field of your
+struct and use `@fieldParentPtr("app", view.app)`. Keep the `App` at one
+address until `start` returns.
+
+## Hot reloading
+
+Knots can compile UI modules to WebAssembly and reload them in a running native
+or browser host. Use `Knots.HMR` in `build.zig` and `knots.Modules` in the host.
+Read [Hot reloading](https://knotsui.com/docs/hot-reloading.html). The
+[playground](examples/playground) is a complete HMR host.
 
 ## Embedding in an existing renderer
 
-Import `ui`, `input`, and `render`. Add `renderer` when using Knots' bundled GPU
+Import `ui`, `input`, and `render`. Add `renderer` when you use the bundled GPU
 backend:
 
 ```zig
@@ -103,6 +128,7 @@ if (output.clipboard_write) |value| {
     _ = try window.setClipboardText(allocator, value);
 }
 
+var submission = try gpu_frame.begin();
 const prepared = try painter.prepare(&output.packet, &.{
     .width = target_width,
     .height = target_height,
@@ -111,31 +137,35 @@ const prepared = try painter.prepare(&output.packet, &.{
     .frame_context = submission,
     .linear_target = false,
 });
-try painter.encode(&prepared, host_pass);
+try painter.encode(&prepared, &host_pass);
 ```
 
 Use `Renderer.render` when Knots owns the surface. Use `Painter.prepare` and
 `Painter.encode` when the host owns render passes, submission, or presentation.
-`render.Packet` is graphics-API independent, but its geometry, glyph, clipping,
-and shader conventions are Knots' protocol. A renderer for another API consumes
-the packet directly; `Painter` uses the bundled backend types.
+`render.Packet` does not depend on a graphics API, but its geometry, glyph,
+clip, and shader conventions are the Knots protocol. A renderer for another API
+reads the packet directly. `Painter` uses the bundled backend types. See
+[examples/embedded](examples/embedded) and
+[Embedding](https://knotsui.com/docs/embedding.html).
 
 ## Ownership and lifetime
 
-- Packet data, input slices, image bytes, and callback data are borrowed. Consume
-  them before the next frame or copy them for asynchronous work.
-- The host must keep textures and callback resources alive until GPU completion.
-- Complete the previous work for an upload slot before reusing it in
+- Packet data, input slices, image bytes, and callback data are borrowed. Use
+  them before the next frame, or copy them for async work.
+- The host must keep textures and callback resources alive until the GPU
+  completes the work.
+- Complete the previous work for an upload slot before you use it again in
   `Painter.prepare`. Call `Painter.destroyAfterWait` only after all GPU work is
   complete.
-- `Frame.deinit` aborts unfinished frames and is safe across copied handles.
-- Apply cursor and clipboard effects once; the host decides when to redraw or
-  close a window.
-- Custom backends must validate packet extensions and reject unsupported commands.
+- `Frame.deinit` aborts a frame that did not end. It is safe on copied handles.
+- Apply cursor and clipboard effects one time. The host decides when to redraw
+  or close a window.
+- Custom backends must validate packet extensions and reject unsupported
+  commands.
 
-The bundled renderer synchronizes glyph atlas uploads and retires replaced
-resources by upload slot. Its cache and packet data are bounded; no glyph
-acknowledgement API is required.
+The bundled renderer synchronizes glyph atlas uploads and releases replaced
+resources by upload slot. Its cache and packet data are bounded. You do not need
+to acknowledge glyph uploads.
 
 ## Browser WASM
 
@@ -171,6 +201,10 @@ Build with:
 zig build -Dtarget=wasm32-freestanding
 ```
 
+A browser build exports a start function instead of `main`. Read
+[Compile & distribute](https://knotsui.com/docs/distribution.html) for the
+entry point and the HTML page.
+
 Threaded builds need a cross-origin isolated page:
 
 ```text
@@ -178,5 +212,11 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-Set `.web_threads = false` for a non-shared build. See `examples` for complete
-desktop and embedding programs, and the [web playground](https://shahwali.codeberg.page/knots/).
+Set `.web_threads = false` for a build without shared memory.
+
+## Examples
+
+- [examples/playground](examples/playground): a component catalog and HMR host.
+- [examples/embedded](examples/embedded): a host that owns its render passes.
+- [examples/triangle](examples/triangle): drawing with the `Canvas` component.
+- [examples/benchmark](examples/benchmark): a stress test with Tracy zones.
