@@ -24,6 +24,7 @@ const PortableEncoder = struct {
                     try validateRange(.{ .offset = range.offset, .count = range.count }, packet.textInstances().len);
                     self.text_instances += range.count;
                 },
+                .backdrop => {},
                 .custom_draw => return error.UnsupportedCallback,
             }
         }
@@ -46,7 +47,7 @@ fn packetElementCount(packet: *const render.Packet) u64 {
             .vertex => |range| range.count,
             .instance => |range| range.count,
             .text => |range| range.count,
-            .custom_draw => 0,
+            .custom_draw, .backdrop => 0,
         };
     }
     total += packet.primitiveVertices().len;

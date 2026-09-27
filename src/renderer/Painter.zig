@@ -13,6 +13,7 @@ const pipelines = @import("pipelines.zig");
 const FrameUploads = @import("FrameUploads.zig");
 const Context = @import("Context.zig");
 const Texture = @import("Texture.zig");
+const Backdrop = @import("Backdrop.zig");
 
 const PhysicalViewport = @import("gpu.zig").PhysicalViewport;
 const PhysicalScissor = @import("gpu.zig").PhysicalScissor;
@@ -43,6 +44,11 @@ upload_slots_live: u8 = 0,
 frame_index: u64,
 prepare_generation: u64 = 0,
 glyph_upload: GlyphAtlasCache = .{},
+backdrop_plan: Backdrop.Plan = .{},
+/// Glass instances of the prepared packet, one per backdrop command.
+backdrop_glass: ?FrameUploads.UploadView = null,
+backdrop_glass_scratch: std.ArrayList(pipelines.GlassInstance) = .empty,
+backdrop_targets: [Backdrop.groups_max]Backdrop.Targets = @splat(.{}),
 const Painter = @This();
 pub const slots_max: u32 = 8;
 pub const textures_max: u32 = 4096;
@@ -54,6 +60,9 @@ pub const PrepareOptions = struct {
     upload_slot: u32,
     frame_context: gpu_impl.Frame.Context,
     linear_target: bool,
+    /// The target is the renderer's scene target, which backdrops can sample
+    /// between segments. Otherwise backdrop commands are skipped.
+    backdrops: bool = false,
 };
 /// Borrowed until the next prepare. Complete work using the chosen upload slot
 /// before preparation; submit encoded work before preparing another packet.
@@ -79,6 +88,7 @@ const RetiredGlyphResources = struct {
 const RetiredValue = union(enum) {
     pixel_texture: *Texture,
     glyph_resources: RetiredGlyphResources,
+    backdrop_level: Backdrop.Level,
 };
 const RetiredResource = struct {
     slots_pending: u8,
@@ -156,6 +166,8 @@ pub fn destroyAfterWait(self: *Painter) void {
     while (remaining > 0) : (remaining -= 1) iterator.next().?.texture.destroyAfterWait();
     self.pixel_textures.deinit(self.allocator);
     self.pixel_texture_scratch.deinit(self.allocator);
+    for (&self.backdrop_targets) |*targets| targets.deinit();
+    self.backdrop_glass_scratch.deinit(self.allocator);
     self.text_curveband_bg.deinit();
     for (self.frame_uploads) |*upload| upload.deinit();
     self.allocator.free(self.frame_uploads);
@@ -185,13 +197,43 @@ pub fn prepare(self: *Painter, packet: *const Packet, options: *const PrepareOpt
     if (packet.glyphAtlas()) |atlas| try self.glyph_upload.sync(&atlas, self, uploadGlyphAtlas);
     updateViewport(upload, options);
     const sizes = try uploadFrameData(self.context, upload, packet);
+    self.backdrop_plan = .{};
+    self.backdrop_glass = null;
+    if (options.backdrops and packet.hasBackdrop()) {
+        self.backdrop_plan = try Backdrop.plan(
+            packet.commands(),
+            options.content_scale,
+            options.width,
+            options.height,
+            &self.backdrop_glass_scratch,
+            self.allocator,
+        );
+        self.backdrop_glass = try upload.upload(pipelines.GlassInstance, self.backdrop_glass_scratch.items, .{ .vertex = true });
+    }
     try self.sweepPixelTextures();
     return .{ .owner = self, .generation = self.prepare_generation, .packet = packet, .options = options.*, .sizes = sizes };
 }
 /// Encode into a compatible host pass without ending, submitting or presenting.
 /// The host restores pass state it needs after this call. Target format and depth
 /// must match Context pipelines, or its linear RGBA8 pipelines when selected.
+/// Prepare without `backdrops`: a host pass cannot be sampled mid-encode.
 pub fn encode(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderPass) !void {
+    std.debug.assert(!prepared.options.backdrops);
+    var cursor: Cursor = .{};
+    std.debug.assert(try self.encodeSegment(prepared, pass, &cursor) == null);
+}
+
+/// Progress through a prepared packet across render passes.
+pub const Cursor = struct {
+    command: u32 = 0,
+    glass: u32 = 0,
+    captured: std.StaticBitSet(Backdrop.groups_max) = .empty,
+};
+
+/// Encode from `cursor` until the packet ends, returning null, or reaches a
+/// backdrop group that has not been captured, returning it. Then end the pass,
+/// `captureBackdrop` the group, and continue in a pass that loads the target.
+pub fn encodeSegment(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderPass, cursor: *Cursor) !?u32 {
     if (prepared.owner != self) return error.InvalidPreparedFrame;
     if (prepared.generation != self.prepare_generation) return error.InvalidPreparedFrame;
     const dl = prepared.packet;
@@ -207,7 +249,9 @@ pub fn encode(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderP
     const use_linear_target = options.linear_target;
     pass.setViewport(0, 0, @floatFromInt(phys_w), @floatFromInt(phys_h));
     var state: DrawState = .{};
-    for (dl.commands()) |cmd| {
+    const commands = dl.commands();
+    while (cursor.command < commands.len) : (cursor.command += 1) {
+        const cmd = commands[cursor.command];
         const kind = std.meta.activeTag(cmd.payload);
         if (kind == .custom_draw) {
             const custom = cmd.payload.custom_draw;
@@ -246,6 +290,37 @@ pub fn encode(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderP
             continue;
         }
 
+        if (kind == .backdrop) {
+            const group = cmd.payload.backdrop.group;
+            const maybe_planned = self.backdrop_plan.groups[group];
+            if (maybe_planned != null and !cursor.captured.isSet(group)) return group;
+            // One glass instance per backdrop command, drawn or not.
+            const glass_index = cursor.glass;
+            cursor.glass += 1;
+            const planned = maybe_planned orelse continue;
+            if (state.kind != .backdrop) {
+                const view = self.backdrop_glass.?;
+                pass.bindPipeline(&context.glass_pipeline);
+                pass.setBindGroup(0, &upload.instance_uniform_bg);
+                pass.setBindGroup(2, &upload.instance_clip_bg);
+                pass.setVertexBuffer(0, upload.uploadBuffer(view.chunk_index, view.epoch).?, view.offset, view.size);
+                pass.setIndexBuffer(&context.unit_index_buf, 0, 6 * @sizeOf(u32));
+                state.kind = .backdrop;
+                state.texture = null;
+                state.backdrop_group = null;
+            }
+            if (state.backdrop_group != group) {
+                const level = planned.blur.finalLevel();
+                pass.setBindGroup(1, &self.backdrop_targets[group].levels[level].?.bind_group);
+                state.backdrop_group = group;
+            }
+            if (state.clip == null or !state.clip.?.scissorEql(cmd.clip)) {
+                applyClip(pass, cmd.clip.scissor, content_scale, phys_w, phys_h);
+                state.clip = cmd.clip;
+            }
+            pass.drawIndexed(6, 1, 0, 0, glass_index);
+            continue;
+        }
         if (!context.atlas.isReady()) continue;
 
         if (state.kind != kind) {
@@ -257,7 +332,7 @@ pub fn encode(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderP
             .vertex => |value| self.textureForSource(value.texture),
             .instance => |value| self.textureForSource(value.texture),
             .text => null,
-            .custom_draw => unreachable,
+            .custom_draw, .backdrop => unreachable,
         };
         if (kind != .text and texture != state.texture) {
             pass.setBindGroup(1, if (texture) |value| &value.bind_group else &context.atlas.bind_group);
@@ -271,9 +346,40 @@ pub fn encode(self: *Painter, prepared: *const Prepared, pass: *gpu_impl.RenderP
             .vertex => |value| pass.drawIndexed(value.count, 1, value.offset, 0, 0),
             .instance => |value| pass.drawIndexed(6, value.count, 0, 0, value.offset),
             .text => |value| pass.drawIndexed(6, value.count, 0, 0, value.offset),
-            .custom_draw => unreachable,
+            .custom_draw, .backdrop => unreachable,
         }
     }
+    return null;
+}
+
+/// Snapshot and blur `group`'s region of the scene target the preceding
+/// segment rendered into, bound by `scene`. Call between segments, with no pass open.
+pub fn captureBackdrop(
+    self: *Painter,
+    prepared: *const Prepared,
+    frame_ctx: *gpu_impl.Frame.Context,
+    scene: *const gpu_impl.BindGroup,
+    group: u32,
+    cursor: *Cursor,
+) !void {
+    if (prepared.owner != self) return error.InvalidPreparedFrame;
+    if (prepared.generation != self.prepare_generation) return error.InvalidPreparedFrame;
+    const planned = self.backdrop_plan.groups[group].?;
+    const targets = &self.backdrop_targets[group];
+    const levels = planned.blur.levels;
+    var level = planned.blur.finalLevel();
+    try self.reserveRetiredResources(levels + 1 - level);
+    while (level <= levels) : (level += 1) {
+        const replaced = try targets.ensure(self.context, level, prepared.options.width, prepared.options.height);
+        if (replaced) |old| self.retired_resources.appendAssumeCapacity(.{
+            .slots_pending = self.upload_slots_live,
+            .value = .{ .backdrop_level = old },
+        });
+    }
+    const upload = &self.frame_uploads[prepared.options.upload_slot];
+    const options = prepared.options;
+    try Backdrop.capture(self.context, frame_ctx, upload, scene, options.width, options.height, planned, targets);
+    cursor.captured.set(group);
 }
 
 fn uploadSlotMask(slot: u32) u8 {
@@ -309,6 +415,10 @@ fn reserveRetiredResources(self: *Painter, count: u32) !void {
 fn destroyRetiredResource(value: RetiredValue) void {
     switch (value) {
         .pixel_texture => |texture| texture.destroyAfterWait(),
+        .backdrop_level => |level| {
+            var old = level;
+            old.deinit();
+        },
         .glyph_resources => |resources| {
             var bind_group = resources.bind_group;
             bind_group.deinit();
@@ -403,6 +513,7 @@ const DrawState = struct {
     clip: ?Clip.State = null,
     texture: ?*const Texture = null,
     kind: ?Command.Kind = null,
+    backdrop_group: ?u32 = null,
 };
 
 fn preparePixelTextures(self: *Painter, draw_list: *const Packet) !void {
@@ -410,7 +521,7 @@ fn preparePixelTextures(self: *Painter, draw_list: *const Packet) !void {
         const source = switch (command.payload) {
             .vertex => |value| value.texture,
             .instance => |value| value.texture,
-            .text, .custom_draw => continue,
+            .text, .custom_draw, .backdrop => continue,
         };
         switch (source) {
             .atlas => {},
@@ -541,7 +652,7 @@ fn bindKind(
             pass.setVertexBuffer(0, &uploads.text_instance_buf, 0, sizes.text_instances_bytes);
             pass.setIndexBuffer(&context.unit_index_buf, 0, 6 * @sizeOf(u32));
         },
-        .custom_draw => unreachable,
+        .custom_draw, .backdrop => unreachable,
     }
 }
 

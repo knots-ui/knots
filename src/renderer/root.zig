@@ -7,6 +7,7 @@ pub const gpu = @import("gpu.zig");
 test {
     _ = Renderer;
     _ = Painter;
+    _ = @import("Backdrop.zig");
     _ = gpu;
 }
 pub const backend = @import("gpu_impl");

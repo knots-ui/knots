@@ -940,6 +940,8 @@ fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: [
         switch (ui.decorations.items[slot]) {
             .none => {},
             .rect => |r| {
+                // The backdrop filters what is already drawn; the fill then tints it.
+                if (r.backdrop.isActive() and r.backdrop.isValid()) try draw_list.pushBackdrop(el.box, r.corner_radius.value, r.backdrop, clip);
                 const inst = types.Instance{
                     .pos = .{ el.box.x(), el.box.y() },
                     .size = .{ el.box.w(), el.box.h() },

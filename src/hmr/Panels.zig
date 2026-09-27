@@ -76,6 +76,7 @@ pub fn place(allocator: std.mem.Allocator, resource_allocator: std.mem.Allocator
             .vertex => |*draw| draw.texture = try resources.texture(resource_allocator, draw.texture),
             .instance => |*draw| draw.texture = try resources.texture(resource_allocator, draw.texture),
             .text => {},
+            .backdrop => |*draw| draw.bounds = .init(draw.bounds.x() + rect.x(), draw.bounds.y() + rect.y(), draw.bounds.w(), draw.bounds.h()),
             .custom_draw => return error.UnsupportedRenderExtension,
         }
     }

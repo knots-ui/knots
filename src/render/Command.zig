@@ -57,6 +57,7 @@ pub const Command = struct {
         instance,
         text,
         custom_draw,
+        backdrop,
     };
 
     pub const Payload = union(Kind) {
@@ -64,6 +65,7 @@ pub const Command = struct {
         instance: Instanced,
         text: Text,
         custom_draw: CustomDraw,
+        backdrop: Backdrop,
     };
 
     pub const Indexed = struct {
@@ -86,5 +88,20 @@ pub const Command = struct {
     pub const CustomDraw = struct {
         paint: PaintCallback,
         bounds: math.Rect,
+    };
+
+    /// Filters what earlier commands painted inside a rounded rect. A barrier:
+    /// renderers must not reorder or batch draws across it. Commands sharing a
+    /// `group` sample one snapshot, taken at the group's first command in packet
+    /// order, so later members do not see each other or anything drawn between.
+    pub const Backdrop = struct {
+        bounds: math.Rect,
+        corner_radius: [4]f32,
+        material: types.Material,
+        /// Below `groups_max`.
+        group: u32,
+
+        /// Each group costs a pass break and a blur.
+        pub const groups_max = 64;
     };
 };
