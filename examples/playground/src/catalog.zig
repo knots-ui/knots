@@ -16,6 +16,7 @@ pub const entries = [_]Entry{
     .{ .id = "demos/layer", .name = "Layer", .icon = "\u{e53b}", .description = "dir=.layer stacks children on the z-axis." },
     .{ .id = "demos/overflow", .name = "Overflow", .icon = "\u{e5d7}", .description = "visible, hidden, scroll_x and scroll_y side by side." },
     .{ .id = "demos/grid", .name = "Grid", .icon = "\u{e871}", .description = "Dashboard tiles using fr tracks and cell spans." },
+    .{ .id = "demos/glass", .name = "Glass", .icon = "\u{e3a5}", .description = "Style.backdrop: blur, saturation and refraction over an animated scene." },
     .{ .id = "demos/canvas", .name = "Canvas", .icon = "\u{e3ae}", .description = "Painter primitives: gradient grid, clock face, bar chart, polygon." },
     .{ .id = "native/gpu_shader", .name = "GPU geometry", .icon = "\u{e1b1}", .description = "Thousands of indexed, instanced facets forming an interactive torus knot." },
     .{ .id = "native/async_dispatch", .name = "Async dispatch", .icon = "\u{e627}", .description = "Schedule background work via app.dispatch and react to wakeups." },
