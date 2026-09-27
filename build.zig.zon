@@ -46,8 +46,9 @@
     },
     .paths = .{
         "build.zig",
-        "HMR.zig",
         "build.zig.zon",
+        "HMR.zig",
+        "web_build.zig",
         "src",
         "lib",
         "tests",
