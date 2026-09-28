@@ -36,7 +36,6 @@ upload_chunks: std.ArrayList(UploadChunk),
 bind_group_slots: std.ArrayList(?gpu_impl.BindGroup),
 bind_group_count: usize,
 custom_epoch: u64,
-frame_context: ?gpu_impl.Frame.Context = null,
 
 vertex_uniform_buf: gpu_impl.Buffer,
 instance_uniform_buf: gpu_impl.Buffer,
@@ -158,7 +157,8 @@ pub fn deinit(self: *FrameUploads) void {
     self.clip_node_buf.deinit();
 }
 
-pub fn resetCustom(self: *FrameUploads, frame_context: gpu_impl.Frame.Context) void {
+/// Recycles custom resources after the host has completed the slot's GPU work.
+pub fn resetCustom(self: *FrameUploads) void {
     for (self.bind_group_slots.items[0..self.bind_group_count]) |*slot| {
         if (slot.*) |*value| value.deinit();
         slot.* = null;
@@ -166,7 +166,6 @@ pub fn resetCustom(self: *FrameUploads, frame_context: gpu_impl.Frame.Context) v
     self.bind_group_count = 0;
     for (self.upload_chunks.items) |*chunk| chunk.used = 0;
     self.custom_epoch +%= 1;
-    self.frame_context = frame_context;
 }
 
 pub fn upload(self: *FrameUploads, comptime T: type, values: []const T, requested_usage: gpu.Buffer.Usage) !UploadView {
@@ -210,7 +209,9 @@ pub fn createBindGroup(self: *FrameUploads, desc: gpu_impl.BindGroup.Desc) !Bind
         try self.bind_group_slots.append(self.context.allocator, null);
     const slot = &self.bind_group_slots.items[self.bind_group_count];
     std.debug.assert(slot.* == null);
-    slot.* = try self.frame_context.?.createBindGroup(desc);
+    // Allocate on the device so preparation does not depend on a Knots frame
+    // or its command-buffer/submission policy.
+    slot.* = try self.context.device.createBindGroup(desc);
     const slot_index: u32 = @intCast(self.bind_group_count);
     self.bind_group_count += 1;
     return .{ .slot_index = slot_index, .epoch = self.custom_epoch };

@@ -174,10 +174,14 @@ fn uploadInitialData(device: *Device, target: vk.Buffer, data: []const u8) !void
         }},
     });
     try device.vkd.endCommandBuffer(command);
-    try device.vkd.queueSubmit2(device.graphics_queue, &.{.{
-        .command_buffer_info_count = 1,
-        .p_command_buffer_infos = &[_]vk.CommandBufferSubmitInfo{.{ .command_buffer = command, .device_mask = 1 }},
-    }}, fence);
+    {
+        device.lockQueue();
+        defer device.unlockQueue();
+        try device.vkd.queueSubmit2(device.graphics_queue, &.{.{
+            .command_buffer_info_count = 1,
+            .p_command_buffer_infos = &[_]vk.CommandBufferSubmitInfo{.{ .command_buffer = command, .device_mask = 1 }},
+        }}, fence);
+    }
     // Persistent buffer creation is synchronous; staging must outlive the copy.
     _ = try device.vkd.waitForFences(device.device, &.{fence}, .true, std.math.maxInt(u64));
 }

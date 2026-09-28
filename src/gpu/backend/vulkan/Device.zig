@@ -43,13 +43,43 @@ const VulkanLoader = struct {
     lib: if (builtin.os.tag == .windows) void else std.DynLib,
 };
 
+/// Serializes access to the graphics queue when the device is shared.
+pub const QueueLock = struct {
+    context: *anyopaque,
+    lock: *const fn (context: *anyopaque, family: u32, index: u32) void,
+    unlock: *const fn (context: *anyopaque, family: u32, index: u32) void,
+};
+
+/// A device created by another library.
+/// The owner must have created the instance with Vulkan 1.3 and enabled
+/// `synchronization2`, `dynamicRendering`, `shaderInt8` and `shaderInt16`.
+/// `initExternal` can check the API version, but Vulkan does not expose which
+/// optional features were enabled when the device was created.
+/// Provide `queue_lock` when another user may access the selected queue.
+pub const External = struct {
+    get_instance_proc_addr: *const anyopaque,
+    instance: usize,
+    physical_device: usize,
+    device: usize,
+    queue_family: u32,
+    queue_index: u32 = 0,
+    queue_lock: ?QueueLock = null,
+    /// Format that offscreen targets use.
+    target_format: gpu.Texture.Format = .rgba8,
+};
+
 pub const SurfaceFormat = struct {
     format: vk.Format,
     color_space: vk.ColorSpaceKHR,
 };
 
 allocator: std.mem.Allocator,
-loader: VulkanLoader,
+/// Null for devices imported with `initExternal`.
+loader: ?VulkanLoader,
+/// False when the instance and device belong to another library.
+owns_device: bool = true,
+queue_lock: ?QueueLock = null,
+queue_index: u32 = 0,
 vki: vk.InstanceWrapper,
 vkd: vk.DeviceWrapper,
 instance: vk.Instance,
@@ -206,8 +236,74 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
     return result;
 }
 
+/// Imports a device created elsewhere. The device is not destroyed by `deinit`.
+pub fn initExternal(allocator: std.mem.Allocator, external: External) !Device {
+    const get_instance_proc_addr: vk.PfnGetInstanceProcAddr = @ptrCast(external.get_instance_proc_addr);
+    const instance: vk.Instance = @ptrFromInt(external.instance);
+    const physical_device: vk.PhysicalDevice = @ptrFromInt(external.physical_device);
+    const device: vk.Device = @ptrFromInt(external.device);
+
+    const vki = vk.InstanceWrapper.load(instance, get_instance_proc_addr);
+    const vkd = vk.DeviceWrapper.load(device, vki.dispatch.vkGetDeviceProcAddr.?);
+    if (vki.getPhysicalDeviceProperties(physical_device).api_version < required_api_version.toU32())
+        return error.UnsupportedVulkanVersion;
+
+    const pipeline_cache = try vkd.createPipelineCache(device, &.{}, null);
+    errdefer vkd.destroyPipelineCache(device, pipeline_cache, null);
+    var memory_allocator = MemoryAllocator.init(allocator, vki, vkd, physical_device, device, false, false);
+    errdefer memory_allocator.deinit();
+
+    var descriptor_pools = try createDescriptorPools(allocator, vkd, device);
+    errdefer destroyDescriptorPools(allocator, vkd, device, &descriptor_pools);
+
+    const target_format = Texture.toVkFormat(external.target_format);
+    return .{
+        .allocator = allocator,
+        .loader = null,
+        .owns_device = false,
+        .queue_lock = external.queue_lock,
+        .queue_index = external.queue_index,
+        .vki = vki,
+        .vkd = vkd,
+        .instance = instance,
+        .debug_messenger = .null_handle,
+        .debug_utils = false,
+        .validation_enabled = false,
+        .physical_device = physical_device,
+        .device = device,
+        .queue_family = external.queue_family,
+        .graphics_queue = vkd.getDeviceQueue(device, external.queue_family, external.queue_index),
+        .pipeline_cache = pipeline_cache,
+        .surface_format = target_format,
+        .surface_color_space = .srgb_nonlinear_khr,
+        .surface_is_srgb = isSrgbFormat(target_format),
+        .memory_allocator = memory_allocator,
+        .descriptor_pools = descriptor_pools,
+        .pending_upload_bytes = .empty,
+        .pending_uploads = .empty,
+        .pending_upload_images = .empty,
+        .upload_barriers_before = .empty,
+        .upload_barriers_after = .empty,
+    };
+}
+
+/// Takes the graphics queue lock. Pair every call with `unlockQueue`.
+pub fn lockQueue(self: *const Device) void {
+    if (self.queue_lock) |ql| ql.lock(ql.context, self.queue_family, self.queue_index);
+}
+
+pub fn unlockQueue(self: *const Device) void {
+    if (self.queue_lock) |ql| ql.unlock(ql.context, self.queue_family, self.queue_index);
+}
+
+pub fn waitQueueIdle(self: *Device) !void {
+    self.lockQueue();
+    defer self.unlockQueue();
+    try self.vkd.queueWaitIdle(self.graphics_queue);
+}
+
 pub fn deinit(self: *Device) void {
-    self.vkd.deviceWaitIdle(self.device) catch {};
+    if (self.owns_device) self.vkd.deviceWaitIdle(self.device) catch {} else self.waitQueueIdle() catch {};
     self.pending_upload_bytes.deinit(self.allocator);
     self.pending_uploads.deinit(self.allocator);
     self.pending_upload_images.deinit(self.allocator);
@@ -216,13 +312,15 @@ pub fn deinit(self: *Device) void {
     destroyDescriptorPools(self.allocator, self.vkd, self.device, &self.descriptor_pools);
     self.memory_allocator.deinit();
     self.vkd.destroyPipelineCache(self.device, self.pipeline_cache, null);
+    if (!self.owns_device) return;
     self.vkd.destroyDevice(self.device, null);
     if (self.debug_messenger != .null_handle) self.vki.destroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null);
     self.vki.destroyInstance(self.instance, null);
-    if (builtin.os.tag != .windows) self.loader.lib.close();
+    if (builtin.os.tag != .windows) if (self.loader) |*loader| loader.lib.close();
 }
 
 pub fn waitIdle(self: *Device) !void {
+    if (!self.owns_device) return self.waitQueueIdle();
     try self.vkd.deviceWaitIdle(self.device);
 }
 

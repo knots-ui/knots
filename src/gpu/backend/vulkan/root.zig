@@ -1,3 +1,4 @@
+pub const vk = @import("vk");
 pub const Device = @import("Device.zig");
 pub const Surface = @import("Surface.zig");
 pub const Buffer = @import("Buffer.zig");

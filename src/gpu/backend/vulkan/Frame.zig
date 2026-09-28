@@ -5,15 +5,12 @@ const Device = @import("Device.zig");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
 const Buffer = @import("Buffer.zig");
-const BindGroup = @import("BindGroup.zig");
-const TransientDescriptors = @import("TransientDescriptors.zig");
 
 const FrameData = struct {
     command_buffer: vk.CommandBuffer,
     image_available: vk.Semaphore,
     in_flight: vk.Fence,
     upload_buffer: ?Buffer,
-    descriptors: TransientDescriptors = .{},
 };
 
 const Frame = @This();
@@ -34,12 +31,6 @@ pub const passes_max: u32 = 1024;
 pub const ContextHandle = struct {
     frame: *Frame,
     upload_slot: u32,
-
-    pub fn createBindGroup(self: *const ContextHandle, desc: BindGroup.Desc) !BindGroup {
-        std.debug.assert(self.upload_slot < self.frame.frames.len);
-        std.debug.assert(self.upload_slot == self.frame.current);
-        return BindGroup.createTransient(self.frame.surface.device, &self.frame.frames[self.upload_slot].descriptors, &desc);
-    }
 
     pub fn beginRenderPass(self: *ContextHandle, desc: RenderPass.Desc) !RenderPass {
         return self.frame.beginRenderPass(desc);
@@ -136,7 +127,6 @@ pub fn deinit(self: *Frame) void {
         device.vkd.freeCommandBuffers(device.device, pool, &.{f.command_buffer});
         device.vkd.destroySemaphore(device.device, f.image_available, null);
         device.vkd.destroyFence(device.device, f.in_flight, null);
-        f.descriptors.deinit(device);
         if (f.upload_buffer) |*buffer| buffer.deinit();
     }
     self.allocator.free(self.frames);
@@ -151,7 +141,6 @@ pub fn begin(self: *Frame) !ContextHandle {
     const device = self.surface.device;
     std.debug.assert(f.in_flight != .null_handle);
     _ = try device.vkd.waitForFences(device.device, &.{f.in_flight}, .true, std.math.maxInt(u64));
-    try f.descriptors.reset(device);
     return .{ .frame = self, .upload_slot = self.current };
 }
 
@@ -171,13 +160,15 @@ fn acquireImage(device: *Device, surface: *Surface, semaphore: vk.Semaphore) !u3
 fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
     if (self.pass_count == passes_max) return error.TooManyRenderPasses;
     if (desc.depth_attachment != null) return error.UnsupportedDepthAttachment;
+    const texture_target = desc.color_attachment.target;
     if (desc.color_attachment.load_op == .load) {
-        if (desc.color_attachment.target) |target| {
-            if (!target.ready) return error.UninitializedRenderTarget;
+        if (texture_target) |texture| {
+            if (!texture.ready) return error.UninitializedRenderTarget;
         } else {
             if (!self.surface_initialized) return error.UninitializedRenderTarget;
         }
     }
+
     const surface = self.surface;
     const device = surface.device;
     const frame = &self.frames[self.current];
@@ -194,7 +185,21 @@ fn beginRenderPass(self: *Frame, desc: RenderPass.Desc) !RenderPass {
         if (frame.upload_buffer) |*buffer| device.recordPendingUploads(frame.command_buffer, buffer);
         self.recording = true;
     }
-    const pass = try RenderPass.create(frame.command_buffer, device, surface, self.image_index, desc);
+
+    const render_target: RenderPass.Target = if (texture_target) |texture| .{
+        .image = texture.image,
+        .image_view = texture.image_view,
+        .extent = .{ .width = texture.width, .height = texture.height },
+        .old_layout = texture.layout,
+        .texture = texture,
+    } else .{
+        .image = surface.swapchain_images[self.image_index],
+        .image_view = surface.swapchain_views[self.image_index],
+        .extent = surface.swapchain_extent,
+        .old_layout = if (desc.color_attachment.load_op == .load) .present_src_khr else .undefined,
+        .texture = null,
+    };
+    const pass = try RenderPass.create(frame.command_buffer, device, render_target, desc);
     self.pass_count += 1;
     if (desc.color_attachment.target == null) self.surface_initialized = desc.color_attachment.store_op == .store;
     std.debug.assert(self.pass_count <= passes_max);
@@ -210,7 +215,8 @@ fn submit(self: *Frame) !void {
 fn submitCommands(self: *Frame) !void {
     std.debug.assert(self.recording);
     std.debug.assert(self.pass_count > 0);
-    const device = self.surface.device;
+    const surface = self.surface;
+    const device = surface.device;
     const f = &self.frames[self.current];
 
     try device.vkd.endCommandBuffer(f.command_buffer);
@@ -221,6 +227,8 @@ fn submitCommands(self: *Frame) !void {
         f.in_flight = device.vkd.createFence(device.device, &.{ .flags = .{ .signaled = true } }, null) catch .null_handle;
     }
 
+    device.lockQueue();
+    defer device.unlockQueue();
     try device.vkd.queueSubmit2(device.graphics_queue, &.{.{
         .wait_semaphore_info_count = 1,
         .p_wait_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{.{
@@ -236,7 +244,7 @@ fn submitCommands(self: *Frame) !void {
         }},
         .signal_semaphore_info_count = 1,
         .p_signal_semaphore_infos = &[_]vk.SemaphoreSubmitInfo{.{
-            .semaphore = self.surface.presentSemaphore(self.image_index),
+            .semaphore = surface.presentSemaphore(self.image_index),
             .value = 0,
             .stage_mask = .{ .all_commands = true },
             .device_index = 0,
@@ -249,7 +257,7 @@ fn submitCommands(self: *Frame) !void {
 fn present(self: *Frame) !void {
     const surface = self.surface;
     const device = surface.device;
-    const present_result: ?vk.Result = device.vkd.queuePresentKHR(device.graphics_queue, &.{
+    const present_result: ?vk.Result = queuePresent(device, &.{
         .wait_semaphore_count = 1,
         .p_wait_semaphores = &[_]vk.Semaphore{surface.presentSemaphore(self.image_index)},
         .swapchain_count = 1,
@@ -276,6 +284,12 @@ fn present(self: *Frame) !void {
     }
 
     self.current = (self.current + 1) % @as(u32, @intCast(self.frames.len));
+}
+
+fn queuePresent(device: *Device, info: *const vk.PresentInfoKHR) !vk.Result {
+    device.lockQueue();
+    defer device.unlockQueue();
+    return device.vkd.queuePresentKHR(device.graphics_queue, info);
 }
 
 fn submitReadback(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceReadback {
@@ -393,7 +407,7 @@ pub fn waitForCompletion(self: *Frame) !void {
 }
 
 fn waitForPresentQueue(device: *Device) !void {
-    try device.vkd.queueWaitIdle(device.graphics_queue);
+    try device.waitQueueIdle();
 }
 
 fn createCommandPools(allocator: std.mem.Allocator, device: *Device, count: usize) ![]vk.CommandPool {

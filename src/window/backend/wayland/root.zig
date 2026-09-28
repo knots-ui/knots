@@ -377,6 +377,12 @@ pub const Backend = struct {
         self.dispatchEvents(io, self.state.shared.repeatTimeoutMs(io));
     }
 
+    pub fn waitEventsTimeout(self: *const Self, io: std.Io, timeout_ms: u32) void {
+        const repeat = self.state.shared.repeatTimeoutMs(io);
+        const limit: i32 = @intCast(@min(timeout_ms, std.math.maxInt(i32)));
+        self.dispatchEvents(io, if (repeat < 0) limit else @min(repeat, limit));
+    }
+
     fn dispatchEvents(self: *const Self, io: std.Io, timeout_ms: i32) void {
         const shared = self.state.shared;
         while (!shared.display.prepareRead()) {

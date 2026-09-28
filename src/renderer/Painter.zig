@@ -58,7 +58,6 @@ pub const PrepareOptions = struct {
     height: u32,
     content_scale: f32,
     upload_slot: u32,
-    frame_context: gpu_impl.Frame.Context,
     linear_target: bool,
     /// The target is the renderer's scene target, which backdrops can sample
     /// between segments. Otherwise backdrop commands are skipped.
@@ -193,7 +192,7 @@ pub fn prepare(self: *Painter, packet: *const Packet, options: *const PrepareOpt
     self.prepare_generation += 1;
     try self.preparePixelTextures(packet);
     const upload = &self.frame_uploads[options.upload_slot];
-    upload.resetCustom(options.frame_context);
+    upload.resetCustom();
     if (packet.glyphAtlas()) |atlas| try self.glyph_upload.sync(&atlas, self, uploadGlyphAtlas);
     updateViewport(upload, options);
     const sizes = try uploadFrameData(self.context, upload, packet);

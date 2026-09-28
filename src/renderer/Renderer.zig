@@ -189,7 +189,6 @@ pub fn renderGraph(self: *Renderer, graph: []const CompositionNode, content_scal
             .height = self.surface.cfg.window_height,
             .content_scale = content_scale,
             .upload_slot = frame_context.upload_slot,
-            .frame_context = frame_context,
             .linear_target = linear,
             .backdrops = offscreen,
         });
@@ -293,7 +292,6 @@ fn draw(self: *Renderer, dl: *const Packet, content_scale: f32) ?RenderFailure {
         .height = self.surface.cfg.window_height,
         .content_scale = content_scale,
         .upload_slot = frame_ctx.upload_slot,
-        .frame_context = frame_ctx,
         .linear_target = use_linear_target,
         .backdrops = offscreen,
     }) catch |err| return .{ .renderer = err };

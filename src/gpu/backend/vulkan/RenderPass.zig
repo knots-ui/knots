@@ -1,7 +1,6 @@
 const std = @import("std");
 const vk = @import("vk");
 const Device = @import("Device.zig");
-const Surface = @import("Surface.zig");
 const Buffer = @import("Buffer.zig");
 const Pipeline = @import("Pipeline.zig");
 const BindGroup = @import("BindGroup.zig");
@@ -40,25 +39,36 @@ pub const DepthAttachment = struct {
     target: *Texture,
 };
 
+/// A color target resolved before render-pass creation.
+pub const Target = struct {
+    image: vk.Image,
+    image_view: vk.ImageView,
+    extent: vk.Extent2D,
+    old_layout: vk.ImageLayout,
+    texture: ?*Texture,
+};
+
 pub fn create(
     command_buffer: vk.CommandBuffer,
     device: *Device,
-    surface: *Surface,
-    image_index: u32,
+    target: Target,
     desc: Desc,
 ) !RenderPass {
     if (desc.depth_attachment != null) return error.UnsupportedDepthAttachment;
     const ca = desc.color_attachment;
 
-    const image = if (ca.target) |target| target.image else surface.swapchain_images[image_index];
-    const image_view = if (ca.target) |target| target.image_view else surface.swapchain_views[image_index];
-    const extent: vk.Extent2D = if (ca.target) |target|
-        .{ .width = target.width, .height = target.height }
-    else
-        surface.swapchain_extent;
+    const image = target.image;
+    const image_view = target.image_view;
+    const extent = target.extent;
     std.debug.assert(extent.width > 0);
     std.debug.assert(extent.height > 0);
-    const old_layout: vk.ImageLayout = if (ca.target) |target| target.layout else if (ca.load_op == .load) .present_src_khr else .undefined;
+    if (target.texture == null) {
+        switch (ca.load_op) {
+            .clear => std.debug.assert(target.old_layout == .undefined),
+            .load => std.debug.assert(target.old_layout == .present_src_khr),
+        }
+    }
+    const old_layout = target.old_layout;
     var debug_label = false;
     if (device.debug_utils and desc.label.len != 0) {
         var label_buffer: [256]u8 = undefined;
@@ -125,9 +135,26 @@ pub fn create(
         .image = image,
         .current_pipeline_layout = .null_handle,
         .debug_label = debug_label,
-        .target = ca.target,
+        .target = target.texture,
         .store_op = ca.store_op,
     };
+}
+
+pub fn beginExternal(device: *Device, command_buffer: vk.CommandBuffer, desc: Desc) !RenderPass {
+    if (@intFromPtr(command_buffer) == 0) return error.InvalidCommandBuffer;
+    const texture = desc.color_attachment.target orelse return error.ExternalPassNeedsTexture;
+    if (texture.device != device) return error.TextureDeviceMismatch;
+    if (texture.format != device.surfaceFormat()) return error.IncompatibleRenderTargetFormat;
+    if (desc.color_attachment.load_op == .load) {
+        if (!texture.ready) return error.UninitializedRenderTarget;
+    }
+    return create(command_buffer, device, .{
+        .image = texture.image,
+        .image_view = texture.image_view,
+        .extent = .{ .width = texture.width, .height = texture.height },
+        .old_layout = texture.layout,
+        .texture = texture,
+    }, desc);
 }
 
 pub fn end(self: *RenderPass) void {

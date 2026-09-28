@@ -95,6 +95,16 @@ pub fn waitEvents(self: *const Window, io: std.Io) void {
     self.backend.waitEvents(io);
 }
 
+/// Waits for events for at most `timeout_ms` milliseconds.
+pub fn waitEventsTimeout(self: *const Window, io: std.Io, timeout_ms: u32) void {
+    comptime {
+        if (!@hasDecl(@TypeOf(self.backend), "waitEventsTimeout")) {
+            @compileError("window backend does not support timed event waits");
+        }
+    }
+    self.backend.waitEventsTimeout(io, timeout_ms);
+}
+
 pub fn postEmptyEvent(self: *Window) void {
     self.backend.postEmptyEvent();
 }

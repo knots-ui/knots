@@ -86,7 +86,6 @@ pub fn main(init: std.process.Init) !void {
             .height = extent.height,
             .content_scale = window.getContentScale(),
             .upload_slot = submission.upload_slot,
-            .frame_context = submission,
             .linear_target = false,
         });
 

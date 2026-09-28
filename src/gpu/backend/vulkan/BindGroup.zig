@@ -5,7 +5,6 @@ const Pipeline = @import("Pipeline.zig");
 const Buffer = @import("Buffer.zig");
 const Texture = @import("Texture.zig");
 const Sampler = @import("Sampler.zig");
-const TransientDescriptors = @import("TransientDescriptors.zig");
 
 const BindGroup = @This();
 
@@ -45,14 +44,6 @@ pub fn create(device: *Device, desc: Desc) !BindGroup {
     errdefer device.vkd.freeDescriptorSets(device.device, alloc_result.pool, &.{alloc_result.set}) catch {};
 
     return createWithSet(device, &desc, alloc_result.set, alloc_result.pool);
-}
-
-pub fn createTransient(device: *Device, pools: *TransientDescriptors, desc: *const Desc) !BindGroup {
-    std.debug.assert(desc.pipeline.pipeline != .null_handle);
-    std.debug.assert(desc.layout_index < desc.pipeline.descriptor_set_layouts.len);
-    const layout = desc.pipeline.descriptorSetLayout(desc.layout_index);
-    const set = try pools.allocate(device, layout);
-    return createWithSet(device, desc, set, .null_handle);
 }
 
 fn createWithSet(device: *Device, desc: *const Desc, set: vk.DescriptorSet, pool: vk.DescriptorPool) !BindGroup {
@@ -158,6 +149,5 @@ fn validateBufferBinding(binding: BufferBinding) !void {
 }
 
 pub fn deinit(self: *BindGroup) void {
-    if (self.descriptor_pool == .null_handle) return;
     self.device.vkd.freeDescriptorSets(self.device.device, self.descriptor_pool, &.{self.descriptor_set}) catch {};
 }
