@@ -77,7 +77,7 @@ pub fn configure(self: *Surface, width: u32, height: u32) !void {
     try desc.set("device", js.Arg.value(self.device.device));
     try desc.set("format", js.Arg.string(webgpu.formatName(self.device.surface_format)));
     try desc.set("usage", js.Arg.u32(webgpu.texture_usage.render_attachment));
-    try desc.set("alphaMode", js.Arg.string("opaque"));
+    try desc.set("alphaMode", js.Arg.string("premultiplied"));
     try self.context.callVoid("configure", &.{js.Arg.value(desc.value)});
     self.surface_width = width;
     self.surface_height = height;
