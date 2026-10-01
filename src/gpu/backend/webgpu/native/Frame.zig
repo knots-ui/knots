@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const wgpu = @import("wgpu");
 const Surface = @import("Surface.zig");
 const RenderPass = @import("RenderPass.zig");
@@ -7,10 +6,7 @@ const BindGroup = @import("BindGroup.zig");
 const gpu = @import("gpu");
 
 const Frame = @This();
-const is_browser_wasm = switch (builtin.cpu.arch) {
-    .wasm32, .wasm64 => true,
-    else => false,
-} and builtin.os.tag == .freestanding;
+const is_browser_wasm = @import("builtin").cpu.arch.isWasm();
 
 surface_texture: ?wgpu.Texture,
 view: ?wgpu.TextureView,

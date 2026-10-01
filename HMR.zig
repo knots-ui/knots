@@ -173,8 +173,7 @@ pub fn init(b: *std.Build, executable: *std.Build.Step.Compile, options: Options
     snapshot_run.addDirectoryArg(snapshot);
 
     const host_target = executable.root_module.resolved_target.?;
-    const browser_host = host_target.result.cpu.arch.isWasm() and host_target.result.os.tag == .freestanding;
-    const wasmtime = if (browser_host) null else options.knots.builder.lazyDependency("wasmtime", .{ .target = host_target, .optimize = .debug });
+    const wasmtime = if (host_target.result.cpu.arch.isWasm()) null else options.knots.builder.lazyDependency("wasmtime", .{ .target = host_target, .optimize = .debug });
     const runtime = b.createModule(.{
         .root_source_file = options.knots.path("src/hmr/Runtime.zig"),
         .target = host_target,
@@ -308,7 +307,7 @@ pub fn addDevRunner(self: *const HMR, options: DevOptions) *std.Build.Step.Run {
             .optimize = .debug,
         }),
     });
-    const browser_host = self.executable.root_module.resolved_target.?.result.cpu.arch.isWasm() and self.executable.root_module.resolved_target.?.result.os.tag == .freestanding;
+    const browser_host = self.executable.root_module.resolved_target.?.result.cpu.arch.isWasm();
     if (browser_host) {
         const web_threads = self.options.knots.builder.named_lazy_paths.contains("web-worker-js");
         web_build.configureExecutable(b, self.executable.root_module, self.executable, web_threads, .{});

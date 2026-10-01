@@ -274,7 +274,7 @@ pub fn pasteRequested(events: []const KeyEvent) bool {
 
 const builtin = @import("builtin");
 const is_macos = builtin.os.tag == .macos;
-const is_browser = builtin.cpu.arch.isWasm() and builtin.os.tag == .freestanding;
+const is_browser = builtin.cpu.arch.isWasm();
 
 test "the platform clipboard chord is recognized" {
     const std = @import("std");

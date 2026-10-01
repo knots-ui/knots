@@ -6,8 +6,12 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const web_threads = b.option(bool, "web_threads", "Enable worker threads in the web playground.") orelse false;
     const gpu_backend = b.option(Knots.GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse defaultGpuBackend(target.result);
-
-    const knots = b.dependency("knots", .{ .target = target, .optimize = optimize, .web_threads = web_threads, .gpu_backend = gpu_backend });
+    const knots = b.dependency("knots", .{
+        .target = target,
+        .optimize = optimize,
+        .web_threads = web_threads,
+        .gpu_backend = gpu_backend,
+    });
 
     const exe = buildExecutable(b, target, optimize, gpu_backend, knots, "playground");
     b.installArtifact(exe);
@@ -18,7 +22,7 @@ pub fn build(b: *std.Build) void {
         .watch_roots = &.{b.path("src")},
     });
     hmr.attachNative(exe);
-    const run = if (isBrowserWasmTarget(target.result)) blk: {
+    const run = if (target.result.cpu.arch.isWasm()) blk: {
         exe.entry = .disabled;
         dev_exe.entry = .disabled;
         Knots.installWeb(b, knots, exe.root_module, exe, .{ .index_html = b.path("src/shell_wasm.html") });
@@ -84,12 +88,8 @@ fn buildExecutable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     return exe;
 }
 
-fn isBrowserWasmTarget(target: std.Target) bool {
-    return target.cpu.arch.isWasm() and target.os.tag == .freestanding;
-}
-
 fn defaultGpuBackend(target: std.Target) Knots.GPUBackend {
-    if (isBrowserWasmTarget(target)) return .webgpu;
+    if (target.cpu.arch.isWasm()) return .webgpu;
     return switch (target.os.tag) {
         .macos => .webgpu,
         .windows, .linux => .vulkan,

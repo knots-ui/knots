@@ -1,4 +1,5 @@
 import { createBridgeImports } from "./js-bridge.js";
+import { createWasiImports } from "./knots-wasi.js";
 
 let exports;
 let idleStack;
@@ -34,10 +35,34 @@ self.onmessage = async ({ data }) => {
       );
       const imports = {
         ...bridge.imports,
+        wasi_snapshot_preview1: createWasiImports(() => data.memory),
         env: { memory: data.memory, knots_worker_task: workerTask },
       };
+
+      // Import modules the application provides on the main thread only
+      // (for example a GL context) are stubbed here.
+      for (const { module, name, kind } of WebAssembly.Module.imports(data.module)) {
+        if (kind !== "function" || module in imports) continue;
+        (imports[`stub:${module}`] ??= {})[name] = () => {
+          throw new Error(`${module}.${name} is only available on the main thread`);
+        };
+      }
+
+      for (const key of Object.keys(imports)) {
+        if (key.startsWith("stub:")) {
+          imports[key.slice(5)] = imports[key];
+          delete imports[key];
+        }
+      }
+
       const instance = await WebAssembly.instantiate(data.module, imports);
       exports = instance.exports;
+
+      for (const url of data.extensions ?? []) {
+        const extension = await import(url);
+        await extension.installWorker?.({ host, memory: data.memory, exports });
+      }
+
       idleStack = exports.__stack_pointer.value;
       bridge.setWasmExports(exports);
       self.postMessage({ type: "ready" });
