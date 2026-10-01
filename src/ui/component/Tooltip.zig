@@ -77,12 +77,26 @@ pub fn close(self: *const Tooltip, frame: *Frame) !void {
     const hovered = ui.isHoveredWithin(id);
     const focused = ui.isFocusedWithin(id);
 
-    if (!hovered and !focused) {
+    if (ui.input.mouseButton(.left).pressed and hovered) {
+        s.hover_dismissed = true;
+        s.focus_dismissed = true;
+    }
+    if (!hovered) {
         s.hover_started_ms = null;
+        s.hover_dismissed = false;
+    }
+    if (!focused) {
+        s.focus_dismissed = false;
+    }
+
+    const show_focus = focused and !s.focus_dismissed;
+    if (!show_focus and !(hovered and !s.hover_dismissed)) {
         return;
     }
 
-    if (!focused and !(try hoverDelayElapsed(frame, s, self.delay_ms))) return;
+    if (!show_focus and !(try hoverDelayElapsed(frame, s, self.delay_ms))) {
+        return;
+    }
 
     try self.renderPopup(frame, s, &content);
 }

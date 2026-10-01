@@ -77,6 +77,8 @@ pub const Tooltip = struct {
     viewport_box: math.Rect = .zero,
     popup_box: math.Rect = .zero,
     hover_started_ms: ?i64 = null,
+    hover_dismissed: bool = false,
+    focus_dismissed: bool = false,
 };
 
 pub const Measured = struct {
