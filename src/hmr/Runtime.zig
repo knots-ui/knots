@@ -6,7 +6,7 @@ const Protocol = @import("hmr").Protocol;
 const reloadable = @import("runtime_options").reloadable;
 const FrameInput = @import("input").FrameInput;
 const registry = if (reloadable) struct {} else @import("native_registry");
-const browser_host = builtin.target.cpu.arch.isWasm() and builtin.target.os.tag == .freestanding;
+const browser_host = builtin.target.cpu.arch.isWasm();
 const Instance = if (!reloadable) void else if (browser_host) @import("Browser.zig") else @import("Wasmtime.zig");
 const support = @import("hmr");
 const Status = @import("hmr").Status;

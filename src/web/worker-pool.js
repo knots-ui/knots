@@ -1,7 +1,18 @@
 const workerCount = Math.max(1, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1);
 
 export class WorkerPool {
-  constructor({ module, memory, exports, pointerSize, onComplete, onError }) {
+  constructor({
+    module,
+    memory,
+    exports,
+    pointerSize,
+    extensions = [],
+    minWorkers = 0,
+    onComplete,
+    onError,
+  }) {
+    this.extensions = extensions;
+    this.maxWorkers = Math.max(workerCount, minWorkers);
     this.module = module;
     this.memory = memory;
     this.exports = exports;
@@ -87,6 +98,7 @@ export class WorkerPool {
         module: this.module,
         memory: this.memory,
         pointerSize: this.pointerSize,
+        extensions: this.extensions,
       });
     });
   }
@@ -116,7 +128,7 @@ export class WorkerPool {
   }
 
   scale() {
-    const desiredWorkers = Math.min(workerCount, this.tasks.size);
+    const desiredWorkers = Math.min(this.maxWorkers, this.tasks.size);
     while (this.workers.length + this.startingWorkers < desiredWorkers) {
       this.startWorker().catch((error) => {
         this.onError(error);

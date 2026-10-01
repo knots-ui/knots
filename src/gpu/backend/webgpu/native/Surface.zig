@@ -1,12 +1,8 @@
-const builtin = @import("builtin");
 const wgpu = @import("wgpu");
 const gpu = @import("gpu");
 
 const Device = @import("Device.zig");
-const is_browser_wasm = switch (builtin.cpu.arch) {
-    .wasm32, .wasm64 => true,
-    else => false,
-} and builtin.os.tag == .freestanding;
+const is_browser_wasm = @import("builtin").cpu.arch.isWasm();
 
 const Surface = @This();
 

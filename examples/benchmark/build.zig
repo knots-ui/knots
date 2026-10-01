@@ -1,16 +1,8 @@
 const std = @import("std");
-const GPUBackend = @import("knots").GPUBackend;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const gpu_backend: GPUBackend = if (isBrowserWasmTarget(target.result))
-        .webgpu
-    else switch (target.result.os.tag) {
-        .macos => .webgpu,
-        .windows, .linux => .vulkan,
-        else => .webgpu,
-    };
 
     const tracy_dep = b.dependency("tracy", .{});
 
@@ -49,7 +41,7 @@ pub fn build(b: *std.Build) void {
     const knots = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
-        .gpu_backend = gpu_backend,
+        .gpu_backend = b.option(@import("knots").GPUBackend, "gpu_backend", "GPU backend to compile into knots."),
     });
 
     const exe = b.addExecutable(.{
@@ -77,12 +69,4 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     run_cmd.step.dependOn(b.getInstallStep());
-}
-
-fn isBrowserWasmTarget(target: std.Target) bool {
-    const is_wasm = switch (target.cpu.arch) {
-        .wasm32, .wasm64 => true,
-        else => false,
-    };
-    return is_wasm and target.os.tag == .freestanding;
 }

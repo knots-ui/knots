@@ -55,9 +55,9 @@ pub fn build(b: *std.Build) void {
         buildModuleDependencies(b, target, optimize);
         return;
     }
+    const browser_wasm = target.result.cpu.arch.isWasm();
     const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
-    web_build.configureTarget(&target, web_threads);
-    const browser_wasm = isBrowserWasmTarget(target.result);
+    if (browser_wasm) web_build.configureTarget(&target, web_threads);
     const accesskit_mod = if (browser_wasm) null else blk: {
         const dependency = b.dependency("accesskit", .{ .target = target, .optimize = optimize });
         break :blk dependency.module("accesskit");
@@ -74,9 +74,11 @@ pub fn build(b: *std.Build) void {
     else
         null;
 
+    if (js_bridge_mod) |m| b.modules.put(b.graph.arena, "js-bridge", m) catch @panic("OOM");
     if (browser_wasm) {
         b.addNamedLazyPath("web-host-js", b.path("src/web/host.js"));
         b.addNamedLazyPath("web-bridge-js", b.path("lib/js-bridge/src/runtime.js"));
+        b.addNamedLazyPath("web-wasi-js", b.path("src/web/wasi.js"));
         if (web_threads) {
             b.addNamedLazyPath("web-worker-pool-js", b.path("src/web/worker-pool.js"));
             b.addNamedLazyPath("web-worker-js", b.path("src/web/worker.js"));
@@ -90,9 +92,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/web/main.zig"),
             .imports = &.{.{ .name = "js-bridge", .module = js_bridge_mod.? }},
         });
-        var config = b.addOptions();
-        config.addOption(bool, "worker_concurrency_enabled", web_threads);
-        mod.addOptions("web_config", config);
+        var web_config = b.addOptions();
+        web_config.addOption(bool, "worker_concurrency_enabled", web_threads);
+        mod.addOptions("web_config", web_config);
         break :blk mod;
     } else null;
 
@@ -224,7 +226,7 @@ pub fn build(b: *std.Build) void {
                 m.linkSystemLibrary("xkbcommon", .{});
                 break :blk m;
             },
-            .freestanding => {
+            .freestanding, .wasi => {
                 if (browser_wasm) {
                     break :blk b.createModule(.{
                         .target = target,
@@ -236,7 +238,7 @@ pub fn build(b: *std.Build) void {
                         },
                     });
                 }
-                @panic("expected wasm arch for freestanding target");
+                @panic("expected wasm arch for freestanding or wasi target");
             },
             else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),
         }
@@ -452,7 +454,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
 
-    if (!isBrowserWasmTarget(target.result)) {
+    if (!browser_wasm) {
         const snapshot_exe = b.addExecutable(.{
             .name = "knots-snapshots",
             .root_module = b.createModule(.{
@@ -511,6 +513,8 @@ pub fn addWebInstall(
 
     install.dependOn(&install_host_js.step);
     install.dependOn(&install_bridge_js.step);
+    const install_wasi_js = b.addInstallFileWithDir(knots.namedLazyPath("web-wasi-js"), .{ .custom = options.dir }, "knots-wasi.js");
+    install.dependOn(&install_wasi_js.step);
     install.dependOn(&install_wasm.step);
     if (web_threads) {
         const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
@@ -530,16 +534,12 @@ pub fn configureWebExecutable(b: *std.Build, knots: *std.Build.Dependency, root_
 }
 
 fn defaultGpuBackend(target: std.Target) GPUBackend {
-    if (isBrowserWasmTarget(target)) return .webgpu;
+    if (target.cpu.arch.isWasm()) return .webgpu;
     return switch (target.os.tag) {
         .macos => .webgpu,
         .windows, .linux => .vulkan,
         else => |os| std.debug.panic("windowing implementation for {s} is not yet implemented", .{@tagName(os)}),
     };
-}
-
-fn isBrowserWasmTarget(target: std.Target) bool {
-    return target.cpu.arch.isWasm() and target.os.tag == .freestanding;
 }
 
 fn addRenderShaderSources(b: *std.Build, render_mod: *std.Build.Module) void {

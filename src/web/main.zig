@@ -15,6 +15,10 @@ const vtable: std.Io.VTable = blk: {
     table.random = random;
     table.randomSecure = randomSecure;
     if (config.worker_concurrency_enabled) {
+        table.async = futureAsync;
+        table.concurrent = futureConcurrent;
+        table.await = futureAwait;
+        table.cancel = futureCancel;
         table.groupAsync = groupAsync;
         table.groupConcurrent = groupConcurrent;
         table.recancel = recancel;
@@ -42,7 +46,7 @@ fn now(_: ?*anyopaque, clock: std.Io.Clock) std.Io.Timestamp {
         .real, .awake, .boot => {
             const host = js.host() catch return .zero;
             defer host.release();
-            const result = host.call("nowMs", &.{js.Arg.u32(@intFromEnum(clock))}) catch return .zero;
+            const result = host.call("nowMs", &.{js.Arg.u32(@backingInt(clock))}) catch return .zero;
             defer result.release();
             const ms = result.tryF64() catch return .zero;
             if (!std.math.isFinite(ms) or ms <= 0) return .zero;
@@ -58,6 +62,82 @@ fn clockResolution(_: ?*anyopaque, clock: std.Io.Clock) std.Io.Clock.ResolutionE
         .awake, .boot => std.Io.Duration.fromMicroseconds(1),
         .cpu_process, .cpu_thread => error.ClockUnavailable,
     };
+}
+
+/// A `Future` is a one-task group plus storage for the result.
+const FutureState = struct {
+    group: std.Io.Group = .init,
+    result: []u8,
+    result_alignment: std.mem.Alignment,
+    context: []u8,
+    context_alignment: std.mem.Alignment,
+    start: *const fn (context: *const anyopaque, result: *anyopaque) void,
+
+    fn run(context: *const anyopaque) void {
+        const self: *FutureState = @as(*const *FutureState, @ptrCast(@alignCast(context))).*;
+        self.start(self.context.ptr, self.result.ptr);
+    }
+
+    fn finish(self: *FutureState, result: []u8) void {
+        @memcpy(result, self.result);
+        if (self.result.len > 0) allocator.rawFree(self.result, self.result_alignment, @returnAddress());
+        if (self.context.len > 0) allocator.rawFree(self.context, self.context_alignment, @returnAddress());
+        allocator.destroy(self);
+    }
+};
+
+fn futureConcurrent(
+    _: ?*anyopaque,
+    result_len: usize,
+    result_alignment: std.mem.Alignment,
+    context: []const u8,
+    context_alignment: std.mem.Alignment,
+    start: *const fn (context: *const anyopaque, result: *anyopaque) void,
+) std.Io.ConcurrentError!*std.Io.AnyFuture {
+    const state = allocator.create(FutureState) catch return error.ConcurrencyUnavailable;
+    errdefer allocator.destroy(state);
+    const result: []u8 = if (result_len == 0) &.{} else (allocator.rawAlloc(result_len, result_alignment, @returnAddress()) orelse
+        return error.ConcurrencyUnavailable)[0..result_len];
+    errdefer if (result.len > 0) allocator.rawFree(result, result_alignment, @returnAddress());
+    const context_copy: []u8 = if (context.len == 0) &.{} else (allocator.rawAlloc(context.len, context_alignment, @returnAddress()) orelse
+        return error.ConcurrencyUnavailable)[0..context.len];
+    errdefer if (context_copy.len > 0) allocator.rawFree(context_copy, context_alignment, @returnAddress());
+    @memcpy(context_copy, context);
+    state.* = .{
+        .result = result,
+        .result_alignment = result_alignment,
+        .context = context_copy,
+        .context_alignment = context_alignment,
+        .start = start,
+    };
+    try Runtime.concurrent(&state.group, std.mem.asBytes(&state), .of(*FutureState), FutureState.run);
+    return @ptrCast(state);
+}
+
+fn futureAsync(
+    userdata: ?*anyopaque,
+    result: []u8,
+    result_alignment: std.mem.Alignment,
+    context: []const u8,
+    context_alignment: std.mem.Alignment,
+    start: *const fn (context: *const anyopaque, result: *anyopaque) void,
+) ?*std.Io.AnyFuture {
+    return futureConcurrent(userdata, result.len, result_alignment, context, context_alignment, start) catch {
+        start(context.ptr, result.ptr);
+        return null;
+    };
+}
+
+fn futureAwait(_: ?*anyopaque, any_future: *std.Io.AnyFuture, result: []u8, _: std.mem.Alignment) void {
+    const state: *FutureState = @ptrCast(@alignCast(any_future));
+    if (state.group.token.load(.acquire)) |token| Runtime.await(&state.group, token) catch {};
+    state.finish(result);
+}
+
+fn futureCancel(_: ?*anyopaque, any_future: *std.Io.AnyFuture, result: []u8, _: std.mem.Alignment) void {
+    const state: *FutureState = @ptrCast(@alignCast(any_future));
+    if (state.group.token.load(.acquire)) |token| Runtime.cancel(&state.group, token);
+    state.finish(result);
 }
 
 fn groupConcurrent(

@@ -1,4 +1,5 @@
 import { createBridgeImports } from "./js-bridge.js";
+import { createWasiImports } from "./knots-wasi.js";
 
 const WASM_MEMORY_INITIAL_PAGES = 256;
 const WASM_MEMORY_MAX_PAGES = 32768;
@@ -387,6 +388,7 @@ class BrowserHmr {
 class KnotsBrowserHost {
   constructor(options) {
     this.canvas = options.canvas;
+    this.fullscreenElementOption = options.fullscreenElement ?? null;
     this.logTarget = options.log ?? console;
     this.onError = typeof options.onError === "function" ? options.onError : null;
     this.gpuAdapter = null;
@@ -569,15 +571,24 @@ class KnotsBrowserHost {
   }
 
   isFullscreen(canvas) {
-    return document.fullscreenElement === canvas;
+    return document.fullscreenElement === this.fullscreenTarget(canvas);
   }
 
   requestFullscreen(canvas) {
-    if (document.fullscreenElement === canvas) return 1;
+    if (document.fullscreenElement === this.fullscreenTarget(canvas)) return 1;
     if (!canvas.requestFullscreen) return 0;
     this.pendingFullscreenCanvas = canvas;
     if (!navigator.userActivation || navigator.userActivation.isActive) this.serviceFullscreen();
     return 1;
+  }
+
+  /// The element that goes fullscreen for `canvas`: the canvas itself, or
+  /// the `fullscreenElement` option when the page stacks other content
+  /// (such as a second canvas) with it.
+  fullscreenTarget(canvas) {
+    const option = this.fullscreenElementOption;
+    if (!option) return canvas;
+    return (typeof option === "string" ? document.querySelector(option) : option) ?? canvas;
   }
 
   exitFullscreen() {
@@ -598,7 +609,7 @@ class KnotsBrowserHost {
     const canvas = this.pendingFullscreenCanvas;
     if (!canvas) return;
     this.pendingFullscreenCanvas = null;
-    const request = canvas.requestFullscreen?.();
+    const request = this.fullscreenTarget(canvas).requestFullscreen?.();
     if (!request) {
       document.dispatchEvent(new Event("knotsfullscreenfailed"));
       return;
@@ -733,9 +744,25 @@ export function createKnotsImports(options) {
   const host = new KnotsBrowserHost(options);
   bridge.setHost(host);
   if (options.wasmExports) bridge.setWasmExports(options.wasmExports);
+  let wasiMemory = null;
+  let wasmExports = options.wasmExports ?? null;
+  // Import modules of the application's own (for C code that calls into the
+  // page). They run on the main thread only; workers get stubs.
+  const extraImports =
+    typeof options.imports === "function"
+      ? options.imports(
+          () => wasiMemory ?? bridge.memory,
+          () => wasmExports,
+        )
+      : (options.imports ?? {});
   const imports = {
+    ...extraImports,
     ...bridge.imports,
     knots_hmr: createHmrImports(host, bridge),
+    wasi_snapshot_preview1: createWasiImports(
+      () => wasiMemory ?? bridge.memory,
+      options.log ?? console,
+    ),
   };
 
   return {
@@ -744,7 +771,11 @@ export function createKnotsImports(options) {
     bridge,
     host,
     setWasmExports(exports) {
+      wasmExports = exports;
       bridge.setWasmExports(exports);
+    },
+    setMemory(memory) {
+      wasiMemory = memory;
     },
   };
 }
@@ -853,7 +884,12 @@ export async function startKnots({
   log,
   onError,
   hmr = browserHmrDefault,
+  extensions = [],
+  minWorkers = 0,
+  fullscreenElement,
+  imports: extraImports,
 }) {
+  const extensionUrls = extensions.map((url) => new URL(url, document.baseURI).href);
   const module = wasmExports ? null : await compileWasm(wasmUrl);
   const threaded =
     module !== null &&
@@ -869,6 +905,8 @@ export async function startKnots({
   });
   const imports = createKnotsImports({
     canvas,
+    fullscreenElement,
+    imports: extraImports,
     wasmExports: exports,
     log,
     onError,
@@ -904,6 +942,18 @@ export async function startKnots({
       stackFree: "knots_worker_stack_free",
     });
   imports.setWasmExports(result.instance.exports);
+  const memory = instantiated.memory ?? result.instance.exports.memory;
+  imports.setMemory(memory);
+  for (const url of extensionUrls) {
+    const extension = await import(url);
+    await extension.installMain?.({
+      host: imports.host,
+      bridge: imports.bridge,
+      memory,
+      exports: result.instance.exports,
+      module: result.module,
+    });
+  }
   if (
     threaded &&
     pointerSizeOf(result.instance.exports, resolvedSymbols) !== instantiated.pointerSize
@@ -917,12 +967,16 @@ export async function startKnots({
       memory: instantiated.memory,
       exports: result.instance.exports,
       pointerSize: instantiated.pointerSize,
+      extensions: extensionUrls,
+      minWorkers,
       onComplete: () => imports.host.requestFrame(),
       onError: (error) => imports.host.fatalError(errorMessage(error)),
     });
     await workerPool.init();
     imports.host.setWorkerPool(workerPool);
   }
+  // Exported by wasm32-wasi builds only.
+  result.instance.exports.__wasm_call_ctors?.();
   const start = result.instance.exports[resolvedSymbols.start];
   const rc = start();
   if (rc !== 0) {

@@ -39,20 +39,32 @@ pub fn configureExecutable(b: *std.Build, root_module: *std.Build.Module, execut
     executable.initial_memory = memory_initial;
     executable.max_memory = memory_max;
 
+    // wasm32-wasi otherwise gets a 16 MiB stack, larger than the initial memory.
+    if (executable.stack_size == null)
+        executable.stack_size = 1024 * 1024;
+
     const thread_export_count = if (threads) thread_export_symbol_names.len else 0;
-    const names = b.allocator.alloc([]const u8, 1 + bridge_export_symbol_names.len + thread_export_count + options.extra_export_symbol_names.len) catch @panic("OOM");
+    // C constructors run in `__wasm_call_ctors` (see wasi-libc crt/crt1-reactor.c).
+    // libc does not build with threads on wasm, as of writing this.
+    const wasi = executable.root_module.resolved_target.?.result.os.tag == .wasi;
+    const ctor_export_count: usize = if (wasi) 1 else 0;
+    const names = b.allocator.alloc([]const u8, 1 + bridge_export_symbol_names.len + thread_export_count + ctor_export_count + options.extra_export_symbol_names.len) catch @panic("OOM");
     names[0] = options.start_symbol;
     for (bridge_export_symbol_names, 0..) |name, index| names[index + 1] = name;
     if (threads) {
         for (thread_export_symbol_names, 0..) |name, index| names[index + 1 + bridge_export_symbol_names.len] = name;
     }
-    const extra_start = 1 + bridge_export_symbol_names.len + thread_export_count;
+    if (wasi) {
+        names[1 + bridge_export_symbol_names.len + thread_export_count] = "__wasm_call_ctors";
+    }
+    const extra_start = 1 + bridge_export_symbol_names.len + thread_export_count + ctor_export_count;
     for (options.extra_export_symbol_names, 0..) |name, index| names[extra_start + index] = name;
     root_module.export_symbol_names = names;
 }
 
 pub fn configureTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
-    if (!isBrowserWasmTarget(target.result)) return;
+    if (!target.result.cpu.arch.isWasm())
+        return;
     if (!threads) {
         const feature = std.Target.wasm.Feature.atomics;
         target.query.cpu_features_add.removeFeature(@backingInt(feature));
@@ -69,8 +81,4 @@ pub fn configureTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
         target.query.cpu_features_add.addFeature(@backingInt(feature));
         target.result.cpu.features.addFeature(@backingInt(feature));
     }
-}
-
-fn isBrowserWasmTarget(target: std.Target) bool {
-    return target.cpu.arch.isWasm() and target.os.tag == .freestanding;
 }
