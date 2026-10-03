@@ -87,5 +87,10 @@ fn testWriteFile(io: std.Io, directory: []const u8) std.Io.Cancelable!void {
     try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     const path = std.fs.path.join(std.testing.allocator, &.{ directory, "changed" }) catch return;
     defer std.testing.allocator.free(path);
+    if (builtin.os.tag == .macos) {
+        var child = std.process.spawn(io, .{ .argv = &.{ "/usr/bin/touch", path } }) catch return;
+        _ = child.wait(io) catch return;
+        return;
+    }
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = "changed", .flags = .{} }) catch return;
 }
