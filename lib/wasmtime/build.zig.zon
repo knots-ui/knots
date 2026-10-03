@@ -15,6 +15,10 @@
             .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-aarch64-macos-c-api.tar.xz",
             .hash = "N-V-__8AAO7VOwSHZwfzZvB87CfDFhNBc0X82LHh5ja5aLmg",
         },
+        .wasmtime_windows_x86_64_gnu = .{
+            .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-mingw-c-api.zip",
+            .hash = "N-V-__8AAGrWxgYaM09eGR7LW6scWCswHXicEMXYYzz370zQ",
+        },
     },
     .paths = .{
         "README.md",

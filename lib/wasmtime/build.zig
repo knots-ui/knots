@@ -14,13 +14,12 @@ pub fn build(b: *std.Build) void {
             else => @panic("Unsupported Wasmtime architecture"),
         },
         .windows => switch (target.result.cpu.arch) {
-            .x86_64 => "wasmtime_windows_x86_64",
+            .x86_64 => if (target.result.abi == .gnu) "wasmtime_windows_x86_64_gnu" else "wasmtime_windows_x86_64",
             else => @panic("Unsupported Wasmtime architecture"),
         },
         else => @panic("Unsupported Wasmtime platform"),
     };
     const wasmtime_dep = b.dependency(package_name, .{});
-
 
     // translate-c fails on the MSVC headers; the GNU ABI headers produce the same
     // declarations on Windows, and the module still links against the MSVC archive.
@@ -42,7 +41,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "c", .module = translated.createModule() },
+            .{
+                .name = "c",
+                .module = b.createModule(.{
+                    .root_source_file = translated.getOutput(),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }),
+            },
         },
     });
 
@@ -50,7 +57,8 @@ pub fn build(b: *std.Build) void {
         .windows => {
             translated.defineCMacro("WASM_API_EXTERN", "");
             translated.defineCMacro("WASI_API_EXTERN", "");
-            mod.addObjectFile(wasmtime_dep.path("lib/wasmtime.lib"));
+
+            mod.addObjectFile(wasmtime_dep.path(if (target.result.abi == .gnu) "lib/libwasmtime.dll.a" else "lib/wasmtime.dll.lib"));
 
             for ([_][]const u8{ "ws2_32", "advapi32", "userenv", "ntdll", "shell32", "ole32", "bcrypt" }) |library| mod.linkSystemLibrary(library, .{});
         },
@@ -65,5 +73,11 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = mod });
     b.step("check", "Compile and link tests without executing them").dependOn(&tests.step);
-    b.step("test", "Test Wasmtime bindings").dependOn(&b.addRunArtifact(tests).step);
+
+    const run_tests = b.addRunArtifact(tests);
+    if (target.result.os.tag == .windows) {
+        b.addNamedLazyPath("dll_dir", wasmtime_dep.path("lib"));
+        run_tests.setCwd(wasmtime_dep.path("lib"));
+    }
+    b.step("test", "Test Wasmtime bindings").dependOn(&run_tests.step);
 }

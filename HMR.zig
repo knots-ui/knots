@@ -233,7 +233,9 @@ pub fn init(b: *std.Build, executable: *std.Build.Step.Compile, options: Options
     test_module.addAnonymousImport("fixture_wasm", .{ .root_source_file = fixture.getEmittedBin() });
 
     const tests = b.addTest(.{ .root_module = test_module });
-    b.step("module-test", "Test isolated UI execution and independent replacement").dependOn(&b.addRunArtifact(tests).step);
+    const run_tests = b.addRunArtifact(tests);
+    if (wasmtime) |dependency| if (dependency.builder.named_lazy_paths.get("dll_dir")) |dir| run_tests.setCwd(dir);
+    b.step("module-test", "Test isolated UI execution and independent replacement").dependOn(&run_tests.step);
 
     const configuration = files.add("server.json", std.json.Stringify.valueAlloc(b.allocator, .{
         .roots = roots,
