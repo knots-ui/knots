@@ -1,7 +1,7 @@
 .{
     .name = .knots,
     .version = "0.3.0",
-    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .pack = .{
             .url = "git+https://codeberg.org/shahwali/pack.git#5a97dd502b525bec9efc7a9add1847b3ebfb164c",

@@ -1,7 +1,7 @@
 .{
     .name = .wasmtime,
     .version = "0.0.1",
-    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .wasmtime_linux_x86_64 = .{
             .url = "https://github.com/bytecodealliance/wasmtime/releases/download/v48.0.2/wasmtime-v48.0.2-x86_64-linux-c-api.tar.xz",
