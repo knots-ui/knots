@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
             else => @panic("Unsupported Wasmtime architecture"),
         },
         .windows => switch (target.result.cpu.arch) {
-            .x86_64 => "wasmtime_windows_x86_64",
+            .x86_64 => if (target.result.abi == .gnu) "wasmtime_windows_x86_64_gnu" else "wasmtime_windows_x86_64",
             else => @panic("Unsupported Wasmtime architecture"),
         },
         else => @panic("Unsupported Wasmtime platform"),
@@ -58,12 +58,7 @@ pub fn build(b: *std.Build) void {
             translated.defineCMacro("WASM_API_EXTERN", "");
             translated.defineCMacro("WASI_API_EXTERN", "");
 
-            const lib_path = if (target.result.abi == .msvc)
-                "lib/wasmtime.dll.lib"
-            else
-                "lib/wasmtime.lib";
-
-            mod.addObjectFile(wasmtime_dep.path(lib_path));
+            mod.addObjectFile(wasmtime_dep.path(if (target.result.abi == .gnu) "lib/libwasmtime.dll.a" else "lib/wasmtime.dll.lib"));
 
             for ([_][]const u8{ "ws2_32", "advapi32", "userenv", "ntdll", "shell32", "ole32", "bcrypt" }) |library| mod.linkSystemLibrary(library, .{});
         },
@@ -80,7 +75,7 @@ pub fn build(b: *std.Build) void {
     b.step("check", "Compile and link tests without executing them").dependOn(&tests.step);
 
     const run_tests = b.addRunArtifact(tests);
-    if (target.result.os.tag == .windows and target.result.abi == .msvc) {
+    if (target.result.os.tag == .windows) {
         b.addNamedLazyPath("dll_dir", wasmtime_dep.path("lib"));
         run_tests.setCwd(wasmtime_dep.path("lib"));
     }
