@@ -58,10 +58,7 @@ pub fn build(b: *std.Build) void {
     const browser_wasm = target.result.cpu.arch.isWasm();
     const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
     if (browser_wasm) web_build.configureTarget(&target, web_threads);
-    const accesskit_mod = if (browser_wasm) null else blk: {
-        const dependency = b.dependency("accesskit", .{ .target = target, .optimize = optimize });
-        break :blk dependency.module("accesskit");
-    };
+    const accesskit_dep = if (browser_wasm) null else b.dependency("accesskit", .{ .target = target, .optimize = optimize });
 
     const gpu_backend =
         b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
@@ -353,13 +350,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "signal", .module = signal_mod },
         },
     });
-    const native_accessibility_mod = if (accesskit_mod) |accesskit| blk: {
+    const native_accessibility_mod = if (accesskit_dep) |accesskit| blk: {
         const native_accessibility = b.addModule("native_accessibility", .{
             .target = target,
             .optimize = optimize,
             .root_source_file = b.path("src/NativeAccessibility.zig"),
             .imports = &.{
-                .{ .name = "accesskit", .module = accesskit },
+                .{ .name = "accesskit", .module = accesskit.module("accesskit") },
                 .{ .name = "ui", .module = ui_mod },
                 .{ .name = "gpu", .module = gpu_mod },
             },
@@ -399,7 +396,7 @@ pub fn build(b: *std.Build) void {
     });
     mod.addOptions("debug_config", debug_opts);
     if (browser_wasm) mod.addImport("browser_exports", browser_exports_mod.?);
-    if (accesskit_mod) |accesskit| mod.addImport("accesskit", accesskit);
+    if (accesskit_dep) |accesskit| mod.addImport("accesskit", accesskit.module("accesskit"));
     if (native_accessibility_mod) |native_accessibility| mod.addImport("native_accessibility", native_accessibility);
 
     const mod_tests = b.addTest(.{ .root_module = mod });
@@ -443,7 +440,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(render_tests).step);
     test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
-    if (native_accessibility_tests) |tests| test_step.dependOn(&b.addRunArtifact(tests).step);
+    if (native_accessibility_tests) |tests| {
+        const run = b.addRunArtifact(tests);
+        if (accesskit_dep.?.builder.named_lazy_paths.get("dll_dir")) |dir| run.setCwd(dir);
+        test_step.dependOn(&run.step);
+    }
     test_step.dependOn(&b.addRunArtifact(layout_tests).step);
     test_step.dependOn(&b.addRunArtifact(style_tests).step);
     test_step.dependOn(&b.addRunArtifact(ui_tests).step);
