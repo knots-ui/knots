@@ -1,0 +1,89 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64-linux-gnu
+            os: ubuntu-latest
+            target_flag: ""
+
+          - name: aarch64-macos
+            os: macos-latest
+            target_flag: ""
+
+          - name: x86_64-windows-msvc
+            os: windows-latest
+            target_flag: -Dtarget=x86_64-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+      - name: Install Wayland development packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev pkg-config
+
+      - name: knots
+        run: zig build test ${{ matrix.target_flag }} --summary all
+
+      - name: lib/accesskit
+        working-directory: lib/accesskit
+        run: zig build test ${{ matrix.target_flag }} --summary all
+
+      - name: lib/js-bridge
+        working-directory: lib/js-bridge
+        run: zig build test ${{ matrix.target_flag }} --summary all
+
+      - name: lib/wasmtime
+        working-directory: lib/wasmtime
+        run: zig build test ${{ matrix.target_flag }} --summary all
+
+      - name: lib/watch
+        working-directory: lib/watch
+        run: zig build test ${{ matrix.target_flag }} --summary all
+
+  wasi:
+    name: wasm32-wasi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+
+      - name: knots
+        run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
+
+      - name: lib/js-bridge
+        working-directory: lib/js-bridge
+        run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
+
+  browser:
+    name: wasm32-freestanding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+
+      - name: Build playground
+        working-directory: examples/playground
+        run: zig build -Dtarget=wasm32-freestanding --summary all
