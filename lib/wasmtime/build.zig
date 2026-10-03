@@ -21,7 +21,6 @@ pub fn build(b: *std.Build) void {
     };
     const wasmtime_dep = b.dependency(package_name, .{});
 
-
     // translate-c fails on the MSVC headers; the GNU ABI headers produce the same
     // declarations on Windows, and the module still links against the MSVC archive.
     const translate_target = if (target.result.os.tag == .windows and target.result.abi == .msvc)
@@ -42,7 +41,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .imports = &.{
-            .{ .name = "c", .module = translated.createModule() },
+            .{
+                .name = "c",
+                .module = b.createModule(.{
+                    .root_source_file = translated.getOutput(),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                }),
+            },
         },
     });
 
@@ -50,7 +57,13 @@ pub fn build(b: *std.Build) void {
         .windows => {
             translated.defineCMacro("WASM_API_EXTERN", "");
             translated.defineCMacro("WASI_API_EXTERN", "");
-            mod.addObjectFile(wasmtime_dep.path("lib/wasmtime.lib"));
+
+            const lib_path = if (target.result.abi == .msvc)
+                "lib/wasmtime.dll.lib"
+            else
+                "lib/wasmtime.lib";
+
+            mod.addObjectFile(wasmtime_dep.path(lib_path));
 
             for ([_][]const u8{ "ws2_32", "advapi32", "userenv", "ntdll", "shell32", "ole32", "bcrypt" }) |library| mod.linkSystemLibrary(library, .{});
         },
@@ -65,5 +78,11 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = mod });
     b.step("check", "Compile and link tests without executing them").dependOn(&tests.step);
-    b.step("test", "Test Wasmtime bindings").dependOn(&b.addRunArtifact(tests).step);
+
+    const run_tests = b.addRunArtifact(tests);
+    if (target.result.os.tag == .windows and target.result.abi == .msvc) {
+        b.addNamedLazyPath("dll_dir", wasmtime_dep.path("lib"));
+        run_tests.setCwd(wasmtime_dep.path("lib"));
+    }
+    b.step("test", "Test Wasmtime bindings").dependOn(&run_tests.step);
 }

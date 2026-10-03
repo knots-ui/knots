@@ -11,9 +11,9 @@ The package handles C header translation and native linking. Supported targets
 are macOS ARM64, Linux x86-64 and Windows x86-64. macOS and Linux use the pinned
 shared library and its package directory as an rpath to coexist with wgpu-native;
 distributing that executable requires distributing the shared library and
-configuring its search path. Windows uses the pinned static library.
-The Windows archive requires the MSVC runtime and SDK; cross-compiling from a
-machine without those headers and libraries is not supported by this package.
+configuring its search path. Windows MSVC links `wasmtime.dll`, which must ship
+beside the executable, its directory is the `dll_dir` named lazy path.
+Cross-compiling for MSVC requires the MSVC runtime and SDK passed with `--libc`.
 
 `Engine`, `Module` and `Store` own their resources and require `deinit`.
 Destroy stores and modules before the engine. Treat these as single-owner values;
