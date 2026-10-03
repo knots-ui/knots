@@ -1,7 +1,7 @@
 .{
     .name = .accesskit,
     .version = "0.23.0",
-    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .release = .{
             .url = "https://github.com/AccessKit/accesskit-c/releases/download/0.23.0/accesskit-c-0.23.0.zip",

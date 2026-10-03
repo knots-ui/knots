@@ -2,7 +2,7 @@
     .name = .benchmark,
     .version = "0.0.0",
     .fingerprint = 0xb70c48fee7e259b7,
-    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .knots = .{ .path = "../../" },
         .tracy = .{

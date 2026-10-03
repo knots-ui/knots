@@ -1,7 +1,7 @@
 .{
     .name = .js_bridge,
     .version = "0.0.1",
-    .minimum_zig_version = "0.17.0-dev.342+761809e79",
+    .minimum_zig_version = "0.17.0",
     .paths = .{
         "src",
         "build.zig",

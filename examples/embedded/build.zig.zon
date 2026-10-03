@@ -2,7 +2,7 @@
     .name = .embedded,
     .fingerprint = 0xaa6933f41d9cbd1d,
     .version = "0.0.1",
-    .minimum_zig_version = "0.17.0-dev.2131+d08989840",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .knots = .{ .path = "../../" },
     },
