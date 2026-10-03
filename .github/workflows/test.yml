@@ -29,6 +29,10 @@ jobs:
             os: windows-latest
             target_flag: -Dtarget=x86_64-windows-msvc
 
+          - name: x86_64-windows-gnu
+            os: windows-latest
+            target_flag: -Dtarget=x86_64-windows-gnu
+
     runs-on: ${{ matrix.os }}
     defaults:
       run:
