@@ -1,0 +1,54 @@
+name: Snapshots
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshots:
+    name: vulkan
+    runs-on: ubuntu-latest
+    env:
+      WAYLAND_DISPLAY: wayland-ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+
+      - name: Install Wayland, Weston, and Mesa lavapipe
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev pkg-config \
+            weston libvulkan1 mesa-vulkan-drivers
+
+      - name: Start headless Weston
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -m 0700 -p "$XDG_RUNTIME_DIR"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          weston --backend=headless --renderer=pixman --socket="$WAYLAND_DISPLAY" \
+            --width=1024 --height=768 --idle-time=0 > "$RUNNER_TEMP/weston.log" 2>&1 &
+          for _ in $(seq 50); do
+            [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && exit 0
+            sleep 0.1
+          done
+          cat "$RUNNER_TEMP/weston.log"
+          exit 1
+
+      - name: Compare snapshots
+        run: zig build snapshots -Dgpu_backend=vulkan --summary all
+
+      - name: Upload snapshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-diffs-vulkan
+          path: |
+            zig-out/snapshot-diffs
+            ${{ runner.temp }}/weston.log
+          if-no-files-found: ignore

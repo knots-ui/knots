@@ -22,8 +22,14 @@ pub fn build(b: *std.Build) void {
     const wasmtime_dep = b.dependency(package_name, .{});
 
 
+    // translate-c fails on the MSVC headers; the GNU ABI headers produce the same
+    // declarations on Windows, and the module still links against the MSVC archive.
+    const translate_target = if (target.result.os.tag == .windows and target.result.abi == .msvc)
+        b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = .windows, .abi = .gnu })
+    else
+        target;
     const translated = b.addTranslateC(.{
-        .target = target,
+        .target = translate_target,
         .optimize = optimize,
         .root_source_file = wasmtime_dep.path("include/wasmtime.h"),
         .link_libc = true,
