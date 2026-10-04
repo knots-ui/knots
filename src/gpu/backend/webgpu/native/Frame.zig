@@ -154,10 +154,15 @@ fn submitReadbackCopy(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceRe
     const c = wgpu.c;
     c.wgpuCommandEncoderCopyTextureToBuffer(
         self.encoder.?.encoder,
-        &.{ .texture = self.surface_texture.?.texture },
+        &.{
+            .texture = self.surface_texture.?.texture,
+            .mipLevel = 0,
+            .origin = .{ .x = 0, .y = 0, .z = 0 },
+            .aspect = c.WGPUTextureAspect_All,
+        },
         &.{
             .buffer = readback_buffer.buffer,
-            .layout = .{ .bytesPerRow = @intCast(padded_row_bytes), .rowsPerImage = height },
+            .layout = .{ .offset = 0, .bytesPerRow = @intCast(padded_row_bytes), .rowsPerImage = height },
         },
         &.{ .width = width, .height = height, .depthOrArrayLayers = 1 },
     );
@@ -174,6 +179,7 @@ fn submitReadbackCopy(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceRe
         0,
         readback_size,
         .{
+            .nextInChain = null,
             .mode = c.WGPUCallbackMode_AllowSpontaneous,
             .callback = struct {
                 fn callback(status: c.WGPUMapAsyncStatus, _: c.WGPUStringView, userdata: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
@@ -183,6 +189,7 @@ fn submitReadbackCopy(self: *Frame, allocator: std.mem.Allocator) !gpu.SurfaceRe
                 }
             }.callback,
             .userdata1 = &state,
+            .userdata2 = null,
         },
     );
     while (!state.done.load(.acquire)) _ = self.surface.device.device.poll(true);

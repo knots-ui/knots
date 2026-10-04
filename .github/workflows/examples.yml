@@ -1,0 +1,53 @@
+name: Examples
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64-linux-gnu
+            os: ubuntu-latest
+            target_flag: ""
+
+          - name: aarch64-macos
+            os: macos-latest
+            target_flag: ""
+
+          - name: x86_64-windows-msvc
+            os: windows-latest
+            target_flag: -Dtarget=x86_64-windows-msvc
+
+          - name: x86_64-windows-gnu
+            os: windows-latest
+            target_flag: -Dtarget=x86_64-windows-gnu
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+
+      - name: Install Wayland development packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev pkg-config
+
+      - name: examples/playground (webgpu)
+        working-directory: examples/playground
+        run: zig build ${{ matrix.target_flag }} -Dgpu_backend=webgpu --summary all

@@ -142,7 +142,7 @@ fn isSrgbFormat(format: wgpu.Texture.Format) bool {
     };
 }
 
-fn uncapturedError(reason: c_uint, message: []const u8) void {
+fn uncapturedError(reason: wgpu.c.WGPUErrorType, message: []const u8) void {
     std.log.err("WebGPU error {d}: {s}", .{ reason, message });
 }
 

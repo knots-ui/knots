@@ -42,6 +42,19 @@ Select a backend with the `gpu_backend` dependency option. Read
 - For the Vulkan backend: a Vulkan 1.3 driver with dynamic rendering.
 - For the browser: a browser with WebGPU.
 
+## Dependencies
+
+| Dependency | Used for | Linking |
+| --- | --- | --- |
+| [wgpu](https://codeberg.org/shahwali/wgpu-zig) | WebGPU backend (native) | Static, shared on Windows MSVC (ship `wgpu_native.dll`) |
+| vulkan, vulkan_headers | Vulkan backend | Vulkan loader at runtime |
+| accesskit (`lib/accesskit`) | Native accessibility | Static, patched so it links next to wgpu-native |
+| zig_objc | macOS windowing | - |
+| wayland | Linux windowing | System `libwayland` |
+| TrueType | Text | - |
+| js_bridge (`lib/js-bridge`) | Browser host | - |
+| pack, celer, watch, wasmtime | Hot reloading (dev only) | wasmtime shared |
+
 ## Install
 
 ```sh

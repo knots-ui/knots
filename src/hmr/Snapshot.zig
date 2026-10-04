@@ -24,13 +24,13 @@ pub fn main(init: std.process.Init) !void {
         const target = try std.fs.path.join(allocator, &.{ arguments[2], copy.target });
         const contents = try std.Io.Dir.cwd().readFileAlloc(init.io, copy.source, allocator, .limited(32 * 1024 * 1024));
         try writeChanged(allocator, init.io, target, contents);
-        try retained.put(copy.target, {});
+        try retained.put(try normalized(allocator, copy.target), {});
     }
 
     for (config.value.generated) |generated| {
         const target = try std.fs.path.join(allocator, &.{ arguments[2], generated.target });
         try writeChanged(allocator, init.io, target, generated.contents);
-        try retained.put(generated.target, {});
+        try retained.put(try normalized(allocator, generated.target), {});
     }
 
     var directory = try std.Io.Dir.cwd().openDir(init.io, arguments[2], .{ .iterate = true });
@@ -43,11 +43,17 @@ pub fn main(init: std.process.Init) !void {
         visited += 1;
         if (visited > 32768) return error.TooManySnapshotEntries;
         if (entry.kind != .file) continue;
-        if (retained.contains(entry.path)) continue;
+        if (retained.contains(try normalized(allocator, entry.path))) continue;
         try directory.deleteFile(init.io, entry.path);
     }
     std.debug.assert(retained.count() <= 8193);
     std.debug.assert(arguments[2].len > 0);
+}
+
+fn normalized(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const result = try allocator.dupe(u8, path);
+    std.mem.replaceScalar(u8, result, '\\', '/');
+    return result;
 }
 
 fn writeChanged(allocator: std.mem.Allocator, io: std.Io, path: []const u8, contents: []const u8) !void {
