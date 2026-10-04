@@ -1,5 +1,4 @@
 # AccessKit for Zig
 
-- Linux and Windows GNU link the static archive, GNU links libc++ for libunwind.
-- macOS and Windows MSVC link the shared library to avoid duplicate Rust runtime symbols. Ship `accesskit.dll` beside the executable, its directory is the `dll_dir` named lazy path. MSVC cross-compiles need `--libc` (e.g. `xwin`).
+- Links the static archive on every target, GNU links libc++ for libunwind. The archive bundles Rust's runtime, so the build patches a copy of it (`patch_archive.zig`): it drops Rust's `compiler_builtins`, which Zig's compiler_rt provides and collides with on MSVC, and renames `rust_eh_personality`, which other Rust static libraries (e.g. wgpu-native) also define.
 - Windows translates a wrapper defining the four handle types instead of `windows.h`, against mingw headers since translate-c ignores `--libc`.

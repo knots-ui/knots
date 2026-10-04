@@ -8,6 +8,6 @@
             .hash = "N-V-__8AAEFGZhErLHq9UH3Pw21WPLBLfjYaqLIboPjbQHTB",
         },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "patch_archive.zig" },
     .fingerprint = 0x713f3ae7aa5c4bae,
 }

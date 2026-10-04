@@ -58,7 +58,11 @@ pub fn build(b: *std.Build) void {
     const browser_wasm = target.result.cpu.arch.isWasm();
     const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
     if (browser_wasm) web_build.configureTarget(&target, web_threads);
-    const accesskit_dep = if (browser_wasm) null else b.dependency("accesskit", .{ .target = target, .optimize = optimize });
+
+    const accesskit_dep = if (browser_wasm)
+        null
+    else
+        b.dependency("accesskit", .{ .target = target, .optimize = optimize });
 
     const gpu_backend =
         b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
@@ -400,7 +404,6 @@ pub fn build(b: *std.Build) void {
     if (native_accessibility_mod) |native_accessibility| mod.addImport("native_accessibility", native_accessibility);
 
     const mod_tests = b.addTest(.{ .root_module = mod });
-    const native_accessibility_tests = if (native_accessibility_mod) |native_accessibility| b.addTest(.{ .root_module = native_accessibility }) else null;
     const layout_tests = b.addTest(.{ .root_module = layout_mod });
     const style_tests = b.addTest(.{ .root_module = style_mod });
     const ui_tests = b.addTest(.{ .root_module = ui_mod });
@@ -440,10 +443,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(render_tests).step);
     test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
-    if (native_accessibility_tests) |tests| {
-        const run = b.addRunArtifact(tests);
-        if (accesskit_dep.?.builder.named_lazy_paths.get("dll_dir")) |dir| run.setCwd(dir);
-        test_step.dependOn(&run.step);
+    if (native_accessibility_mod) |native_accessibility| {
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = native_accessibility })).step);
     }
     test_step.dependOn(&b.addRunArtifact(layout_tests).step);
     test_step.dependOn(&b.addRunArtifact(style_tests).step);
