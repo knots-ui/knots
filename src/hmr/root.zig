@@ -1,47 +1,67 @@
 //! Internal guest support. Applications use knots.Frame.
+
 const std = @import("std");
 const ui = @import("ui");
+const input = @import("input");
+const render = @import("render");
 
-pub const Protocol = @import("Protocol.zig");
-pub const Status = @import("Status.zig");
-pub const FrameProtocol = @import("FrameProtocol.zig");
-pub const Wire = @import("Wire.zig");
-pub const Panels = @import("Panels.zig");
+pub const protocol = @import("protocol.zig");
+pub const wire = @import("wire.zig");
+pub const panels = @import("panels.zig");
+pub const transfer = @import("transfer.zig");
+
+pub const Request = struct {
+    frame: input.FrameInput,
+    theme: ui.Theme,
+};
+
+pub const Effects = struct {
+    cursor_shape: input.CursorShape = .default,
+    capture_pointer: bool = false,
+    capture_keyboard: bool = false,
+    text_input: bool = false,
+    redraw: bool = false,
+    close: bool = false,
+    clipboard_write: ?[]const u8 = null,
+    theme: ?ui.Theme = null,
+};
+
+pub const Response = struct {
+    packet: render.Packet,
+    effects: Effects = .{},
+};
+
+pub const DecodedResponse = struct {
+    packet: panels.Parts,
+    effects: Effects = .{},
+};
 
 comptime {
-    std.debug.assert(Protocol.version == Wire.version);
-    std.debug.assert(Protocol.bytes_max == Wire.bytes_max);
+    if (wire.fingerprint(DecodedResponse) != wire.fingerprint(Response))
+        @compileError("Panels.Parts must match render.Packet");
 }
+
+/// A host loads a module only if their frame encodings match. An edit to
+/// knots can change the encoding, and the host then needs a restart.
+pub const fingerprint = wire.fingerprint(struct { request: Request, response: Response });
 
 pub const Guest = struct {
     executor: ui.Context,
     main: *const fn (*ui.Frame) anyerror!void,
 
     pub fn init(allocator: std.mem.Allocator, main: *const fn (*ui.Frame) anyerror!void) !Guest {
-        std.debug.assert(@intFromPtr(main) > 0);
-        std.debug.assert(Protocol.version == Wire.version);
-        return .{ .executor = try .init(allocator, .{ .ui = .{}, .arena_reset_mode = .retain_capacity }), .main = main };
+        return .{ .executor = try .init(allocator, .{}), .main = main };
     }
 
     pub fn deinit(self: *Guest) void {
-        std.debug.assert(self.executor.generation < std.math.maxInt(u64));
-        std.debug.assert(@intFromPtr(self.main) > 0);
         self.executor.deinit();
     }
 
-    pub fn execute(self: *Guest, request: *const FrameProtocol.Request) !FrameProtocol.Response {
-        std.debug.assert(@intFromPtr(self.main) > 0);
-        std.debug.assert(request.frame.content_scale > 0);
-        std.debug.assert(request.state_scope > 0);
-        self.executor.setStateScope(request.state_scope);
-        try self.executor.loadState(request.state);
-        self.executor.beginDependencyCollection();
-        var collection_active = true;
-        defer {
-            if (collection_active) self.executor.cancelDependencyCollection();
-        }
+    pub fn execute(self: *Guest, request: *const Request) !Response {
+        self.executor.ui.theme = request.theme;
         var context = try self.executor.beginFrame(request.frame);
         defer context.deinit();
+
         const root: ui.component.Rect = .{
             .key = .str("knots.module.root"),
             .style = &.{
@@ -54,19 +74,14 @@ pub const Guest = struct {
             },
         };
         _ = try root.open(&context);
-        self.main(&context) catch |err| {
-            self.executor.cancelDependencyCollection();
-            collection_active = false;
-            return err;
-        };
+        try self.main(&context);
         try root.close(&context);
-        const dependencies = self.executor.endDependencyCollection();
-        collection_active = false;
+
         const output = try self.executor.endFrame(&context);
+        const theme_changed = !std.meta.eql(self.executor.ui.theme, request.theme);
+
         return .{
-            .contribution = .{ .packet = output.packet },
-            .state = try self.executor.stateValues(),
-            .dependencies = dependencies,
+            .packet = output.packet,
             .effects = .{
                 .cursor_shape = output.cursor_shape,
                 .capture_pointer = output.capture_pointer,
@@ -75,44 +90,74 @@ pub const Guest = struct {
                 .redraw = output.redraw,
                 .close = output.close,
                 .clipboard_write = output.clipboard_write,
+                .theme = if (theme_changed) self.executor.ui.theme else null,
             },
         };
     }
 };
 
 test {
-    _ = Wire;
-    _ = Status;
-    _ = FrameProtocol;
-    _ = Panels;
+    _ = @import("changes.zig");
+    _ = @import("command.zig");
+    _ = @import("diagnostics.zig");
+    _ = @import("graph.zig");
+    _ = wire;
+    _ = panels;
+    _ = transfer;
 }
 
-test "guest reports state reads as dependencies" {
+const test_frame: input.FrameInput = .{
+    .input = .{ .pos = .{ -1, -1 } },
+    .now_ms = 0,
+    .delta_ns = 0,
+    .logical_extent = .{ .width = 100, .height = 100 },
+    .physical_extent = .{ .width = 100, .height = 100 },
+    .content_scale = 1,
+};
+
+test "guest reports theme changes as an effect" {
     const Main = struct {
         fn render(frame: *ui.Frame) !void {
-            _ = try frame.bindState(u32, "guest.counter", 0);
+            frame.ui().theme = ui.Theme.light;
         }
     };
     var guest = try Guest.init(std.testing.allocator, &Main.render);
     defer guest.deinit();
-    const request: FrameProtocol.Request = .{
-        .frame = .{
-            .input = .{ .pos = .{ -1, -1 } },
-            .now_ms = 0,
-            .delta_ns = 0,
-            .logical_extent = .{ .width = 100, .height = 100 },
-            .physical_extent = .{ .width = 100, .height = 100 },
-            .content_scale = 1,
-        },
-        .state_scope = 1,
-    };
-    const response = try guest.execute(&request);
-    const counter_key = ui.StateBridge.key("guest.counter");
-    var found_counter = false;
-    for (response.dependencies) |dependency| {
-        if (dependency.domain == 0) {
-            if (dependency.key == counter_key) found_counter = true;
+
+    var request: Request = .{ .frame = test_frame, .theme = ui.Theme.dark };
+    const changed = try guest.execute(&request);
+    try std.testing.expect(std.meta.eql(ui.Theme.light, changed.effects.theme.?));
+
+    request.theme = ui.Theme.light;
+    const unchanged = try guest.execute(&request);
+    try std.testing.expect(unchanged.effects.theme == null);
+}
+
+test "a guest frame survives the wire in both directions" {
+    const Main = struct {
+        fn render(frame: *ui.Frame) !void {
+            try frame.e(ui.component.Text{ .content = "wire", .key = .str("text") });
         }
-    }
-    try std.testing.expect(found_counter);
+    };
+    var guest = try Guest.init(std.testing.allocator, &Main.render);
+    defer guest.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var request_bytes: std.ArrayList(u8) = .empty;
+    try wire.encode(allocator, &request_bytes, Request{ .frame = test_frame, .theme = ui.Theme.dark });
+    const request = try wire.decode(Request, allocator, request_bytes.items);
+    const response = try guest.execute(&request);
+
+    var response_bytes: std.ArrayList(u8) = .empty;
+    try wire.encode(allocator, &response_bytes, response);
+    const decoded = try wire.decode(Response, allocator, response_bytes.items);
+
+    try std.testing.expectEqual(response.packet.textInstances().len, decoded.packet.textInstances().len);
+    try std.testing.expect(decoded.packet.textInstances().len > 0);
+    try std.testing.expectEqual(response.packet.commands().len, decoded.packet.commands().len);
+    try std.testing.expectEqualSlices(u8, response.packet.glyphAtlas().?.curve, decoded.packet.glyphAtlas().?.curve);
 }

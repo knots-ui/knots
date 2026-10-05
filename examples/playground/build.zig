@@ -16,11 +16,7 @@ pub fn build(b: *std.Build) void {
     const exe = buildExecutable(b, target, optimize, gpu_backend, knots, "playground");
     b.installArtifact(exe);
     const dev_exe = buildExecutable(b, target, optimize, gpu_backend, knots, "playground-dev");
-    const hmr = Knots.HMR.init(b, dev_exe, .{
-        .knots = knots,
-        .roots = &.{b.path("src/demos")},
-        .watch_roots = &.{b.path("src")},
-    });
+    const hmr = Knots.HMR.init(b, dev_exe, .{ .knots = knots });
     hmr.attachNative(exe);
     const run = if (target.result.cpu.arch.isWasm()) blk: {
         exe.entry = .disabled;
@@ -37,8 +33,8 @@ pub fn build(b: *std.Build) void {
 
     b.step("run", "Run the standalone browser playground").dependOn(&run.step);
 
-    const dev = hmr.addDevRunner(.{});
-    b.step("dev", "Run the native playground with HMR").dependOn(&dev.step);
+    const dev_step = b.step("dev", "Run the native playground with HMR");
+    hmr.addDevRunner(dev_step, .{});
 }
 
 fn webServer(b: *std.Build, web_threads: bool, directory: []const u8) *std.Build.Step.Run {

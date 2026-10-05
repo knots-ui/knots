@@ -42,7 +42,8 @@ allocator: std.mem.Allocator,
 app: knots.App,
 debug_devtools: knots.debug.DevTools,
 modules: *Modules,
-active: u64 = std.hash.Wyhash.hash(0, "demos/buttons"),
+/// Index into `catalog.entries`.
+active: usize = 0,
 show_source: bool = true,
 source_cache: ?SourceCache = null,
 demo_state: DemoState = .{},
@@ -51,41 +52,6 @@ const Self = @This();
 
 pub fn of(app: *knots.App) *Self {
     return @alignCast(@fieldParentPtr("app", app));
-}
-
-const NativeDemo = struct {
-    id: []const u8,
-    source: []const u8,
-    render: *const fn (*knots.App, *ui.Frame) anyerror!void,
-};
-
-const native_demos = [_]NativeDemo{
-    .{ .id = "native/gpu_shader", .source = @embedFile("native_demos/gpu_shader.zig"), .render = @import("native_demos/gpu_shader.zig").render },
-    .{ .id = "native/async_dispatch", .source = @embedFile("native_demos/async_dispatch.zig"), .render = @import("native_demos/async_dispatch.zig").render },
-    .{ .id = "native/windows", .source = @embedFile("native_demos/windows.zig"), .render = @import("native_demos/windows.zig").render },
-};
-
-fn demoId(self: *const Self, index: u32) []const u8 {
-    if (index < self.modules.count()) return self.modules.id(index);
-    return native_demos[index - self.modules.count()].id;
-}
-
-fn catalogEntry(self: *const Self, index: u32) catalog.Entry {
-    return catalog.find(self.demoId(index)).?;
-}
-
-fn demoSource(self: *const Self, index: u32) []const u8 {
-    if (index < self.modules.count()) return self.modules.source(index);
-    return native_demos[index - self.modules.count()].source;
-}
-
-fn demoGeneration(self: *const Self, index: u32) u64 {
-    if (index < self.modules.count()) return self.modules.generation(index);
-    return 1;
-}
-
-fn demoSourcePath(self: *const Self, index: u32) []const u8 {
-    return self.demoId(index);
 }
 
 pub fn init(io: std.Io, allocator: std.mem.Allocator, environment_map: anytype) !Self {
@@ -119,8 +85,8 @@ fn wakeHmr(context: *anyopaque) void {
 
 fn frame(view: *knots.View, context: *ui.Frame) !void {
     const self: *Self = @alignCast(@fieldParentPtr("app", view.app));
-    const indices = try self.orderedIndices(context.arena());
-    const active_index = self.activeIndex(indices);
+    // Applies module reloads before anything draws.
+    try self.modules.update();
     const size = context.input().logical_extent;
     const root: Rect = .{ .key = .str("playground.root"), .style = &.{ .width = .fixed(@floatFromInt(size.width)), .height = .fixed(@floatFromInt(size.height)), .padding = .all(16), .direction = .column, .background = .bg } };
     _ = try root.open(context);
@@ -128,11 +94,14 @@ fn frame(view: *knots.View, context: *ui.Frame) !void {
     try context.e(Spacer{ .style = &.{ .height = .fixed(12) }, .key = .str("playground.header-space") });
     const body: Rect = .{ .key = .str("playground.body"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .row } };
     _ = try body.open(context);
-    try self.renderNav(context, indices, active_index);
+    try self.renderNav(context);
     try context.e(Spacer{ .style = &.{ .width = .fixed(12) }, .key = .str("playground.nav-space") });
-    if (active_index) |index| try self.renderActiveDemo(context, index) else try context.e(Text{ .key = .str("playground.waiting"), .content = "Waiting for UI modules..." });
+    inline for (catalog.entries, 0..) |entry, index| {
+        if (self.active == index) try self.renderDemo(context, entry);
+    }
     try body.close(context);
     try root.close(context);
+    try self.modules.renderOverlay(context);
     try self.debug_devtools.render(context, .{ .frame_delta_ns = context.input().delta_ns, .window_width = @floatFromInt(size.width), .window_height = @floatFromInt(size.height), .concurrency_in_flight = view.app.concurrencyInFlight(), .renderer = .{ .present_mode = view.renderer.config.present_mode, .supported_present_modes = view.renderer.supported_present_modes, .reconfigure_error = view.renderer.reconfigure_error } });
     if (self.debug_devtools.takePresentModeRequest()) |present_mode| {
         var config = view.renderer.config;
@@ -141,87 +110,59 @@ fn frame(view: *knots.View, context: *ui.Frame) !void {
     }
 }
 
-fn orderedIndices(self: *const Self, allocator: std.mem.Allocator) ![]u32 {
-    _ = try self.modules.list();
-    const indices = try allocator.alloc(u32, catalog.entries.len);
-    var count: usize = 0;
-    for (catalog.entries) |entry| {
-        var index: u32 = 0;
-        while (index < self.modules.count()) : (index += 1) {
-            if (std.mem.eql(u8, entry.id, self.modules.id(index))) {
-                indices[count] = index;
-                count += 1;
-            }
-        }
-        for (native_demos, 0..) |native, native_index| {
-            if (std.mem.eql(u8, entry.id, native.id)) {
-                indices[count] = self.modules.count() + @as(u32, @intCast(native_index));
-                count += 1;
-            }
-        }
-    }
-    return indices[0..count];
-}
-
-fn activeIndex(self: *Self, indices: []const u32) ?u32 {
-    for (indices) |index| if (std.hash.Wyhash.hash(0, self.demoId(index)) == self.active) return index;
-    if (indices.len == 0) return null;
-    self.active = std.hash.Wyhash.hash(0, self.demoId(indices[0]));
-    return indices[0];
-}
-
 fn renderHeader(context: *ui.Frame) !void {
     try context.e(.{ Rect{ .key = .str("playground.header"), .style = &.{ .width = .grow(), .height = .fixed(48), .padding = .xy(16, 8), .justify = .space_between, .@"align" = .center } }, .{Text{ .content = "knots playground", .style = &.{ .font_size = .lg }, .key = .str("playground.title"), .selectable = false }} });
 }
 
-fn renderNav(self: *Self, context: *ui.Frame, indices: []const u32, active_index: ?u32) !void {
+fn renderNav(self: *Self, context: *ui.Frame) !void {
     const nav: Rect = .{ .key = .str("playground.nav"), .style = &.{ .width = .fixed(220), .height = .grow(), .padding = .all(8), .direction = .column, .gap = 4, .overflow = .scroll_y } };
     _ = try nav.open(context);
-    for (indices) |index| {
-        const entry = self.catalogEntry(index);
-        const label = try std.fmt.allocPrint(context.arena(), "{s} {s}", .{ entry.icon, entry.name });
-        const active = active_index != null and active_index.? == index;
-        const response = try context.interact(Button{ .key = .str(self.demoId(index)), .label = label, .style = if (active) &nav_button else &nav_button_inactive });
-        if (response.clicked) self.active = std.hash.Wyhash.hash(0, self.demoId(index));
+    inline for (catalog.entries, 0..) |entry, index| {
+        const label = entry.icon ++ " " ++ entry.name;
+        const active = self.active == index;
+        const response = try context.interact(Button{ .key = .str(@typeName(entry.module)), .label = label, .style = if (active) &nav_button else &nav_button_inactive });
+        if (response.clicked) self.active = index;
     }
     try nav.close(context);
 }
 
-fn renderActiveDemo(self: *Self, context: *ui.Frame, index: u32) !void {
+fn renderDemo(self: *Self, context: *ui.Frame, comptime entry: catalog.Entry) !void {
     const root: Rect = .{ .key = .str("playground.demo"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .column, .gap = 10 } };
     _ = try root.open(context);
-    try self.renderDemoSummary(context, index);
+    try renderDemoSummary(context, entry);
     const body: Rect = .{ .key = .str("playground.demo-body"), .style = &.{ .width = .grow(), .height = .grow(), .direction = .row, .gap = 12 } };
     _ = try body.open(context);
-    if (index < self.modules.count()) {
+    const path = @typeName(entry.module);
+    if (comptime @hasDecl(entry.module, "render")) {
+        try entry.module.render(&self.app, context);
+        try self.renderSourcePane(context, path, entry.source, 1);
+    } else {
+        // Every other demo must be a module. If it is not, this is a
+        // compile error that tells why.
         const panel: Rect = .{ .key = .str("playground.demo-panel"), .style = &comptime card.with(.{ .width = .grow(), .height = .grow(), .padding = .all(16), .direction = .column, .overflow = .scroll }) };
         _ = try panel.open(context);
-        try self.modules.render(index, context);
+        try self.modules.render(entry.module, context);
         try panel.close(context);
-    } else {
-        try native_demos[index - self.modules.count()].render(&self.app, context);
+        try self.renderSourcePane(context, path, self.modules.source(entry.module), self.modules.generation(entry.module));
     }
-    try self.renderSourcePane(context, index);
     try body.close(context);
     try root.close(context);
 }
 
-fn renderDemoSummary(self: *Self, context: *ui.Frame, index: u32) !void {
-    const entry = self.catalogEntry(index);
-    const title = try std.fmt.allocPrint(context.arena(), "{s} {s}", .{ entry.icon, entry.name });
+fn renderDemoSummary(context: *ui.Frame, comptime entry: catalog.Entry) !void {
+    const title = entry.icon ++ " " ++ entry.name;
     try context.e(.{ Rect{ .key = .str("playground.summary"), .style = &comptime card.with(.{ .width = .grow(), .height = .fixed(64), .padding = .xy(14, 10), .direction = .row, .@"align" = .center, .justify = .space_between }) }, .{ Rect{ .key = .str("playground.summary-copy"), .style = &.{ .width = .grow(), .direction = .column, .gap = 2 } }, .{ Text{ .content = title, .style = &.{ .font_size = .lg }, .key = .str("playground.summary-title") }, Text{ .content = entry.description, .style = &.{ .font_size = .xs, .foreground = .dimmed, .wrap = true, .width = .grow() }, .key = .str("playground.summary-description") } } } });
 }
 
-fn renderSourcePane(self: *Self, context: *ui.Frame, index: u32) !void {
-    const identity = std.hash.Wyhash.hash(0, self.demoId(index));
-    const generation = self.demoGeneration(index);
+fn renderSourcePane(self: *Self, context: *ui.Frame, path: []const u8, source_text: []const u8, generation: u64) !void {
+    const identity = std.hash.Wyhash.hash(0, path);
     if (self.source_cache) |cache| if (cache.identity != identity or cache.generation != generation) self.clearSourceCache();
     if (self.show_source and self.source_cache == null) {
-        const source = try self.allocator.dupeSentinel(u8, self.demoSource(index), 0);
+        const source = try self.allocator.dupeSentinel(u8, source_text, 0);
         errdefer self.allocator.free(source);
         self.source_cache = .{ .identity = identity, .generation = generation, .source = source, .highlighted = try code_viewer.highlight(self.allocator, source) };
     }
-    if (try code_viewer.render(context, self.demoSourcePath(index), if (self.source_cache) |cache| cache.highlighted else null, self.show_source)) {
+    if (try code_viewer.render(context, path, if (self.source_cache) |cache| cache.highlighted else null, self.show_source)) {
         self.show_source = !self.show_source;
         context.requestRedraw();
     }

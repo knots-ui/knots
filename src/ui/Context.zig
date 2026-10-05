@@ -9,7 +9,6 @@ const style = @import("style");
 
 const UI = @import("UI.zig");
 const Frame = @import("Frame.zig");
-const StateBridge = @import("StateBridge.zig");
 const Accessibility = @import("Accessibility.zig");
 const scrollbar = @import("scrollbar.zig");
 const canvas_tessellator = @import("canvas_tessellator.zig");
@@ -31,8 +30,6 @@ const HitRecord = UI.HitRecord;
 
 const press_drag_threshold_sq: f64 = 9.0;
 
-const theme_state_key = StateBridge.key("knots.ui.theme");
-
 pub const Config = struct {
     ui: UI.Config = .{},
     arena_reset_mode: std.heap.ArenaAllocator.ResetMode = .retain_capacity,
@@ -47,7 +44,6 @@ ui: UI,
 draw_list: render.DrawList,
 packet_commands: std.ArrayList(render.DrawList.Command),
 overlay_commands: std.ArrayList(render.DrawList.Command),
-state_bridge: StateBridge,
 cfg: Config,
 frame_input: input_types.FrameInput,
 frame_state: ?Frame.State,
@@ -59,8 +55,6 @@ region_identities: [Frame.modules_max]u64 = @splat(0),
 accessibility_pending: std.ArrayList(Accessibility.ActionRequest) = .empty,
 accessibility_frame: std.ArrayList(Accessibility.ActionRequest) = .empty,
 semantic_revision: u64 = 0,
-/// While unchanged, widget state already matches the bridge, so import is skipped.
-bridge_synced_mutation: ?u64 = null,
 semantic_digest: u64 = 0,
 
 pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
@@ -75,7 +69,6 @@ pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
         .draw_list = .init(allocator),
         .packet_commands = .empty,
         .overlay_commands = .empty,
-        .state_bridge = try .init(allocator),
         .cfg = cfg,
         .frame_input = undefined,
         .frame_state = null,
@@ -93,7 +86,6 @@ pub fn deinit(self: *Context) void {
     self.accessibility_frame.deinit(self.allocator);
     self.packet_commands.deinit(self.allocator);
     self.overlay_commands.deinit(self.allocator);
-    self.state_bridge.deinit();
     self.draw_list.deinit();
     self.ui.deinit();
     self.frame_arena.deinit();
@@ -114,13 +106,6 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
     self.packet_commands.clearRetainingCapacity();
     self.overlay_commands.clearRetainingCapacity();
     self.frame_input = input;
-    if (try self.state_bridge.read(@import("style").Theme, theme_state_key)) |theme| {
-        self.ui.theme = theme;
-    } else {
-        try self.state_bridge.write(@import("style").Theme, theme_state_key, self.ui.theme);
-    }
-    if (self.bridge_synced_mutation != self.state_bridge.mutation) try self.ui.state.importBridge(&self.state_bridge);
-    self.bridge_synced_mutation = null;
     try resolveWindow(&self.ui, input.input, input.now_ms, input.content_scale);
     const previous_nodes = self.ui.accessibility_nodes.items;
     var focused_action: ?@import("layout").Element.Id = null;
@@ -146,7 +131,6 @@ pub fn beginFrame(self: *Context, input: input_types.FrameInput) !Frame {
         self.frame_arena.queryCapacity(),
         &self.frame_input,
         self.generation,
-        &self.state_bridge,
     );
 
     return .{
@@ -189,21 +173,14 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
         self.semantic_revision += 1;
         self.semantic_digest = digest;
     }
-    try frame.commitState();
-    try self.state_bridge.write(@import("style").Theme, theme_state_key, self.ui.theme);
     self.draw_list.reset();
     try tessellate(&self.ui, self.frame_arena.allocator(), &self.draw_list);
     const hover_changed = resolveHit(&self.ui);
-    try self.ui.state.exportBridge(&self.state_bridge);
-    self.bridge_synced_mutation = self.state_bridge.mutation;
     self.frame_state.?.active = false;
     const atlas = self.glyphAtlas();
     const packet = try self.draw_list.buildPacketRange(&self.packet_commands, atlas, 0, Frame.host_overlay_layer_min);
     const overlay_packet = try self.draw_list.buildPacketRange(&self.overlay_commands, atlas, Frame.host_overlay_layer_min, render.DrawList.MAX_LAYERS);
     const contribution_calls = self.frame_state.?.contribution_calls.items;
-    var contribution_identities: [Frame.modules_max]u64 = undefined;
-    for (contribution_calls, 0..) |entry, index| contribution_identities[index] = entry.identity;
-    try self.state_bridge.retainSubscribers(contribution_identities[0..contribution_calls.len]);
     var rectangles: [Frame.modules_max]@import("math").Rect = undefined;
     for (contribution_calls, 0..) |entry, index| {
         if (self.region_identities[index] != entry.identity) self.region_router.replaced(index);
@@ -225,11 +202,12 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
         if (rectangles[index].isEmpty()) continue;
         const box = self.ui.layout_ctx.pool.get(entry.slot).box;
         const request = self.region_router.route(index, box, &self.frame_input);
-        const state = try self.state_bridge.values(self.frame_arena.allocator());
-        const child = try entry.render(entry.context, &request, state, box, self.frame_arena.allocator());
-        try self.applyState(child.state);
-        try self.state_bridge.replaceDependencies(entry.subscriber, child.dependencies);
-        try self.state_bridge.clearDirty(entry.subscriber);
+        const child = try entry.render(entry.context, &request, &self.ui.theme, box, self.frame_arena.allocator());
+        // A theme from a module applies to the whole window from the next frame.
+        if (child.theme) |theme| {
+            self.ui.theme = theme;
+            self.frame_state.?.effects.redraw = true;
+        }
         try contributions.append(self.frame_arena.allocator(), .{
             .identity = entry.identity,
             .packet = try endFrameClip(self.frame_arena.allocator(), &child.packet, self.ui.slot_clips.items[entry.slot], self.ui.clip_nodes.items),
@@ -263,7 +241,6 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
             self.ui.anim_active,
         .close = self.frame_state.?.effects.close,
         .clipboard_write = self.frame_state.?.effects.clipboard_write,
-        .state = &.{},
     };
 }
 
@@ -310,39 +287,6 @@ fn hashOptional(digest: *std.hash.Wyhash, value: anytype) void {
     const present = value != null;
     digest.update(std.mem.asBytes(&present));
     if (value) |item| digest.update(std.mem.asBytes(&item));
-}
-
-pub fn loadState(self: *Context, values: []const StateBridge.Value) !void {
-    std.debug.assert(!self.frameIsActive());
-    try self.state_bridge.load(values);
-}
-
-pub fn setStateScope(self: *Context, scope: u64) void {
-    std.debug.assert(!self.frameIsActive());
-    self.state_bridge.setScope(scope);
-}
-
-pub fn stateValues(self: *Context) ![]StateBridge.Value {
-    std.debug.assert(!self.frameIsActive());
-    return self.state_bridge.values(self.frame_arena.allocator());
-}
-
-pub fn beginDependencyCollection(self: *Context) void {
-    self.state_bridge.beginDependencyCollection();
-}
-
-pub fn cancelDependencyCollection(self: *Context) void {
-    self.state_bridge.cancelDependencyCollection();
-}
-
-pub fn endDependencyCollection(self: *Context) []const StateBridge.Dependency {
-    std.debug.assert(self.frameIsActive());
-    return self.state_bridge.endDependencyCollection();
-}
-
-pub fn applyState(self: *Context, values: []const StateBridge.Value) !void {
-    try self.state_bridge.load(values);
-    if (try self.state_bridge.read(@import("style").Theme, theme_state_key)) |theme| self.ui.theme = theme;
 }
 
 // Child geometry is already placed. Extend its clip ancestry with the parent's
@@ -1659,7 +1603,7 @@ test "embedded regions run after layout and reject repeated instances" {
         calls: u32 = 0,
         pointer_routed: bool = false,
         child: Context,
-        fn draw(pointer: *anyopaque, input: *const input_types.FrameInput, _: []const StateBridge.Value, rectangle: @import("math").Rect, _: std.mem.Allocator) !Frame.ModuleOutput {
+        fn draw(pointer: *anyopaque, input: *const input_types.FrameInput, _: *const @import("style").Theme, rectangle: @import("math").Rect, _: std.mem.Allocator) !Frame.ModuleOutput {
             const self: *@This() = @ptrCast(@alignCast(pointer));
             std.debug.assert(rectangle.w() == 120);
             std.debug.assert(input.logical_extent.height == 80);
@@ -1681,7 +1625,6 @@ test "embedded regions run after layout and reject repeated instances" {
                 .redraw = output.redraw,
                 .close = output.close,
                 .clipboard_write = output.clipboard_write,
-                .state = output.state,
             };
         }
     };
@@ -1719,32 +1662,6 @@ test "embedded regions run after layout and reject repeated instances" {
     try std.testing.expect(output.host_overlay != null);
 }
 
-test "typed frame state is owned by the context across frames" {
-    var context = try Context.init(std.testing.allocator, .{});
-    defer context.deinit();
-    const input: input_types.FrameInput = .{
-        .input = .{ .pos = .{ -1, -1 } },
-        .now_ms = 0,
-        .delta_ns = 0,
-        .logical_extent = .{ .width = 100, .height = 100 },
-        .physical_extent = .{ .width = 100, .height = 100 },
-        .content_scale = 1,
-    };
-
-    var first = try context.beginFrame(input);
-    defer first.deinit();
-    const first_value = try first.bindState(u32, "test.counter", 1);
-    first_value.* = 9;
-    _ = try context.endFrame(&first);
-
-    var second = try context.beginFrame(input);
-    defer second.deinit();
-    const second_value = try second.bindState(u32, "test.counter", 1);
-    try std.testing.expectEqual(@as(u32, 9), second_value.*);
-    try std.testing.expect(second_value == try second.bindState(u32, "test.counter", 1));
-    _ = try context.endFrame(&second);
-}
-
 test "widget state snapshot survives executor replacement" {
     const input: input_types.FrameInput = .{
         .input = .{ .pos = .{ -1, -1 } },
@@ -1763,11 +1680,13 @@ test "widget state snapshot survives executor replacement" {
     const scroll = try source_frame.ui().state.getOrCreate(.scroll, source_frame.ui().allocator, widget_id);
     scroll.offset = .{ 12, 34 };
     _ = try source.endFrame(&source_frame);
-    const snapshot = try source.stateValues();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const saved = try source.ui.state.save(arena.allocator());
 
     var replacement = try Context.init(std.testing.allocator, .{});
     defer replacement.deinit();
-    try replacement.loadState(snapshot);
+    try replacement.ui.state.load(&saved);
     var replacement_frame = try replacement.beginFrame(input);
     defer replacement_frame.deinit();
     const restored = replacement_frame.ui().state.get(.scroll, widget_id).?;

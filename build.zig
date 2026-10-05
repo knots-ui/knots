@@ -52,7 +52,11 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     if (b.option(bool, "module_guest", "Build portable UI module dependencies.") orelse false) {
-        buildModuleDependencies(b, target, optimize);
+        const modules = portableModules(b, target, optimize, true);
+        if (!target.result.cpu.arch.isWasm()) {
+            const tests = b.addTest(.{ .root_module = modules.hmr });
+            b.step("test", "Test the portable HMR boundary").dependOn(&b.addRunArtifact(tests).step);
+        }
         return;
     }
     const browser_wasm = target.result.cpu.arch.isWasm();
@@ -265,12 +269,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/math/root.zig"),
     });
 
-    const signal_mod = b.addModule("signal", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/signal/root.zig"),
-    });
-
     const text_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -337,8 +335,6 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    var state_bridge_config = b.addOptions();
-    state_bridge_config.addOption(bool, "host_graph_enabled", true);
     const ui_mod = b.addModule("ui", .{
         .target = target,
         .optimize = optimize,
@@ -351,7 +347,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "render_types", .module = render_types_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
-            .{ .name = "signal", .module = signal_mod },
         },
     });
     const native_accessibility_mod = if (accesskit_dep) |accesskit| blk: {
@@ -368,16 +363,20 @@ pub fn build(b: *std.Build) void {
         window_mod.addImport("native_accessibility", native_accessibility);
         break :blk native_accessibility;
     } else null;
-    ui_mod.addOptions("state_bridge_config", state_bridge_config);
 
     const portable = b.createModule(.{ .root_source_file = b.path("src/portable.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
     const hmr_mod = b.addModule("hmr", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/hmr/root.zig"),
-        .imports = &.{ .{ .name = "ui", .module = ui_mod }, .{ .name = "input", .module = input_mod }, .{ .name = "render", .module = render_mod }, .{ .name = "math", .module = math_mod }, .{ .name = "knots", .module = portable } },
+        .imports = &.{
+            .{ .name = "ui", .module = ui_mod },
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "math", .module = math_mod },
+            .{ .name = "knots", .module = portable },
+        },
     });
-    hmr_mod.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
 
     var debug_opts = b.addOptions();
     debug_opts.addOption([]const u8, "version", build_zon.version);
@@ -410,7 +409,6 @@ pub fn build(b: *std.Build) void {
     const text_tests = b.addTest(.{ .root_module = text_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
     const input_tests = b.addTest(.{ .root_module = input_mod });
-    const signal_tests = b.addTest(.{ .root_module = signal_mod });
     const public_render_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
@@ -452,9 +450,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(text_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
     test_step.dependOn(&b.addRunArtifact(input_tests).step);
-    test_step.dependOn(&b.addRunArtifact(signal_tests).step);
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
+    if (!browser_wasm) {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        test_step.dependOn(&HMR.addRuntimeTest(b, target, portableModules(b, wasm_target, .Debug, false)).step);
+    }
 
     if (!browser_wasm) {
         const snapshot_exe = b.addExecutable(.{
@@ -608,18 +609,15 @@ fn buildTool(compile: *std.Build.Step.Compile) void {
 }
 
 /// Portable modules have no window, GPU, JavaScript, or operating-system imports.
-fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const math = b.addModule("math", .{
+/// With `public`, they are exported for HMR guest builds.
+fn portableModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool) HMR.Guest {
+    const create = if (public) &std.Build.addModule else &privateModule;
+    const math = create(b, "math", .{
         .root_source_file = b.path("src/math/root.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const signal = b.addModule("signal", .{
-        .root_source_file = b.path("src/signal/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const input = b.addModule("input", .{
+    const input = create(b, "input", .{
         .root_source_file = b.path("src/input/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -652,7 +650,7 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
         .optimize = optimize,
         .imports = &.{.{ .name = "TrueType", .module = truetype.module("TrueType") }},
     });
-    const render = b.addModule("render", .{
+    const render = create(b, "render", .{
         .root_source_file = b.path("src/render/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -665,9 +663,7 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
     shader_config.addOption(bool, "has_spirv_shaders", false);
     render.addOptions("shader_config", shader_config);
     addRenderShaderSources(b, render);
-    var state_bridge_config = b.addOptions();
-    state_bridge_config.addOption(bool, "host_graph_enabled", false);
-    const ui = b.addModule("ui", .{
+    const ui = create(b, "ui", .{
         .root_source_file = b.path("src/ui/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -679,17 +675,15 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
             .{ .name = "style", .module = style },
             .{ .name = "render", .module = render },
             .{ .name = "text", .module = text },
-            .{ .name = "signal", .module = signal },
         },
     });
-    ui.addOptions("state_bridge_config", state_bridge_config);
-    const portable = b.addModule("knots", .{
+    const portable = create(b, "knots", .{
         .root_source_file = b.path("src/portable.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "ui", .module = ui }},
     });
-    const hmr = b.addModule("hmr", .{
+    const hmr = create(b, "hmr", .{
         .root_source_file = b.path("src/hmr/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -701,9 +695,9 @@ fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, opti
         },
     });
     hmr.addImport("knots", portable);
-    hmr.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
-    if (!target.result.cpu.arch.isWasm()) {
-        const tests = b.addTest(.{ .root_module = hmr });
-        b.step("test", "Test the portable HMR boundary").dependOn(&b.addRunArtifact(tests).step);
-    }
+    return .{ .knots = portable, .ui = ui, .hmr = hmr };
+}
+
+fn privateModule(b: *std.Build, _: []const u8, options: std.Build.Module.CreateOptions) *std.Build.Module {
+    return b.createModule(options);
 }

@@ -56,11 +56,18 @@ fn check(failure: ?*c.wasmtime_error_t, trap: ?*c.wasm_trap_t, diagnostics: ?*Di
 pub const Engine = struct {
     handle: *c.wasm_engine_t,
 
-    pub const Options = struct { consume_fuel: bool };
+    pub const Options = struct {
+        consume_fuel: bool,
+        compiler: enum { cranelift, winch } = .cranelift,
+    };
 
     pub fn init(options: Options) Error!Engine {
         const config = c.wasm_config_new() orelse return error.OutOfMemory;
         c.wasmtime_config_consume_fuel_set(config, options.consume_fuel);
+        c.wasmtime_config_strategy_set(config, switch (options.compiler) {
+            .cranelift => c.WASMTIME_STRATEGY_CRANELIFT,
+            .winch => c.WASMTIME_STRATEGY_WINCH,
+        });
         // Engine creation takes ownership of config, including on failure.
         const handle = c.wasm_engine_new_with_config(config) orelse return error.OutOfMemory;
         assert(@intFromPtr(handle) != 0);

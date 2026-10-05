@@ -3,10 +3,6 @@
     .version = "0.3.0",
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
-        .pack = .{
-            .url = "git+https://codeberg.org/shahwali/pack.git#5a97dd502b525bec9efc7a9add1847b3ebfb164c",
-            .hash = "pack-0.0.2-gq153kgtAAA6u9mi4oXfGC9kFf3pw3s_ttxRWjHW0TaM",
-        },
         .celer = .{
             .url = "git+https://codeberg.org/shahwali/celer.git#709c6b43eb3951b5b52bd0063e7f53d81dcad898",
             .hash = "celer-0.0.2-qPUU5MNRAADkwaZT2ybwnvJnKON3FsGHistDLq7I4VDh",

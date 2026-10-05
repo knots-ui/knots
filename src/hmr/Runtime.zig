@@ -1,198 +1,172 @@
+//! Runs the application's UI modules. If `reloadable` is false, the modules
+//! are compiled into the host. Otherwise they load from the dev server's
+//! manifest, and each change replaces them and keeps their state.
+//!
+//! The host refers to a module by its file: `render(@import("demo.zig"), frame)`.
+//! The build found the modules (see graph.zig), so a file that cannot be a
+//! module is a compile error that tells why.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const ui = @import("ui");
 const math = @import("math");
-const Protocol = @import("hmr").Protocol;
-const reloadable = @import("runtime_options").reloadable;
+const render_api = @import("render");
+const hmr = @import("hmr");
 const FrameInput = @import("input").FrameInput;
+const runtime_options = @import("runtime_options");
+
+const reloadable = runtime_options.reloadable;
 const registry = if (reloadable) struct {} else @import("native_registry");
 const browser_host = builtin.target.cpu.arch.isWasm();
 const Instance = if (!reloadable) void else if (browser_host) @import("Browser.zig") else @import("Wasmtime.zig");
-const support = @import("hmr");
-const Status = @import("hmr").Status;
-const Log = @import("Log.zig");
-const HTTPClient = @import("HTTPClient.zig");
+const log = std.log.scoped(.hmr);
 
-const server_url_environment_name = "KNOTS_HMR_URL";
-const manifest_environment_name = "KNOTS_HMR_MANIFEST";
-const status_environment_name = "KNOTS_HMR_STATUS";
+const directory_environment_name = "KNOTS_HMR_DIR";
+const events_environment_name = "KNOTS_HMR_EVENTS";
 
-const Native = if (reloadable)
-    void
-else
-    *const fn (*ui.Frame) anyerror!void;
+pub const Wake = struct { context: *anyopaque, notify: *const fn (*anyopaque) void };
 
-const Failure = struct {
-    operation: []const u8,
-    error_name: []const u8,
-};
-
-const HmrErrorKind = enum { compile, update };
+const Failure = struct { operation: []const u8, error_name: []const u8 };
 
 const Module = struct {
     id: []const u8,
     source: []const u8,
     hash: []const u8,
-    instance: if (reloadable) ?Instance else void = if (reloadable) null else {},
     generation: u64,
-    native: Native,
-    resources: support.Panels.Resources,
+    instance: if (reloadable) ?Instance else void = if (reloadable) null else {},
+    cleanup: ?*const fn () void = null,
+    atlas_id: u32 = 0,
     failure: ?Failure = null,
     error_context: ?*ui.Context = null,
-    cleanup: ?*const fn () void = null,
+    carried_state: ?[]u8 = null,
 };
 
 allocator: std.mem.Allocator,
 io: std.Io,
-server_url: []const u8,
-manifest_path: []const u8,
-status_path: []const u8,
+directory: []const u8 = "",
+events: ?std.Io.net.IpAddress = null,
 modules: std.ArrayList(Module) = .empty,
 arena: std.heap.ArenaAllocator,
-manifest_hash: u64 = 0,
-manifest_loaded: bool = false,
-status_hash: u64 = 0,
-status_loaded: bool = false,
-hmr_error: ?[]u8 = null,
-hmr_error_kind: HmrErrorKind = .compile,
-error_overlay_active: bool = false,
-error_overlay_generation: u64 = 0,
+manifest_hash: ?u64 = null,
+build_error: ?[]u8 = null,
 next_generation: u64 = 1,
 watch_group: std.Io.Group = .init,
 watching: bool = false,
-manifest_dirty: std.atomic.Value(bool) = .init(false),
+wake: ?Wake = null,
+compilations: std.ArrayList(*Compilation) = .empty,
+dirty: std.atomic.Value(bool) = .init(true),
 browser_revision: u32 = 0,
 
 const Runtime = @This();
 
-pub const Wake = HTTPClient.Wake;
+/// A native module build that compiles on another thread, so a reload does not
+/// stop the frames of the running modules. The next frame applies it.
+const Compilation = if (reloadable and !browser_host) struct {
+    entry: hmr.protocol.Entry,
+    future: std.Io.Future(anyerror!Instance),
+    done: std.atomic.Value(bool) = .init(false),
+} else void;
 
-/// Create the runtime using the server-provided local HTTP endpoint.
 pub fn create(allocator: std.mem.Allocator, io: std.Io, environment_map: anytype) !*Runtime {
     const self = try allocator.create(Runtime);
-    self.* = .{ .allocator = allocator, .io = io, .arena = .init(allocator), .server_url = "", .manifest_path = "", .status_path = "" };
+    self.* = .{ .allocator = allocator, .io = io, .arena = .init(allocator) };
     errdefer self.destroy();
 
     if (reloadable and !browser_host) {
-        if (environment_map.get(server_url_environment_name)) |value| {
-            self.server_url = try normalizeServerUrl(self.allocator, value);
-        } else if (@import("builtin").is_test) {
-            self.manifest_path = try manifestPath(self.allocator, environment_map);
-            self.status_path = try statusPath(self.allocator, environment_map);
-        } else {
-            return error.HmrServerUrlMissing;
-        }
+        const directory = environment_map.get(directory_environment_name) orelse return error.HmrDirectoryMissing;
+        self.directory = try allocator.dupe(u8, directory);
+        if (environment_map.get(events_environment_name)) |address|
+            self.events = try .parseLiteral(address);
     }
 
     if (!reloadable) {
-        for (registry.entries, 0..) |entry, index| {
-            const name = try allocator.dupe(u8, entry.id);
-            errdefer allocator.free(name);
-            const source_text = try allocator.dupe(u8, entry.source);
-            errdefer allocator.free(source_text);
-            const hash = try allocator.dupe(u8, "native");
-            errdefer allocator.free(hash);
-            try self.modules.append(allocator, .{ .id = name, .source = source_text, .hash = hash, .instance = {}, .generation = index + 1, .native = entry.main, .cleanup = entry.cleanup, .resources = .init() });
+        for (registry.entries) |entry| {
+            try self.modules.append(allocator, .{
+                .id = entry.id,
+                .source = entry.source,
+                .hash = "",
+                .generation = self.nextGeneration(),
+            });
         }
-        self.next_generation = registry.entries.len + 1;
     }
+
     return self;
-}
-
-fn manifestPath(allocator: std.mem.Allocator, environment_map: anytype) ![]const u8 {
-    std.debug.assert(@intFromPtr(environment_map) != 0);
-    const value = environment_map.get(manifest_environment_name) orelse return error.HmrManifestMissing;
-    std.debug.assert(value.len > 0);
-    const result = try allocator.dupe(u8, value);
-    std.debug.assert(result.len == value.len);
-    return result;
-}
-
-fn statusPath(allocator: std.mem.Allocator, environment_map: anytype) ![]const u8 {
-    std.debug.assert(@intFromPtr(environment_map) != 0);
-    const value = environment_map.get(status_environment_name) orelse return error.HmrStatusMissing;
-    std.debug.assert(value.len > 0);
-    const result = try allocator.dupe(u8, value);
-    std.debug.assert(result.len == value.len);
-    return result;
-}
-
-fn normalizeServerUrl(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
-    std.debug.assert(value.len > 0);
-    if (value.len > 256) return error.HmrServerUrlTooLong;
-    if (!std.mem.startsWith(u8, value, "http://127.0.0.1:")) return error.InvalidHmrServerUrl;
-    const normalized = std.mem.trimEnd(u8, value, "/");
-    if (normalized.len == 0) return error.InvalidHmrServerUrl;
-    const port_text = normalized["http://127.0.0.1:".len..];
-    const port = std.fmt.parseInt(u16, port_text, 10) catch return error.InvalidHmrServerUrl;
-    if (port == 0) return error.InvalidHmrServerUrl;
-    return allocator.dupe(u8, normalized);
 }
 
 pub fn destroy(self: *Runtime) void {
     self.stopWatching();
-    for (self.modules.items) |*module| {
+    if (comptime reloadable and !browser_host) {
+        while (self.compilations.items.len > 0)
+            self.cancelCompilation(0);
+    }
+    self.compilations.deinit(self.allocator);
+
+    for (self.modules.items) |*module|
         self.destroyModule(module);
-    }
+
     self.modules.deinit(self.allocator);
-    if (reloadable and !browser_host) {
-        if (self.server_url.len > 0) {
-            self.allocator.free(self.server_url);
-        }
-        if (self.manifest_path.len > 0) {
-            self.allocator.free(self.manifest_path);
-        }
-        if (self.status_path.len > 0) {
-            self.allocator.free(self.status_path);
-        }
-    } else {
-        std.debug.assert(self.server_url.len == 0);
-        std.debug.assert(self.manifest_path.len == 0);
-        std.debug.assert(self.status_path.len == 0);
-        if (!reloadable) std.debug.assert(self.hmr_error == null);
-    }
-    if (self.hmr_error) |message| self.allocator.free(message);
+    self.allocator.free(self.directory);
+    if (self.build_error) |message|
+        self.allocator.free(message);
+
     self.arena.deinit();
     self.allocator.destroy(self);
 }
 
-/// Wake the host when the reloadable manifest changes. The callback must be
-/// safe to invoke from the runtime's I/O task.
+/// Wakes the host whenever modules change. `wake` may be called from another task.
 pub fn startWatching(self: *Runtime, wake: Wake) !void {
-    std.debug.assert(@intFromPtr(wake.context) > 0);
-    std.debug.assert(@intFromPtr(wake.notify) > 0);
-    if (comptime !reloadable) return;
-    if (self.watching) return error.WatchingAlreadyStarted;
+    if (comptime !reloadable)
+        return;
 
-    self.watching = true;
-    if (comptime browser_host) {
-        self.browser_revision = 0;
-        wake.notify(wake.context);
-        return;
-    }
-    self.manifest_dirty.store(true, .release);
+    if (self.watching)
+        return error.WatchingAlreadyStarted;
+
     wake.notify(wake.context);
-    if (self.server_url.len == 0) {
-        std.debug.assert(builtin.is_test);
+
+    // The browser host requests a frame when the manifest changes.
+    if (comptime browser_host)
         return;
-    }
-    self.watch_group.concurrent(self.io, HTTPClient.watch, .{ self.io, self.allocator, self.server_url, &self.manifest_dirty, wake }) catch |err| {
-        self.watching = false;
-        return err;
-    };
+
+    const events = self.events orelse return error.HmrEventsMissing;
+    self.wake = wake;
+    try self.watch_group.concurrent(self.io, awaitPublishes, .{ self.io, events, &self.dirty, wake });
+    self.watching = true;
 }
 
 fn stopWatching(self: *Runtime) void {
-    if (!self.watching) return;
-    if (comptime browser_host) {
-        self.watching = false;
+    if (!self.watching)
         return;
-    }
-    if (self.server_url.len > 0) {
-        self.watch_group.cancel(self.io);
-        self.watch_group.await(self.io) catch {};
-    }
+
+    self.watch_group.cancel(self.io);
     self.watching = false;
+}
+
+/// The server sends one byte after each publish, so a change loads at once.
+fn awaitPublishes(io: std.Io, address: std.Io.net.IpAddress, dirty: *std.atomic.Value(bool), wake: Wake) std.Io.Cancelable!void {
+    const stream = address.connect(io, .{ .mode = .stream }) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => return log.err("event=events_connect_failed error={t} action=no_reloads", .{err}),
+    };
+    defer stream.close(io);
+
+    var reader = stream.reader(io, &.{});
+    while (true) {
+        // A publish can come before the connection.
+        dirty.store(true, .release);
+        wake.notify(wake.context);
+        var byte: [1]u8 = undefined;
+        reader.interface.readSliceAll(&byte) catch |err| {
+            if (reader.err) |cause| {
+                if (cause == error.Canceled)
+                    return error.Canceled;
+            }
+
+            if (err == error.EndOfStream)
+                return;
+
+            return log.err("event=events_read_failed error={t}", .{reader.err orelse err});
+        };
+    }
 }
 
 fn destroyModule(self: *Runtime, module: *Module) void {
@@ -202,63 +176,493 @@ fn destroyModule(self: *Runtime, module: *Module) void {
         self.allocator.destroy(context);
     }
 
-    self.allocator.free(module.id);
-    self.allocator.free(module.source);
-    self.allocator.free(module.hash);
-    if (!reloadable) {
-        if (module.cleanup) |cleanup| cleanup();
+    if (module.carried_state) |bytes|
+        self.allocator.free(bytes);
+
+    if (reloadable) {
+        self.allocator.free(module.id);
+        self.allocator.free(module.source);
+        self.allocator.free(module.hash);
+    } else if (module.cleanup) |cleanup| {
+        cleanup();
     }
-    module.resources.deinit(self.allocator);
 }
 
 fn destroyInstance(module: *Module) void {
-    if (comptime reloadable) {
-        if (module.instance) |*instance| {
-            instance.deinit();
-            module.instance = null;
+    if (comptime !reloadable)
+        return;
+
+    if (module.instance) |*instance|
+        instance.deinit();
+
+    module.instance = null;
+}
+
+/// Applies published changes. Call once per frame before `render`, so
+/// modules do not change during a frame.
+pub fn update(self: *Runtime) !void {
+    if (comptime !reloadable)
+        return;
+
+    _ = self.arena.reset(.retain_capacity);
+    self.applyManifest() catch |err|
+        log.warn("event=update_failed error={t} action=keep_current_modules", .{err});
+
+    if (comptime !browser_host)
+        try self.finishCompilations();
+}
+
+fn isModule(comptime File: type) bool {
+    comptime {
+        for (runtime_options.module_ids) |module_id| {
+            if (std.mem.eql(u8, module_id, @typeName(File)))
+                return true;
         }
+        return false;
     }
 }
 
-pub const Descriptor = struct { id: []const u8, generation: u64 };
+fn requireModule(comptime File: type) void {
+    if (isModule(File))
+        return;
 
-/// Discover the available UI modules. Descriptors are borrowed until the next
-/// call; refreshing the catalog never changes a module during its frame call.
-pub fn list(self: *Runtime) ![]const Descriptor {
-    try self.update();
-    std.debug.assert(self.modules.items.len <= Protocol.modules_max);
-    std.debug.assert(self.next_generation > 0);
-    const descriptors = try self.arena.allocator().alloc(Descriptor, self.modules.items.len);
-    for (self.modules.items, descriptors) |module, *descriptor| {
-        descriptor.* = .{ .id = module.id, .generation = module.generation };
+    const name = @typeName(File);
+    for (runtime_options.rejected_ids, runtime_options.rejected_reasons) |rejected_id, reason| {
+        if (std.mem.eql(u8, rejected_id, name))
+            @compileError(std.fmt.comptimePrint("{s} cannot be an HMR module: it {s}", .{ name, reason }));
     }
-    return descriptors;
+
+    @compileError(std.fmt.comptimePrint(
+        "{s} is not an HMR module: it must declare `pub fn main(frame: *knots.Frame) !void` and be reachable from the executable",
+        .{name},
+    ));
 }
 
-pub fn count(self: *const Runtime) u32 {
-    return @intCast(self.modules.items.len);
+fn lookup(self: *const Runtime, comptime File: type) ?usize {
+    comptime requireModule(File);
+    return self.find(@typeName(File));
 }
 
-pub fn id(self: *const Runtime, index: u32) []const u8 {
-    return self.modules.items[index].id;
-}
-
-pub fn source(self: *const Runtime, index: u32) []const u8 {
+pub fn source(self: *const Runtime, comptime File: type) []const u8 {
+    const index = self.lookup(File) orelse return "";
     return self.modules.items[index].source;
 }
 
-pub fn generation(self: *const Runtime, index: u32) u64 {
+pub fn generation(self: *const Runtime, comptime File: type) u64 {
+    const index = self.lookup(File) orelse return 0;
     return self.modules.items[index].generation;
 }
 
-fn renderErrorOverlay(self: *Runtime, frame: *ui.Frame) !void {
-    if (comptime !reloadable) return;
-    const frame_generation = frame.frameGeneration();
-    if (self.error_overlay_generation == frame_generation) return;
-    self.error_overlay_generation = frame_generation;
-    self.error_overlay_active = false;
-    const message = self.hmr_error orelse return;
-    self.error_overlay_active = true;
+fn applyManifest(self: *Runtime) !void {
+    const bytes = try self.readManifest() orelse return;
+    try self.apply(bytes);
+}
+
+fn readManifest(self: *Runtime) !?[]const u8 {
+    if (comptime browser_host)
+        return self.readBrowserManifest();
+
+    return self.readManifestFile();
+}
+
+fn readBrowserManifest(self: *Runtime) !?[]const u8 {
+    const revision = Instance.revision();
+    if (revision == self.browser_revision)
+        return null;
+
+    self.browser_revision = revision;
+    return try Instance.manifest(self.arena.allocator());
+}
+
+fn readManifestFile(self: *Runtime) !?[]const u8 {
+    if (!self.dirty.swap(false, .acq_rel))
+        return null;
+
+    const allocator = self.arena.allocator();
+    const path = try std.fs.path.join(allocator, &.{ self.directory, "manifest.json" });
+    return std.Io.Dir.cwd().readFileAlloc(self.io, path, allocator, .limited(hmr.wire.bytes_max)) catch |err| {
+        // The server may not have published yet.
+        self.dirty.store(true, .release);
+        return err;
+    };
+}
+
+/// Modules match by id, so a change to one module does not touch the
+/// instance or state of another.
+fn apply(self: *Runtime, bytes: []const u8) !void {
+    const hash = std.hash.Wyhash.hash(0, bytes);
+    if (self.manifest_hash == hash)
+        return;
+
+    self.manifest_hash = hash;
+    const manifest = try std.json.parseFromSliceLeaky(
+        hmr.protocol.Manifest,
+        self.arena.allocator(),
+        bytes,
+        .{ .ignore_unknown_fields = true },
+    );
+
+    if (self.build_error) |message|
+        self.allocator.free(message);
+
+    self.build_error = null;
+    if (manifest.build_error) |message| {
+        self.build_error = try self.allocator.dupe(u8, message);
+        log.warn("event=build_failed action=keep_last_working_modules", .{});
+    }
+
+    for (manifest.modules) |entry| {
+        if (comptime !browser_host) {
+            // A compilation of another build of this module is out of date.
+            if (self.findCompilation(entry.id)) |index| {
+                if (std.mem.eql(u8, self.compilations.items[index].entry.hash, entry.hash))
+                    continue;
+
+                self.cancelCompilation(index);
+            }
+        }
+
+        if (self.find(entry.id)) |index| {
+            if (std.mem.eql(u8, self.modules.items[index].hash, entry.hash))
+                continue;
+        }
+
+        if (comptime browser_host) {
+            try self.finish(entry, Instance.init(entry.id, entry.hash));
+        } else {
+            try self.startCompilation(entry);
+        }
+    }
+
+    if (comptime !browser_host) {
+        var index: usize = 0;
+        while (index < self.compilations.items.len) {
+            if (listed(manifest, self.compilations.items[index].entry.id)) {
+                index += 1;
+            } else {
+                self.cancelCompilation(index);
+            }
+        }
+    }
+
+    var index: usize = 0;
+    while (index < self.modules.items.len) {
+        const module = &self.modules.items[index];
+        if (listed(manifest, module.id)) {
+            index += 1;
+            continue;
+        }
+
+        log.info("event=module_removed module_id={s}", .{module.id});
+        self.destroyModule(module);
+        _ = self.modules.orderedRemove(index);
+    }
+}
+
+fn listed(manifest: hmr.protocol.Manifest, module_id: []const u8) bool {
+    for (manifest.modules) |entry| {
+        if (std.mem.eql(u8, entry.id, module_id))
+            return true;
+    }
+    return false;
+}
+
+fn startCompilation(self: *Runtime, entry: hmr.protocol.Entry) !void {
+    try Instance.initEngine();
+    try self.compilations.ensureUnusedCapacity(self.allocator, 1);
+
+    const compilation = try self.allocator.create(Compilation);
+    errdefer self.allocator.destroy(compilation);
+
+    const name = try self.allocator.dupe(u8, entry.id);
+    errdefer self.allocator.free(name);
+
+    const hash = try self.allocator.dupe(u8, entry.hash);
+    errdefer self.allocator.free(hash);
+
+    // `compile` frees the path.
+    const path = try std.fmt.allocPrint(self.allocator, "{s}/artifacts/{s}.wasm", .{ self.directory, entry.hash });
+    compilation.* = .{ .entry = .{ .id = name, .hash = hash }, .future = undefined };
+    const arguments = .{ self.io, self.allocator, path, &compilation.done, self.wake };
+    compilation.future = self.io.concurrent(compile, arguments) catch .{
+        .any_future = null,
+        .result = @call(.auto, compile, arguments),
+    };
+
+    self.compilations.appendAssumeCapacity(compilation);
+}
+
+fn compile(io: std.Io, allocator: std.mem.Allocator, path: []const u8, done: *std.atomic.Value(bool), wake: ?Wake) anyerror!Instance {
+    defer {
+        allocator.free(path);
+        done.store(true, .release);
+        if (wake) |value|
+            value.notify(value.context);
+    }
+
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(hmr.wire.bytes_max));
+    defer allocator.free(bytes);
+
+    return Instance.init(bytes);
+}
+
+fn finishCompilations(self: *Runtime) !void {
+    var index: usize = 0;
+    while (index < self.compilations.items.len) {
+        const compilation = self.compilations.items[index];
+        if (!compilation.done.load(.acquire)) {
+            index += 1;
+            continue;
+        }
+
+        _ = self.compilations.orderedRemove(index);
+        defer self.freeCompilation(compilation);
+
+        try self.finish(compilation.entry, compilation.future.await(self.io));
+    }
+}
+
+fn cancelCompilation(self: *Runtime, index: usize) void {
+    const compilation = self.compilations.orderedRemove(index);
+    defer self.freeCompilation(compilation);
+
+    var result = compilation.future.cancel(self.io);
+    if (result) |*instance| {
+        instance.deinit();
+    } else |_| {}
+}
+
+fn freeCompilation(self: *Runtime, compilation: *Compilation) void {
+    self.allocator.free(compilation.entry.id);
+    self.allocator.free(compilation.entry.hash);
+    self.allocator.destroy(compilation);
+}
+
+fn findCompilation(self: *const Runtime, name: []const u8) ?usize {
+    for (self.compilations.items, 0..) |compilation, index| {
+        if (std.mem.eql(u8, compilation.entry.id, name))
+            return index;
+    }
+    return null;
+}
+
+/// Replaces the module `entry` names with `result`. If the build did not load,
+/// an error panel replaces the module until its next build.
+fn finish(self: *Runtime, entry: hmr.protocol.Entry, result: anyerror!Instance) !void {
+    const existing = self.find(entry.id);
+    var replacement = self.prepare(entry, result) catch |err| {
+        log.warn("event=module_load_failed module_id={s} error={t}", .{ entry.id, err });
+        const failure: Failure = .{ .operation = "load", .error_name = @errorName(err) };
+        if (existing) |index| {
+            const active = &self.modules.items[index];
+            self.captureState(active);
+            destroyInstance(active);
+            const hash = try self.allocator.dupe(u8, entry.hash);
+            self.allocator.free(active.hash);
+            active.hash = hash;
+            active.failure = failure;
+        } else {
+            var module = try self.newModule(entry, "");
+            module.failure = failure;
+            try self.modules.append(self.allocator, module);
+        }
+        return;
+    };
+
+    if (existing) |index| {
+        const active = &self.modules.items[index];
+        self.transferState(active, &replacement);
+        self.destroyModule(active);
+        active.* = replacement;
+        log.info("event=module_reloaded module_id={s}", .{entry.id});
+    } else {
+        errdefer self.destroyModule(&replacement);
+        try self.modules.append(self.allocator, replacement);
+    }
+}
+
+fn prepare(self: *Runtime, entry: hmr.protocol.Entry, result: anyerror!Instance) !Module {
+    var instance = try result;
+    errdefer instance.deinit();
+
+    const text = try instance.source(self.allocator);
+    errdefer self.allocator.free(text);
+
+    var module = try self.newModule(entry, text);
+    module.instance = instance;
+    return module;
+}
+
+fn newModule(self: *Runtime, entry: hmr.protocol.Entry, text: []const u8) !Module {
+    const name = try self.allocator.dupe(u8, entry.id);
+    errdefer self.allocator.free(name);
+
+    const hash = try self.allocator.dupe(u8, entry.hash);
+    return .{
+        .id = name,
+        .source = text,
+        .hash = hash,
+        .generation = self.nextGeneration(),
+        .atlas_id = render_api.GlyphAtlas.allocateId(),
+    };
+}
+
+fn nextGeneration(self: *Runtime) u64 {
+    defer self.next_generation += 1;
+    return self.next_generation;
+}
+
+fn find(self: *const Runtime, name: []const u8) ?usize {
+    for (self.modules.items, 0..) |module, index| {
+        if (std.mem.eql(u8, module.id, name))
+            return index;
+    }
+    return null;
+}
+
+/// A trapped instance can still be read, so this also works after a frame
+/// failure.
+fn captureState(self: *Runtime, module: *Module) void {
+    const instance = if (module.instance) |*value| value else return;
+    const bytes = instance.snapshotState(self.allocator) catch |err| {
+        log.warn("event=state_capture_failed module_id={s} error={t}", .{ module.id, err });
+        return;
+    };
+
+    if (module.carried_state) |previous|
+        self.allocator.free(previous);
+
+    module.carried_state = bytes;
+}
+
+/// Call before the first frame of `replacement`. A failure loses the state
+/// but does not stop the reload.
+fn transferState(self: *Runtime, previous: *Module, replacement: *Module) void {
+    const target = if (replacement.instance) |*value| value else return;
+    const allocator = self.arena.allocator();
+    const bytes = previousState(previous, allocator) catch |err| {
+        log.warn("event=state_transfer_failed module_id={s} phase=snapshot error={t}", .{ previous.id, err });
+        return;
+    } orelse return;
+
+    const report = target.restoreState(allocator, bytes) catch |err| {
+        log.warn("event=state_transfer_failed module_id={s} phase=restore error={t}", .{ previous.id, err });
+        return;
+    };
+
+    log.info("event=state_transferred module_id={s} {s} snapshot_bytes={d}", .{ previous.id, report, bytes.len });
+}
+
+fn previousState(module: *Module, allocator: std.mem.Allocator) !?[]const u8 {
+    if (module.instance) |*instance|
+        return try instance.snapshotState(allocator);
+
+    return module.carried_state;
+}
+
+/// Compiled-in modules run in the host frame. Reloadable modules run isolated
+/// and contribute a region that the host composes.
+pub fn render(self: *Runtime, comptime File: type, frame: *ui.Frame) !void {
+    const index = self.lookup(File) orelse return renderWaiting(@typeName(File), frame);
+    const module = &self.modules.items[index];
+    if (comptime !reloadable) {
+        if (comptime @hasDecl(File, "deinit"))
+            module.cleanup = &File.deinit;
+
+        return File.main(frame);
+    }
+
+    const invocation = try frame.arena().create(Invocation);
+    invocation.* = .{ .runtime = self, .index = @intCast(index) };
+    const name = try std.fmt.allocPrint(frame.arena(), "knots.module:{s}", .{module.id});
+    const key = ui.Key.str(name).indexed(@intCast(module.generation));
+    const identity = std.hash.Wyhash.hash(module.generation, module.id);
+    try frame.contribute(key, identity, invocation, Invocation.draw);
+}
+
+fn renderWaiting(id: []const u8, frame: *ui.Frame) !void {
+    try frame.e(ui.component.Text{
+        .content = try std.fmt.allocPrint(frame.arena(), "Waiting for module {s}...", .{id}),
+        .style = &.{ .foreground = .dimmed },
+        .selectable = false,
+        .key = .str("hmr.waiting"),
+    });
+}
+
+const Invocation = struct {
+    runtime: *Runtime,
+    index: u32,
+
+    fn draw(
+        pointer: *anyopaque,
+        input: *const FrameInput,
+        theme: *const ui.Theme,
+        rectangle: math.Rect,
+        allocator: std.mem.Allocator,
+    ) !ui.Frame.ModuleOutput {
+        const invocation: *Invocation = @ptrCast(@alignCast(pointer));
+        return invocation.runtime.renderFrame(invocation.index, input, theme, rectangle, allocator);
+    }
+};
+
+fn renderFrame(
+    self: *Runtime,
+    index: u32,
+    input: *const FrameInput,
+    theme: *const ui.Theme,
+    rectangle: math.Rect,
+    allocator: std.mem.Allocator,
+) !ui.Frame.ModuleOutput {
+    const module = &self.modules.items[index];
+    if (module.failure == null) {
+        if (frameOutput(module, input, theme, rectangle, allocator)) |output| {
+            return output;
+        } else |err| {
+            log.warn("event=module_frame_failed module_id={s} error={t}", .{ module.id, err });
+            self.captureState(module);
+            destroyInstance(module);
+            module.failure = .{ .operation = "render", .error_name = @errorName(err) };
+        }
+    }
+
+    return self.renderFailure(module, input, rectangle, allocator);
+}
+
+fn frameOutput(
+    module: *Module,
+    input: *const FrameInput,
+    theme: *const ui.Theme,
+    rectangle: math.Rect,
+    allocator: std.mem.Allocator,
+) !ui.Frame.ModuleOutput {
+    const instance = if (module.instance) |*value| value else return error.ModuleUnavailable;
+    var request: std.ArrayList(u8) = .empty;
+    try hmr.wire.encode(allocator, &request, hmr.Request{ .frame = input.*, .theme = theme.* });
+
+    const response_bytes = try instance.frame(allocator, request.items);
+    const response = try hmr.wire.decode(hmr.DecodedResponse, allocator, response_bytes);
+    const effects = response.effects;
+
+    return .{
+        .packet = try hmr.panels.place(response.packet, module.atlas_id, rectangle),
+        .cursor_shape = effects.cursor_shape,
+        .capture_pointer = effects.capture_pointer,
+        .capture_keyboard = effects.capture_keyboard,
+        .text_input = effects.text_input,
+        .redraw = effects.redraw,
+        .close = effects.close,
+        .clipboard_write = effects.clipboard_write,
+        .theme = effects.theme,
+    };
+}
+
+/// After a failed build, the last working modules run below this overlay.
+/// Call once per frame, after the host's own UI.
+pub fn renderOverlay(self: *Runtime, frame: *ui.Frame) !void {
+    if (comptime !reloadable)
+        return;
+
+    const message = self.build_error orelse return;
 
     var open = true;
     const dialog: ui.component.Dialog = .{
@@ -275,19 +679,15 @@ fn renderErrorOverlay(self: *Runtime, frame: *ui.Frame) !void {
         },
         .parts = .{
             .backdrop = &.{
-                // The host overlay packet is composed after every module contribution.
                 .layer = .{ .z = ui.Frame.host_overlay_layer_min },
                 .background = .{ .color = .{ .value = .{ 0, 0, 0, 0.62 } } },
             },
         },
     };
+
     _ = try dialog.open(frame);
-    const title = switch (self.hmr_error_kind) {
-        .compile => "HMR build failed",
-        .update => "HMR update failed",
-    };
     try frame.e(ui.component.Text{
-        .content = title,
+        .content = "HMR build failed",
         .style = &.{ .font_size = .lg, .foreground = .@"error" },
         .selectable = false,
         .key = .str("hmr.error.overlay.title"),
@@ -307,361 +707,25 @@ fn renderErrorOverlay(self: *Runtime, frame: *ui.Frame) !void {
     try dialog.close(frame);
 }
 
-fn update(self: *Runtime) !void {
-    _ = self.arena.reset(.retain_capacity);
-
-    if (!reloadable) return;
-    if (comptime browser_host) {
-        const revision = Instance.revision();
-        if (revision == self.browser_revision) return;
-        const status = try Instance.status(self.arena.allocator());
-        const manifest = try Instance.manifest(self.arena.allocator());
-        try self.refreshStatusBytes(status);
-        try self.refreshBytes(manifest);
-        self.browser_revision = revision;
-        return;
-    }
-    const manifest_changed = self.manifest_dirty.swap(false, .acq_rel);
-    if (!manifest_changed) return;
-    self.refreshStatus() catch |err| {
-        self.manifest_dirty.store(true, .release);
-        std.log.warn(
-            "ts={f} component=hmr-runtime event=status_refresh_failed error={s} action=retain_current_ui",
-            .{ Log.timestamp(self.io), @errorName(err) },
-        );
+fn renderFailure(
+    self: *Runtime,
+    module: *Module,
+    input: *const FrameInput,
+    rectangle: math.Rect,
+    allocator: std.mem.Allocator,
+) !ui.Frame.ModuleOutput {
+    const failure = module.failure.?;
+    const context = module.error_context orelse context: {
+        const context = try self.allocator.create(ui.Context);
+        errdefer self.allocator.destroy(context);
+        context.* = try ui.Context.init(self.allocator, .{});
+        module.error_context = context;
+        break :context context;
     };
-    self.refresh() catch |err| {
-        self.manifest_dirty.store(true, .release);
-        std.log.warn(
-            "ts={f} component=hmr-runtime event=manifest_refresh_failed error={s} action=retain_current_ui",
-            .{ Log.timestamp(self.io), @errorName(err) },
-        );
-    };
-}
 
-fn refreshStatus(self: *Runtime) !void {
-    const allocator = self.arena.allocator();
-    const bytes = if (self.server_url.len > 0)
-        try HTTPClient.get(allocator, self.io, self.server_url, "/hmr/status.json", Status.bytes_max)
-    else blk: {
-        std.debug.assert(builtin.is_test);
-        std.debug.assert(self.status_path.len > 0);
-        break :blk std.Io.Dir.cwd().readFileAlloc(self.io, self.status_path, allocator, .limited(Status.bytes_max)) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => return err,
-        };
-    };
-    try self.refreshStatusBytes(bytes);
-}
+    var frame = try context.beginFrame(input.*);
+    defer frame.deinit();
 
-fn refreshStatusBytes(self: *Runtime, bytes: []const u8) !void {
-    const allocator = self.arena.allocator();
-    if (bytes.len == 0) return;
-    const hash = std.hash.Wyhash.hash(0, bytes);
-    if (self.status_loaded) {
-        if (hash == self.status_hash) return;
-    }
-    const parsed = try std.json.parseFromSlice(Status.Value, allocator, bytes, .{ .allocate = .alloc_always, .ignore_unknown_fields = false, .max_value_len = Status.bytes_max });
-    if (!Status.valid(&parsed.value)) return error.InvalidHmrStatus;
-
-    if (std.mem.eql(u8, parsed.value.kind, Status.kind_ready)) {
-        self.clearHmrError();
-    } else {
-        const message = try self.allocator.dupe(u8, parsed.value.message);
-        errdefer self.allocator.free(message);
-        self.clearHmrError();
-        self.hmr_error = message;
-        self.hmr_error_kind = if (std.mem.eql(u8, parsed.value.kind, Status.kind_compile_error)) .compile else .update;
-        std.log.warn(
-            "ts={f} component=hmr-runtime event=hmr_error phase={s} kind={s} diagnostics_bytes={d} action=display_error_ui",
-            .{ Log.timestamp(self.io), parsed.value.phase, parsed.value.kind, parsed.value.message.len },
-        );
-    }
-    self.status_hash = hash;
-    self.status_loaded = true;
-}
-
-fn clearHmrError(self: *Runtime) void {
-    if (self.hmr_error) |message| {
-        self.allocator.free(message);
-        self.hmr_error = null;
-    }
-}
-
-fn refresh(self: *Runtime) !void {
-    const allocator = self.arena.allocator();
-    const bytes = if (self.server_url.len > 0)
-        try HTTPClient.get(allocator, self.io, self.server_url, "/hmr/manifest.json", Protocol.bytes_max)
-    else blk: {
-        std.debug.assert(builtin.is_test);
-        std.debug.assert(self.manifest_path.len > 0);
-        break :blk std.Io.Dir.cwd().readFileAlloc(self.io, self.manifest_path, allocator, .limited(Protocol.bytes_max)) catch |err| switch (err) {
-            error.FileNotFound => return,
-            else => return err,
-        };
-    };
-    try self.refreshBytes(bytes);
-}
-
-fn refreshBytes(self: *Runtime, bytes: []const u8) !void {
-    const allocator = self.arena.allocator();
-    const started_at = std.Io.Clock.awake.now(self.io);
-    if (bytes.len == 0) return;
-    const hash = std.hash.Wyhash.hash(0, bytes);
-    if (self.manifest_loaded) {
-        if (hash == self.manifest_hash) return;
-    }
-    const reload = self.manifest_loaded;
-    const phase = if (reload) "reload" else "initial";
-    const manifest = try std.json.parseFromSlice(Protocol.Manifest, allocator, bytes, .{ .allocate = .alloc_always, .max_value_len = Protocol.bytes_max });
-    if (manifest.value.modules.len > Protocol.modules_max) return error.TooManyModules;
-    for (manifest.value.modules, 0..) |entry, index| {
-        if (!Protocol.validId(entry.id)) return error.InvalidModuleId;
-        if (entry.hash.len != 64) return error.InvalidHash;
-        for (entry.hash) |byte| {
-            const hexadecimal = (byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f');
-            if (!hexadecimal) return error.InvalidHash;
-        }
-        for (manifest.value.modules[0..index]) |previous| {
-            if (std.mem.eql(u8, previous.id, entry.id)) return error.DuplicateModuleId;
-        }
-    }
-    try self.modules.ensureTotalCapacity(self.allocator, Protocol.modules_max);
-    var added_modules: u32 = 0;
-    var updated_modules: u32 = 0;
-    var unchanged_modules: u32 = 0;
-    var removed_modules: u32 = 0;
-    var rejected_modules: u32 = 0;
-    var changed_ids: std.ArrayList([]const u8) = .empty;
-    var removed_ids: std.ArrayList([]const u8) = .empty;
-    var rejected_ids: std.ArrayList([]const u8) = .empty;
-    // Match IDs rather than positions so changes never reset unrelated stores.
-    for (manifest.value.modules) |entry| {
-        const existing = self.find(entry.id);
-        if (existing) |index| {
-            if (std.mem.eql(u8, self.modules.items[index].hash, entry.hash)) {
-                unchanged_modules += 1;
-                continue;
-            }
-        }
-        const candidate = self.prepare(&entry) catch |err| {
-            rejected_modules += 1;
-            try rejected_ids.append(allocator, entry.id);
-            std.log.warn(
-                "ts={f} component=hmr-runtime event=module_rejected module_id={s} error={s} action=display_error_ui",
-                .{ Log.timestamp(self.io), entry.id, @errorName(err) },
-            );
-            const failure: Failure = .{ .operation = "load", .error_name = @errorName(err) };
-            if (existing) |index| {
-                const requested_hash = try self.allocator.dupe(u8, entry.hash);
-                const active = &self.modules.items[index];
-                destroyInstance(active);
-                self.allocator.free(active.hash);
-                active.hash = requested_hash;
-                active.failure = failure;
-            } else {
-                self.modules.appendAssumeCapacity(try self.failedModule(&entry, failure));
-            }
-            continue;
-        };
-        try changed_ids.append(allocator, entry.id);
-        if (existing) |index| {
-            const active = &self.modules.items[index];
-            self.destroyModule(active);
-            active.* = candidate;
-            updated_modules += 1;
-        } else {
-            self.modules.appendAssumeCapacity(candidate);
-            added_modules += 1;
-        }
-    }
-    var index: usize = 0;
-    while (index < self.modules.items.len) {
-        var present = false;
-        for (manifest.value.modules) |entry| {
-            if (std.mem.eql(u8, entry.id, self.modules.items[index].id)) {
-                present = true;
-                break;
-            }
-        }
-        if (present) {
-            index += 1;
-        } else {
-            const removed_id = try allocator.dupe(u8, self.modules.items[index].id);
-            try removed_ids.append(allocator, removed_id);
-            removed_modules += 1;
-            self.destroyModule(&self.modules.items[index]);
-            _ = self.modules.orderedRemove(index);
-        }
-    }
-    self.manifest_hash = hash;
-    self.manifest_loaded = true;
-    std.debug.assert(added_modules + updated_modules + unchanged_modules + rejected_modules == manifest.value.modules.len);
-    std.debug.assert(self.modules.items.len <= Protocol.modules_max);
-    if (reload) {
-        std.log.info(
-            "ts={f} component=hmr-runtime event=hmr_applied phase={s} modules={d} added={d} updated={d} removed={d} rejected={d} changed_ids={f} removed_ids={f} rejected_ids={f} duration_ms={d}",
-            .{
-                Log.timestamp(self.io),
-                phase,
-                self.modules.items.len,
-                added_modules,
-                updated_modules,
-                removed_modules,
-                rejected_modules,
-                Log.IdListFormatter{ .ids = changed_ids.items },
-                Log.IdListFormatter{ .ids = removed_ids.items },
-                Log.IdListFormatter{ .ids = rejected_ids.items },
-                Log.elapsedMilliseconds(self.io, started_at),
-            },
-        );
-    } else {
-        std.log.info(
-            "ts={f} component=hmr-runtime event=hmr_ready modules={d} duration_ms={d}",
-            .{ Log.timestamp(self.io), self.modules.items.len, Log.elapsedMilliseconds(self.io, started_at) },
-        );
-    }
-}
-
-fn nextModuleGeneration(self: *Runtime) !u64 {
-    if (self.next_generation == std.math.maxInt(u64)) return error.GenerationExhausted;
-    const assigned_generation = self.next_generation;
-    self.next_generation += 1;
-    std.debug.assert(assigned_generation > 0);
-    std.debug.assert(self.next_generation > assigned_generation);
-    return assigned_generation;
-}
-
-fn failedModule(self: *Runtime, entry: *const Protocol.Entry, failure: Failure) !Module {
-    std.debug.assert(entry.id.len > 0);
-    std.debug.assert(entry.hash.len == 64);
-    std.debug.assert(failure.operation.len > 0);
-    std.debug.assert(failure.error_name.len > 0);
-    const name = try self.allocator.dupe(u8, entry.id);
-    errdefer self.allocator.free(name);
-    const source_text = try self.allocator.dupe(u8, "");
-    errdefer self.allocator.free(source_text);
-    const hash = try self.allocator.dupe(u8, entry.hash);
-    errdefer self.allocator.free(hash);
-    return .{
-        .id = name,
-        .source = source_text,
-        .hash = hash,
-        .generation = try self.nextModuleGeneration(),
-        .native = {},
-        .resources = .init(),
-        .failure = failure,
-    };
-}
-
-fn prepare(self: *Runtime, entry: *const Protocol.Entry) !Module {
-    std.debug.assert(entry.id.len > 0);
-    std.debug.assert(entry.hash.len == 64);
-    var instance = if (comptime browser_host) blk: {
-        break :blk try Instance.init(entry.id, entry.hash);
-    } else blk: {
-        const allocator = self.arena.allocator();
-        const bytes = if (self.server_url.len > 0) http_bytes: {
-            const path = try std.fmt.allocPrint(allocator, "/hmr/artifacts/{s}.wasm", .{entry.hash});
-            break :http_bytes try HTTPClient.get(allocator, self.io, self.server_url, path, 32 * 1024 * 1024);
-        } else file_bytes: {
-            std.debug.assert(builtin.is_test);
-            break :file_bytes try std.Io.Dir.cwd().readFileAlloc(self.io, entry.path, allocator, .limited(32 * 1024 * 1024));
-        };
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
-        if (!std.mem.eql(u8, entry.hash, &std.fmt.bytesToHex(digest, .lower))) return error.HashMismatch;
-        break :blk try Instance.init(bytes, .{});
-    };
-    var instance_live = true;
-    errdefer if (instance_live) instance.deinit();
-    const name = try self.allocator.dupe(u8, entry.id);
-    errdefer self.allocator.free(name);
-    const hash = try self.allocator.dupe(u8, entry.hash);
-    errdefer self.allocator.free(hash);
-    const source_text = try instance.staticString(self.allocator, "source");
-    errdefer self.allocator.free(source_text);
-    const assigned_generation = try self.nextModuleGeneration();
-    instance_live = false;
-    return .{ .id = name, .source = source_text, .hash = hash, .instance = instance, .generation = assigned_generation, .native = {}, .resources = .init() };
-}
-
-fn find(self: *const Runtime, name: []const u8) ?u32 {
-    for (self.modules.items, 0..) |module, index| {
-        if (std.mem.eql(u8, module.id, name)) return @intCast(index);
-    }
-    return null;
-}
-
-/// Render a module using the build-selected execution mode.
-/// Native modules run in the host frame; reloadable modules use an isolated
-/// child frame and serialized transport.
-pub fn render(self: *Runtime, index: u32, frame: *ui.Frame) !void {
-    try self.renderErrorOverlay(frame);
-    if (comptime !reloadable) {
-        std.debug.assert(index < self.modules.items.len);
-        const module = &self.modules.items[index];
-        std.debug.assert(@intFromPtr(module.native) > 0);
-        try module.native(frame);
-        return;
-    }
-
-    const module = &self.modules.items[index];
-    const Invocation = struct {
-        runtime: *Runtime,
-        index: u32,
-        state_scope: u64,
-        fn draw(pointer: *anyopaque, input: *const FrameInput, state: []const ui.StateBridge.Value, rectangle: math.Rect, allocator: std.mem.Allocator) !ui.Frame.ModuleOutput {
-            const invocation: *@This() = @ptrCast(@alignCast(pointer));
-            return invocation.runtime.renderFrame(invocation.index, invocation.state_scope, input, state, rectangle, allocator);
-        }
-    };
-    const identity = std.hash.Wyhash.hash(module.generation, module.id);
-    const invocation = try frame.arena().create(Invocation);
-    invocation.* = .{ .runtime = self, .index = index, .state_scope = ui.StateBridge.key(module.id) };
-    try frame.contribute(ui.Key.str(try std.fmt.allocPrint(frame.arena(), "knots.module:{s}", .{module.id})).indexed(@intCast(module.generation)), identity, invocation, Invocation.draw);
-}
-
-fn renderFrame(self: *Runtime, index: u32, state_scope: u64, input: *const FrameInput, state: []const ui.StateBridge.Value, rectangle: math.Rect, allocator: std.mem.Allocator) !ui.Frame.ModuleOutput {
-    std.debug.assert(index < self.modules.items.len);
-    const active = &self.modules.items[index];
-    if (self.hmr_error) |message| {
-        if (!self.error_overlay_active) return self.renderHmrError(active, message, input, rectangle, allocator);
-    }
-    if (active.failure) |failure| return self.renderFailure(active, failure, input, rectangle, allocator);
-    return self.renderFrameOutput(index, state_scope, input, state, rectangle, allocator) catch |err| {
-        if (!@import("builtin").is_test) {
-            std.log.warn(
-                "ts={f} component=hmr-runtime event=module_frame_failed module_id={s} error={s} action=display_error_ui",
-                .{ Log.timestamp(self.io), active.id, @errorName(err) },
-            );
-        }
-        destroyInstance(active);
-        active.failure = .{ .operation = "render", .error_name = @errorName(err) };
-        return self.renderFailure(active, active.failure.?, input, rectangle, allocator);
-    };
-}
-
-fn errorContext(self: *Runtime, module: *Module) !*ui.Context {
-    if (module.error_context) |context| return context;
-    const context = try self.allocator.create(ui.Context);
-    errdefer self.allocator.destroy(context);
-    context.* = try ui.Context.init(self.allocator, .{});
-    module.error_context = context;
-    return context;
-}
-
-fn renderFailure(self: *Runtime, module: *Module, failure: Failure, input: *const FrameInput, rectangle: math.Rect, allocator: std.mem.Allocator) !ui.Frame.ModuleOutput {
-    std.debug.assert(module.failure != null);
-    std.debug.assert(failure.operation.len > 0);
-    std.debug.assert(failure.error_name.len > 0);
-    std.debug.assert(rectangle.w() > 0);
-    std.debug.assert(rectangle.h() > 0);
-    const context = try self.errorContext(module);
-    var error_frame = try context.beginFrame(input.*);
-    defer error_frame.deinit();
-    const title = try std.fmt.allocPrint(error_frame.arena(), "HMR module failed: {s}", .{module.id});
-    const reason = try std.fmt.allocPrint(error_frame.arena(), "Could not {s} the module: {s}", .{ failure.operation, failure.error_name });
     const panel: ui.component.Rect = .{
         .style = &.{
             .width = .fixed(@floatFromInt(input.logical_extent.width)),
@@ -676,241 +740,192 @@ fn renderFailure(self: *Runtime, module: *Module, failure: Failure, input: *cons
         },
         .key = .str("hmr.error.panel"),
     };
-    _ = try panel.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = title, .style = &.{ .font_size = .lg, .foreground = .@"error" }, .selectable = false, .key = .str("hmr.error.title") });
-    try error_frame.e(ui.component.Text{ .content = reason, .style = &.{ .width = .grow(), .wrap = true }, .selectable = false, .key = .str("hmr.error.reason") });
-    try error_frame.e(ui.component.Text{ .content = "Fix the module and save to retry.", .style = &.{ .width = .grow(), .foreground = .dimmed }, .selectable = false, .key = .str("hmr.error.action") });
-    try panel.close(&error_frame);
-    const output = try context.endFrame(&error_frame);
-    return .{ .packet = try support.Panels.place(allocator, self.allocator, &module.resources, &output.packet, rectangle) };
+
+    _ = try panel.open(&frame);
+    try frame.e(ui.component.Text{
+        .content = try std.fmt.allocPrint(frame.arena(), "HMR module failed: {s}", .{module.id}),
+        .style = &.{ .font_size = .lg, .foreground = .@"error" },
+        .selectable = false,
+        .key = .str("hmr.error.title"),
+    });
+    try frame.e(ui.component.Text{
+        .content = try std.fmt.allocPrint(frame.arena(), "Could not {s} the module: {s}", .{ failure.operation, failure.error_name }),
+        .style = &.{ .width = .grow(), .wrap = true },
+        .selectable = false,
+        .key = .str("hmr.error.reason"),
+    });
+    try frame.e(ui.component.Text{
+        .content = failureAction(failure),
+        .style = &.{ .width = .grow(), .foreground = .dimmed },
+        .selectable = false,
+        .key = .str("hmr.error.action"),
+    });
+    try panel.close(&frame);
+
+    const output = try context.endFrame(&frame);
+    const parts = try hmr.panels.copy(allocator, &output.packet);
+    return .{ .packet = try hmr.panels.place(parts, module.atlas_id, rectangle) };
 }
 
-fn renderHmrError(self: *Runtime, module: *Module, message: []const u8, input: *const FrameInput, rectangle: math.Rect, allocator: std.mem.Allocator) !ui.Frame.ModuleOutput {
-    std.debug.assert(self.hmr_error != null);
-    std.debug.assert(message.len > 0);
-    std.debug.assert(rectangle.w() > 0);
-    std.debug.assert(rectangle.h() > 0);
-    const context = try self.errorContext(module);
-    var error_frame = try context.beginFrame(input.*);
-    defer error_frame.deinit();
-    const title = switch (self.hmr_error_kind) {
-        .compile => "HMR build failed",
-        .update => "HMR update failed",
-    };
-    const panel: ui.component.Rect = .{
-        .style = &.{
-            .width = .fixed(@floatFromInt(input.logical_extent.width)),
-            .height = .fixed(@floatFromInt(input.logical_extent.height)),
-            .padding = .all(16),
-            .direction = .column,
-            .gap = 8,
-            .background = .elevated,
-            .radius = .lg,
-            .border_width = .all(1),
-            .border_color = .@"error",
-        },
-        .key = .str("hmr.error.panel"),
-    };
-    _ = try panel.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = title, .style = &.{ .font_size = .lg, .foreground = .@"error" }, .selectable = false, .key = .str("hmr.error.title") });
-    try error_frame.e(ui.component.Text{ .content = "The last working version is still running. Fix the error and save to retry.", .style = &.{ .width = .grow(), .wrap = true }, .selectable = false, .key = .str("hmr.error.reason") });
-    const diagnostics: ui.component.Rect = .{
-        .style = &.{
-            .width = .grow(),
-            .height = .grow(),
-            .padding = .all(8),
-            .overflow = .scroll_y,
-            .direction = .column,
-            .background = .bg,
-            .radius = .sm,
-        },
-        .key = .str("hmr.error.diagnostics"),
-    };
-    _ = try diagnostics.open(&error_frame);
-    try error_frame.e(ui.component.Text{ .content = message, .style = &.{ .width = .grow(), .wrap = true, .font_size = .xs }, .selectable = false, .key = .str("hmr.error.details") });
-    try diagnostics.close(&error_frame);
-    try panel.close(&error_frame);
-    const output = try context.endFrame(&error_frame);
-    return .{ .packet = try support.Panels.place(allocator, self.allocator, &module.resources, &output.packet, rectangle) };
+fn failureAction(failure: Failure) []const u8 {
+    if (std.mem.eql(u8, failure.error_name, "HostOutdated"))
+        return "Knots itself changed since the host was built. Restart `zig build dev`.";
+
+    return "Fix the module and save to retry.";
 }
 
-fn renderFrameOutput(self: *Runtime, index: u32, state_scope: u64, input: *const FrameInput, state: []const ui.StateBridge.Value, rectangle: math.Rect, allocator: std.mem.Allocator) !ui.Frame.ModuleOutput {
-    comptime std.debug.assert(reloadable);
-    const module = &self.modules.items[index];
-    const request: support.FrameProtocol.Request = .{ .frame = input.*, .state_scope = state_scope, .state = state };
-    var response: support.FrameProtocol.Response = undefined;
-    var writer: support.Wire.Writer = .{ .allocator = allocator };
-    defer writer.deinit();
-    try support.FrameProtocol.encodeRequest(&writer, &request);
-    const instance = if (module.instance) |*value| value else return error.ModuleUnavailable;
-    const bytes = try instance.frame(allocator, writer.data.items);
-    response = try support.FrameProtocol.decodeResponse(allocator, bytes);
-    response.contribution.packet = try support.Panels.place(allocator, self.allocator, &module.resources, &response.contribution.packet, rectangle);
-    return .{
-        .packet = response.contribution.packet,
-        .cursor_shape = response.effects.cursor_shape,
-        .capture_pointer = response.effects.capture_pointer,
-        .capture_keyboard = response.effects.capture_keyboard,
-        .text_input = response.effects.text_input,
-        .redraw = response.effects.redraw,
-        .close = response.effects.close,
-        .clipboard_write = response.effects.clipboard_write,
-        .state = response.state,
-        .dependencies = response.dependencies,
-    };
-}
+const test_input: FrameInput = .{
+    .input = .{ .pos = .{ -1, -1 } },
+    .now_ms = 0,
+    .delta_ns = 0,
+    .logical_extent = .{ .width = 100, .height = 100 },
+    .physical_extent = .{ .width = 100, .height = 100 },
+    .content_scale = 1,
+};
 
-test "real Frame executes in isolated guests and replacing one preserves the other" {
-    const allocator = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var left = try Instance.init(@embedFile("fixture_wasm"), .{});
-    defer left.deinit();
-    var right = try Instance.init(@embedFile("fixture_wasm"), .{});
-    defer right.deinit();
-    var writer: support.Wire.Writer = .{ .allocator = allocator };
-    defer writer.deinit();
-    const request: support.FrameProtocol.Request = .{
-        .frame = .{
-            .input = .{ .pos = .{ -1, -1 } },
-            .now_ms = 0,
-            .delta_ns = 0,
-            .logical_extent = .{ .width = 100, .height = 100 },
-            .physical_extent = .{ .width = 100, .height = 100 },
-            .content_scale = 1,
-        },
-        .state_scope = 1,
-    };
-    try support.FrameProtocol.encodeRequest(&writer, &request);
-    for ([_]f32{ 1, 2 }) |expected| {
-        const bytes = try right.frame(arena.allocator(), writer.data.items);
-        const output = try support.FrameProtocol.decodeResponse(arena.allocator(), bytes);
-        try expectInstanceWidth(&output.contribution.packet, expected);
-    }
-    // A malformed replacement never requires touching the surviving store.
-    try std.testing.expectError(error.WasmtimeFailure, Instance.init("invalid wasm", .{}));
-    left.deinit();
-    left = try Instance.init(@embedFile("fixture_wasm"), .{});
-    const left_bytes = try left.frame(arena.allocator(), writer.data.items);
-    const left_output = try support.FrameProtocol.decodeResponse(arena.allocator(), left_bytes);
-    try expectInstanceWidth(&left_output.contribution.packet, 1);
-    const right_bytes = try right.frame(arena.allocator(), writer.data.items);
-    const right_output = try support.FrameProtocol.decodeResponse(arena.allocator(), right_bytes);
-    try expectInstanceWidth(&right_output.contribution.packet, 3);
-    try std.testing.expectError(error.InvalidWire, support.FrameProtocol.decodeResponse(arena.allocator(), right_bytes[0 .. right_bytes.len - 1]));
-}
-
-test "failed modules display an error panel and recover after a fix" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var temporary = std.testing.tmpDir(.{});
-    defer temporary.cleanup();
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const storage = arena.allocator();
-    const original = @embedFile("fixture_wasm");
-    try temporary.dir.writeFile(io, .{ .sub_path = "counter.wasm", .data = original, .flags = .{} });
-    const artifact = try temporary.dir.realPathFileAlloc(io, "counter.wasm", storage);
-    const manifest = try std.fs.path.join(storage, &.{ std.fs.path.dirname(artifact).?, "manifest.json" });
-    const status = try std.fs.path.join(storage, &.{ std.fs.path.dirname(artifact).?, "status.json" });
-    var environment_map = std.process.Environ.Map.init(allocator);
-    defer environment_map.deinit();
-    try environment_map.put(manifest_environment_name, manifest);
-    try environment_map.put(status_environment_name, status);
-    try testStatus(storage, io, status, .{ .kind = Status.kind_ready, .phase = "initial" });
-    const runtime = try Runtime.create(allocator, io, &environment_map);
-    defer runtime.destroy();
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(original, &digest, .{});
-    const hash = std.fmt.bytesToHex(digest, .lower);
-    var entries = [_]Protocol.Entry{
-        .{ .id = "test/left", .path = artifact, .hash = &hash },
-        .{ .id = "test/right", .path = artifact, .hash = &hash },
-    };
-    _ = runtime.arena.reset(.retain_capacity);
-    try testPublish(storage, io, manifest, &entries);
-    try runtime.refresh();
-    try std.testing.expectEqual(@as(u32, 2), runtime.count());
-    const generation_left = runtime.generation(0);
-    const generation_right = runtime.generation(1);
-    var input: FrameInput = .{
-        .input = .{ .pos = .{ -1, -1 } },
-        .now_ms = 0,
-        .delta_ns = 0,
-        .logical_extent = .{ .width = 100, .height = 100 },
-        .physical_extent = .{ .width = 100, .height = 100 },
-        .content_scale = 1,
-    };
-    const rectangle = math.Rect.init(0, 0, 100, 100);
-    _ = try runtime.renderFrame(0, 1, &input, &.{}, rectangle, storage);
-    _ = try runtime.renderFrame(1, 2, &input, &.{}, rectangle, storage);
-
-    try testStatus(storage, io, status, .{ .kind = Status.kind_compile_error, .phase = "reload", .message = "error: expected expression" });
-    try runtime.refreshStatus();
-    try std.testing.expect(runtime.hmr_error != null);
-    const build_failure = try runtime.renderFrame(0, 1, &input, &.{}, rectangle, storage);
-    try std.testing.expect(build_failure.packet.textInstances().len > 0);
-    try testStatus(storage, io, status, .{ .kind = Status.kind_ready, .phase = "reload" });
-    try runtime.refreshStatus();
-    try std.testing.expect(runtime.hmr_error == null);
-
-    const broken = "not a wasm module";
-    try temporary.dir.writeFile(io, .{ .sub_path = "broken.wasm", .data = broken, .flags = .{} });
-    const broken_artifact = try temporary.dir.realPathFileAlloc(io, "broken.wasm", storage);
-    entries[0].path = broken_artifact;
-    std.crypto.hash.sha2.Sha256.hash(broken, &digest, .{});
-    const broken_hash = std.fmt.bytesToHex(digest, .lower);
-    entries[0].hash = &broken_hash;
-    try testPublish(storage, io, manifest, &entries);
-    try runtime.refresh();
-    const load_failure = try runtime.renderFrame(0, 1, &input, &.{}, rectangle, storage);
-    try std.testing.expect(load_failure.packet.textInstances().len > 0);
-    try std.testing.expectEqual(generation_left, runtime.generation(0));
-
-    // A valid replacement can still fail on its first real frame.
-    const replacement = original ++ "\x00\x04\x03alt";
-    try temporary.dir.writeFile(io, .{ .sub_path = "replacement.wasm", .data = replacement, .flags = .{} });
-    entries[0].path = try temporary.dir.realPathFileAlloc(io, "replacement.wasm", storage);
-    std.crypto.hash.sha2.Sha256.hash(replacement, &digest, .{});
-    const replacement_hash = std.fmt.bytesToHex(digest, .lower);
-    entries[0].hash = &replacement_hash;
-    try testPublish(storage, io, manifest, &entries);
-    try runtime.refresh();
-    try std.testing.expect(runtime.generation(0) != generation_left);
-    try std.testing.expectEqual(generation_right, runtime.generation(1));
-    input.logical_extent.width = 13;
-    const frame_failure = try runtime.renderFrame(0, 1, &input, &.{}, .init(0, 0, 13, 100), storage);
-    try std.testing.expect(frame_failure.packet.textInstances().len > 0);
-    const neighbor = try runtime.renderFrame(1, 2, &input, &.{}, .init(0, 0, 13, 100), storage);
-    try expectInstanceWidth(&neighbor.packet, 2);
-
-    entries[0].path = artifact;
-    entries[0].hash = &hash;
-    try testPublish(storage, io, manifest, &entries);
-    try runtime.refresh();
-    input.logical_extent.width = 100;
-    const restored = try runtime.renderFrame(0, 1, &input, &.{}, rectangle, storage);
-    try expectInstanceWidth(&restored.packet, 1);
-
-    try testPublish(storage, io, manifest, entries[1..]);
-    try runtime.refresh();
-    try std.testing.expectEqual(@as(u32, 1), runtime.count());
-    try std.testing.expectEqual(generation_right, runtime.generation(0));
-}
-
-fn testPublish(allocator: std.mem.Allocator, io: std.Io, path: []const u8, entries: []const Protocol.Entry) !void {
-    const bytes = try std.json.Stringify.valueAlloc(allocator, Protocol.Manifest{ .modules = entries }, .{});
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes, .flags = .{} });
-}
-
-fn testStatus(allocator: std.mem.Allocator, io: std.Io, path: []const u8, value: Status.Value) !void {
-    const bytes = try std.json.Stringify.valueAlloc(allocator, value, .{});
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes, .flags = .{} });
+fn testFrame(instance: *Instance, allocator: std.mem.Allocator) !hmr.Response {
+    var request: std.ArrayList(u8) = .empty;
+    try hmr.wire.encode(allocator, &request, hmr.Request{ .frame = test_input, .theme = ui.Theme.dark });
+    return hmr.wire.decode(hmr.Response, allocator, try instance.frame(allocator, request.items));
 }
 
 fn expectInstanceWidth(packet: anytype, expected: f32) !void {
     for (packet.instances()) |instance| {
-        if (instance.size[0] == expected) return;
+        if (instance.size[0] == expected)
+            return;
     }
     return error.ExpectedInstanceWidthNotFound;
+}
+
+test "modules run in isolated stores and inherit state across replacement" {
+    if (browser_host)
+        return error.SkipZigTest;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+    try Instance.initEngine();
+    try std.testing.expectError(error.WasmtimeFailure, Instance.init("invalid wasm"));
+
+    var left = try Instance.init(@embedFile("fixture_wasm"));
+    defer left.deinit();
+
+    var right = try Instance.init(@embedFile("fixture_wasm"));
+    defer right.deinit();
+
+    try expectInstanceWidth(&(try testFrame(&left, allocator)).packet, 1);
+    try expectInstanceWidth(&(try testFrame(&left, allocator)).packet, 2);
+    try expectInstanceWidth(&(try testFrame(&right, allocator)).packet, 1);
+
+    var replacement = try Instance.init(@embedFile("fixture_wasm"));
+    defer replacement.deinit();
+
+    const report = try replacement.restoreState(allocator, try left.snapshotState(allocator));
+    try std.testing.expectEqualStrings("restored=2 reset=[]", report);
+    try expectInstanceWidth(&(try testFrame(&replacement, allocator)).packet, 3);
+}
+
+const TestServer = struct {
+    directory: std.testing.TmpDir,
+    path: []const u8,
+    allocator: std.mem.Allocator,
+
+    fn artifact(self: *TestServer, bytes: []const u8) ![]const u8 {
+        const hash = try self.allocator.dupe(u8, &hmr.protocol.contentHash(bytes));
+        const path = try std.fmt.allocPrint(self.allocator, "artifacts/{s}.wasm", .{hash});
+        try self.directory.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = bytes, .flags = .{} });
+        return hash;
+    }
+
+    fn publish(self: *TestServer, runtime: *Runtime, modules: []const hmr.protocol.Entry, build_error: ?[]const u8) !void {
+        const manifest: hmr.protocol.Manifest = .{ .modules = modules, .build_error = build_error };
+        const bytes = try std.json.Stringify.valueAlloc(self.allocator, manifest, .{});
+        try self.directory.dir.writeFile(std.testing.io, .{ .sub_path = "manifest.json", .data = bytes, .flags = .{} });
+        runtime.dirty.store(true, .release);
+        try runtime.update();
+
+        while (runtime.compilations.items.len > 0) {
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+            try runtime.update();
+        }
+    }
+};
+
+fn moduleIndex(runtime: *const Runtime, module_id: []const u8) !u32 {
+    const index = runtime.find(module_id) orelse return error.ModuleNotFound;
+    return @intCast(index);
+}
+
+test "failed modules show an error panel and recover, with state, after a fix" {
+    if (browser_host)
+        return error.SkipZigTest;
+
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const storage = arena.allocator();
+    var server: TestServer = .{ .directory = std.testing.tmpDir(.{}), .path = undefined, .allocator = storage };
+    defer server.directory.cleanup();
+
+    try server.directory.dir.createDirPath(std.testing.io, "artifacts");
+    server.path = try server.directory.dir.realPathFileAlloc(std.testing.io, ".", storage);
+
+    var environment_map = std.process.Environ.Map.init(allocator);
+    defer environment_map.deinit();
+
+    try environment_map.put(directory_environment_name, server.path);
+    const runtime = try Runtime.create(allocator, std.testing.io, &environment_map);
+    defer runtime.destroy();
+
+    const original = @embedFile("fixture_wasm");
+    const hash = try server.artifact(original);
+    var entries = [_]hmr.protocol.Entry{ .{ .id = "test/left", .hash = hash }, .{ .id = "test/right", .hash = hash } };
+    try server.publish(runtime, &entries, null);
+    try std.testing.expectEqual(@as(usize, 2), runtime.modules.items.len);
+
+    // Modules join in the order their compilations finish.
+    const left = try moduleIndex(runtime, "test/left");
+    const right = try moduleIndex(runtime, "test/right");
+    const generation_left = runtime.modules.items[left].generation;
+    const generation_right = runtime.modules.items[right].generation;
+    var input = test_input;
+    const rectangle = math.Rect.init(0, 0, 100, 100);
+    try expectInstanceWidth(&(try runtime.renderFrame(left, &input, &ui.Theme.dark, rectangle, storage)).packet, 1);
+    try expectInstanceWidth(&(try runtime.renderFrame(right, &input, &ui.Theme.dark, rectangle, storage)).packet, 1);
+
+    try server.publish(runtime, &entries, "error: expected expression");
+    try std.testing.expectEqualStrings("error: expected expression", runtime.build_error.?);
+    try expectInstanceWidth(&(try runtime.renderFrame(right, &input, &ui.Theme.dark, rectangle, storage)).packet, 2);
+
+    try server.publish(runtime, &entries, null);
+    try std.testing.expect(runtime.build_error == null);
+
+    entries[0].hash = try server.artifact("not a wasm module");
+    try server.publish(runtime, &entries, null);
+    const load_failure = try runtime.renderFrame(left, &input, &ui.Theme.dark, rectangle, storage);
+    try std.testing.expect(load_failure.packet.textInstances().len > 0);
+    try std.testing.expectEqual(generation_left, runtime.modules.items[left].generation);
+
+    entries[0].hash = try server.artifact(original ++ "\x00\x04\x03alt");
+    try server.publish(runtime, &entries, null);
+    try std.testing.expect(runtime.modules.items[left].generation != generation_left);
+    try std.testing.expectEqual(generation_right, runtime.modules.items[right].generation);
+
+    input.logical_extent.width = 7;
+    const frame_failure = try runtime.renderFrame(left, &input, &ui.Theme.dark, .init(0, 0, 7, 100), storage);
+    try std.testing.expect(frame_failure.packet.textInstances().len > 0);
+
+    input.logical_extent.width = 13;
+    try expectInstanceWidth(&(try runtime.renderFrame(right, &input, &ui.Theme.dark, .init(0, 0, 13, 100), storage)).packet, 3);
+
+    entries[0].hash = hash;
+    try server.publish(runtime, &entries, null);
+    input.logical_extent.width = 100;
+    try expectInstanceWidth(&(try runtime.renderFrame(left, &input, &ui.Theme.dark, rectangle, storage)).packet, 2);
+
+    try server.publish(runtime, entries[1..], null);
+    try std.testing.expectEqual(@as(usize, 1), runtime.modules.items.len);
+    try std.testing.expectEqual(generation_right, runtime.modules.items[try moduleIndex(runtime, "test/right")].generation);
 }

@@ -1,43 +1,58 @@
-//! Browser-side execution of an isolated HMR guest.
+//! One HMR module in the browser. The JavaScript host loads and runs the
+//! module (see `BrowserHmr` in web/host.js). This side holds a handle to it.
+
 const std = @import("std");
 const hmr = @import("hmr");
 
-const Self = @This();
+const Browser = @This();
 
 handle: u32,
 
-pub fn init(id: []const u8, hash: []const u8) !Self {
+/// The JavaScript host must already have loaded this build of the module.
+pub fn init(id: []const u8, hash: []const u8) !Browser {
     const handle = imports.open(id.ptr, id.len, hash.ptr, hash.len);
-    if (handle == 0) return error.ModuleUnavailable;
+    if (handle == 0)
+        return error.ModuleUnavailable;
+
+    errdefer imports.close(handle);
+    if (imports.fingerprint(handle) != hmr.fingerprint)
+        return error.HostOutdated;
+
     return .{ .handle = handle };
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Browser) void {
     imports.close(self.handle);
     self.* = undefined;
 }
 
-pub fn frame(self: *Self, allocator: std.mem.Allocator, request: []const u8) ![]u8 {
-    if (request.len > hmr.Protocol.bytes_max) return error.LimitExceeded;
-    if (imports.frame(self.handle, request.ptr, request.len) == 0) return error.GuestFrameFailed;
-    const length = imports.outputLength(self.handle);
-    if (length > hmr.Protocol.bytes_max) return error.LimitExceeded;
-    const output = try allocator.alloc(u8, length);
-    errdefer allocator.free(output);
-    if (imports.outputCopy(self.handle, output.ptr, output.len) != output.len)
-        return error.InvalidGuestRange;
-    return output;
+pub fn frame(self: *Browser, allocator: std.mem.Allocator, request: []const u8) ![]u8 {
+    if (imports.frame(self.handle, request.ptr, request.len) == 0)
+        return error.GuestCallFailed;
+
+    return self.output(allocator);
 }
 
-pub fn staticString(self: *Self, allocator: std.mem.Allocator, comptime name: []const u8) ![]u8 {
-    comptime std.debug.assert(std.mem.eql(u8, name, "source"));
-    const length = imports.sourceLength(self.handle);
-    if (length > hmr.Protocol.bytes_max) return error.LimitExceeded;
-    const output = try allocator.alloc(u8, length);
-    errdefer allocator.free(output);
-    if (imports.sourceCopy(self.handle, output.ptr, output.len) != output.len)
-        return error.InvalidGuestRange;
-    return output;
+pub fn snapshotState(self: *Browser, allocator: std.mem.Allocator) ![]u8 {
+    if (imports.snapshot(self.handle) == 0)
+        return error.GuestCallFailed;
+
+    return self.output(allocator);
+}
+
+pub fn restoreState(self: *Browser, allocator: std.mem.Allocator, snapshot: []const u8) ![]u8 {
+    if (imports.restore(self.handle, snapshot.ptr, snapshot.len) == 0)
+        return error.GuestCallFailed;
+
+    return self.output(allocator);
+}
+
+pub fn source(self: *Browser, allocator: std.mem.Allocator) ![]u8 {
+    return copy(allocator, imports.sourceLength(self.handle), self.handle, imports.sourceCopy);
+}
+
+fn output(self: *Browser, allocator: std.mem.Allocator) ![]u8 {
+    return copy(allocator, imports.outputLength(self.handle), self.handle, imports.outputCopy);
 }
 
 pub fn revision() u32 {
@@ -45,37 +60,33 @@ pub fn revision() u32 {
 }
 
 pub fn manifest(allocator: std.mem.Allocator) ![]u8 {
-    return copyDocument(allocator, imports.manifestLength, imports.manifestCopy);
+    const bytes = try allocator.alloc(u8, imports.manifestLength());
+    if (imports.manifestCopy(bytes.ptr, bytes.len) != bytes.len)
+        return error.InvalidGuestRange;
+
+    return bytes;
 }
 
-pub fn status(allocator: std.mem.Allocator) ![]u8 {
-    return copyDocument(allocator, imports.statusLength, imports.statusCopy);
-}
+fn copy(allocator: std.mem.Allocator, length: usize, handle: u32, copyFn: *const fn (u32, [*]u8, usize) callconv(.c) usize) ![]u8 {
+    const bytes = try allocator.alloc(u8, length);
+    if (copyFn(handle, bytes.ptr, bytes.len) != bytes.len)
+        return error.InvalidGuestRange;
 
-fn copyDocument(
-    allocator: std.mem.Allocator,
-    lengthFn: *const fn () callconv(.c) usize,
-    copyFn: *const fn ([*]u8, usize) callconv(.c) usize,
-) ![]u8 {
-    const length = lengthFn();
-    if (length > hmr.Protocol.bytes_max) return error.LimitExceeded;
-    const output = try allocator.alloc(u8, length);
-    errdefer allocator.free(output);
-    if (copyFn(output.ptr, output.len) != output.len) return error.InvalidDocumentRange;
-    return output;
+    return bytes;
 }
 
 const imports = struct {
     extern "knots_hmr" fn revision() u32;
     extern "knots_hmr" fn manifestLength() usize;
     extern "knots_hmr" fn manifestCopy(output: [*]u8, capacity: usize) usize;
-    extern "knots_hmr" fn statusLength() usize;
-    extern "knots_hmr" fn statusCopy(output: [*]u8, capacity: usize) usize;
     extern "knots_hmr" fn open(id: [*]const u8, id_length: usize, hash: [*]const u8, hash_length: usize) u32;
     extern "knots_hmr" fn close(handle: u32) void;
+    extern "knots_hmr" fn fingerprint(handle: u32) u32;
     extern "knots_hmr" fn sourceLength(handle: u32) usize;
     extern "knots_hmr" fn sourceCopy(handle: u32, output: [*]u8, capacity: usize) usize;
     extern "knots_hmr" fn frame(handle: u32, request: [*]const u8, request_length: usize) u32;
+    extern "knots_hmr" fn snapshot(handle: u32) u32;
+    extern "knots_hmr" fn restore(handle: u32, snapshot: [*]const u8, snapshot_length: usize) u32;
     extern "knots_hmr" fn outputLength(handle: u32) usize;
     extern "knots_hmr" fn outputCopy(handle: u32, output: [*]u8, capacity: usize) usize;
 };

@@ -30,8 +30,10 @@ const entries = blk: {
     };
 };
 
+var active_theme: u32 = 1;
+
 pub fn main(app: *knots.Frame) !void {
-    const theme_index = try app.bindState(u32, "playground.theme.index", 1);
+    const theme_index = &active_theme;
     const root = Rect{
         .key = .src(@src()),
         .style = &.{ .width = .grow(), .height = .fixed(800), .direction = .column, .gap = 12 },
