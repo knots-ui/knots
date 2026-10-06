@@ -71,6 +71,47 @@ pub fn validateByteLimit(bytes_max: u32) !void {
     if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
 }
 
+fn insertPaste(buf: *std.ArrayList(u8), len: *u32, frame: *Frame, s: *State.TextInput, paste_text: []const u8, multiline: bool, bytes_max: u32) !void {
+    const ui = frame.ui();
+    const raw = try frame.arena().dupe(u8, paste_text);
+    _ = std.unicode.Utf8View.init(raw) catch return;
+
+    var paste_len: usize = 0;
+    if (multiline) {
+        var i: usize = 0;
+        while (i < raw.len) {
+            if (raw[i] == '\r') {
+                raw[paste_len] = '\n';
+                paste_len += 1;
+                i += 1;
+                if (i < raw.len and raw[i] == '\n') i += 1;
+            } else {
+                raw[paste_len] = raw[i];
+                paste_len += 1;
+                i += 1;
+            }
+        }
+    } else {
+        paste_len = raw.len;
+        for (raw) |*ch| {
+            if (ch.* == '\r' or ch.* == '\n') ch.* = ' ';
+        }
+    }
+    if (paste_len == 0) return;
+
+    const sel = selectionRange(s);
+    const selected_len: usize = @intCast(sel.hi - sel.lo);
+    const base_len = buf.items.len - selected_len;
+    const max_len: usize = @intCast(bytes_max);
+    if (base_len > max_len or paste_len > max_len - base_len) return;
+    try buf.ensureTotalCapacity(ui.allocator, base_len + paste_len);
+    if (selected_len > 0) deleteSelection(buf, len, s);
+    try buf.insertSlice(ui.allocator, s.cursor, raw[0..paste_len]);
+    len.* += @intCast(paste_len);
+    s.cursor += @intCast(paste_len);
+    s.sel_anchor = s.cursor;
+}
+
 pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
     std.debug.assert(bytes_max <= Face.text_bytes_max);
     const ui = frame.ui();
@@ -94,6 +135,10 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextI
         s.sel_anchor = s.cursor;
     }
 
+    if (frame.pasteText()) |paste_text| {
+        try insertPaste(buf, &len, frame, s, paste_text, multiline, bytes_max);
+    }
+
     for (ui.input.key_events) |event| {
         if (event.action == .release) continue;
         const key = event.key;
@@ -111,46 +156,6 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextI
                     try frame.writeClipboard(buf.items[sel.lo..sel.hi]);
                     deleteSelection(buf, &len, s);
                 }
-            },
-            .v => if (super_ctrl_held) {
-                const paste_text = frame.pasteText() orelse continue;
-                const raw = try frame.arena().dupe(u8, paste_text);
-                _ = std.unicode.Utf8View.init(raw) catch continue;
-
-                var paste_len: usize = 0;
-                if (multiline) {
-                    var i: usize = 0;
-                    while (i < raw.len) {
-                        if (raw[i] == '\r') {
-                            raw[paste_len] = '\n';
-                            paste_len += 1;
-                            i += 1;
-                            if (i < raw.len and raw[i] == '\n') i += 1;
-                        } else {
-                            raw[paste_len] = raw[i];
-                            paste_len += 1;
-                            i += 1;
-                        }
-                    }
-                } else {
-                    paste_len = raw.len;
-                    for (raw) |*ch| {
-                        if (ch.* == '\r' or ch.* == '\n') ch.* = ' ';
-                    }
-                }
-                if (paste_len == 0) continue;
-
-                const sel = selectionRange(s);
-                const selected_len: usize = @intCast(sel.hi - sel.lo);
-                const base_len = buf.items.len - selected_len;
-                const max_len: usize = @intCast(bytes_max);
-                if (base_len > max_len or paste_len > max_len - base_len) continue;
-                try buf.ensureTotalCapacity(ui.allocator, base_len + paste_len);
-                if (selected_len > 0) deleteSelection(buf, &len, s);
-                try buf.insertSlice(ui.allocator, s.cursor, raw[0..paste_len]);
-                len += @intCast(paste_len);
-                s.cursor += @intCast(paste_len);
-                s.sel_anchor = s.cursor;
             },
             .backspace => {
                 if (s.sel_anchor != s.cursor) {

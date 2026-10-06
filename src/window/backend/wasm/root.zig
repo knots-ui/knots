@@ -19,15 +19,12 @@ pub const Backend = struct {
     cursor_shape: input_types.CursorShape = .default,
     owner_addr: usize = 0,
     capture: ?Capture = null,
-    clipboard_text: std.ArrayList(u8) = .empty,
-    clipboard_valid: bool = false,
 
     const Self = @This();
 
     pub fn deinit(self: *Self) void {
         self.stopCapture();
         self.canvas.release();
-        self.clipboard_text.deinit(self.allocator);
     }
 
     pub fn startCapture(self: *Self, owner: *window.Window) void {
@@ -169,12 +166,7 @@ pub const Backend = struct {
         return &[_][]const u8{};
     }
 
-    pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
-        if (!self.clipboard_valid) return null;
-        self.clipboard_valid = false;
-        defer self.clipboard_text.clearRetainingCapacity();
-        return try allocator.dupe(u8, self.clipboard_text.items);
-    }
+    pub fn requestPaste(_: *Self, _: *window.Window) !void {}
 
     pub fn setClipboardText(_: *Self, _: std.mem.Allocator, text: []const u8) !bool {
         const host = try webHost();
@@ -679,7 +671,7 @@ fn onKeyDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {
         if (key >= 0) {
             const key_action: input_types.KeyAction = if (eventBool(event, "repeat")) .repeat else .press;
             const mods = eventMods(event) orelse input_types.Mods{};
-            if (((mods.ctrl and !mods.alt) or mods.super) and key == @intFromEnum(input_types.Key.v) and key_action == .press) {
+            if (((mods.ctrl and !mods.alt) or mods.super) and key == @backingInt(input_types.Key.v) and key_action == .press) {
                 backend.preparePaste();
                 return;
             }
@@ -732,14 +724,7 @@ fn onPaste(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     const text = text_value.toOwnedString(backend.allocator) catch return;
     defer backend.allocator.free(text);
 
-    backend.clipboard_text.clearRetainingCapacity();
-    backend.clipboard_text.appendSlice(backend.allocator, text) catch {
-        backend.clipboard_valid = false;
-        return;
-    };
-    backend.clipboard_valid = true;
-    owner.pushKey(@intFromEnum(input_types.Key.v), .press, .{ .ctrl = true });
-    owner.pushKey(@intFromEnum(input_types.Key.v), .release, .{ .ctrl = true });
+    owner.pushPaste(text);
     preventDefault(event);
 }
 

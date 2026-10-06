@@ -23,7 +23,66 @@ const BTN_EXTRA: u32 = 0x114;
 const TEXT_URI_LIST: [*:0]const u8 = "text/uri-list";
 const TEXT_UTF8: [*:0]const u8 = "text/plain;charset=utf-8";
 const TEXT_PLAIN: [*:0]const u8 = "text/plain";
-const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+const MAX_OFFER_BYTES: usize = 1024 * 1024;
+
+/// A read of a data offer's pipe, drained from the event loop so a slow or
+/// stuck source never blocks the UI thread.
+const OfferRead = struct {
+    fd: posix.fd_t = -1,
+    buf: std.ArrayList(u8) = .empty,
+    state: ?*State = null,
+
+    const Status = enum { pending, done, failed };
+
+    fn start(self: *OfferRead, display: *wl.Display, offer: *wl.DataOffer, mime: [*:0]const u8, target: *State) bool {
+        var fds: [2]i32 = undefined;
+        switch (posix.errno(linux.pipe2(&fds, .{ .CLOEXEC = true }))) {
+            .SUCCESS => {},
+            else => return false,
+        }
+        offer.receive(mime, fds[1]);
+        closeFd(fds[1]);
+        _ = display.flush();
+
+        // Only our read end is non-blocking since the source owns the write end.
+        const nonblock: u32 = @bitCast(linux.O{ .NONBLOCK = true });
+        switch (posix.errno(linux.fcntl(fds[0], linux.F.SETFL, nonblock))) {
+            .SUCCESS => {},
+            else => {
+                closeFd(fds[0]);
+                return false;
+            },
+        }
+        self.fd = fds[0];
+        self.state = target;
+        return true;
+    }
+
+    fn drain(self: *OfferRead, allocator: std.mem.Allocator) Status {
+        var chunk: [4096]u8 = undefined;
+        while (true) {
+            const n = posix.read(self.fd, &chunk) catch |err| switch (err) {
+                error.WouldBlock => return .pending,
+                else => return .failed,
+            };
+            if (n == 0) return .done;
+            if (self.buf.items.len + n > MAX_OFFER_BYTES) return .failed;
+            self.buf.appendSlice(allocator, chunk[0..n]) catch return .failed;
+        }
+    }
+
+    fn cancel(self: *OfferRead) void {
+        closeFd(self.fd);
+        self.fd = -1;
+        self.buf.clearRetainingCapacity();
+        self.state = null;
+    }
+
+    fn deinit(self: *OfferRead, allocator: std.mem.Allocator) void {
+        self.cancel();
+        self.buf.deinit(allocator);
+    }
+};
 
 const OutputState = struct {
     output: *wl.Output,
@@ -49,6 +108,7 @@ const Shared = struct {
     clipboard_text: []u8 = &.{},
     selection_offer: ?*wl.DataOffer = null,
     selection_mime: ?[*:0]const u8 = null,
+    paste: OfferRead = .{},
     cursor_theme: ?*wl.CursorTheme = null,
     cursor_surface: ?*wl.Surface = null,
     wake_pipe: [2]posix.fd_t = .{ -1, -1 },
@@ -80,6 +140,7 @@ const Shared = struct {
         self.clearRepeat();
         self.deinitXkb();
         self.clearClipboardSource();
+        self.paste.deinit(self.allocator);
         if (self.selection_offer) |offer| offer.destroy();
 
         if (self.drag_offer) |offer| offer.destroy();
@@ -108,6 +169,18 @@ const Shared = struct {
             self.allocator.free(self.clipboard_text);
             self.clipboard_text = &.{};
         }
+    }
+
+    fn readPaste(self: *Shared) void {
+        switch (self.paste.drain(self.allocator)) {
+            .pending => return,
+            .failed => return self.paste.cancel(),
+            .done => {},
+        }
+        defer self.paste.cancel();
+        const state = self.paste.state orelse return;
+        const owner = state.owner orelse return;
+        owner.pushPaste(self.paste.buf.items);
     }
 
     fn deinitXkb(self: *Shared) void {
@@ -284,6 +357,7 @@ const State = struct {
             shared.keyboard_state = null;
             shared.clearRepeat();
         }
+        if (shared.paste.state == self) shared.paste.cancel();
         if (shared.drag_state == self) {
             if (shared.drag_offer) |offer| offer.destroy();
             shared.drag_offer = null;
@@ -402,6 +476,12 @@ pub const Backend = struct {
                 .events = @intCast(posix.POLL.IN),
                 .revents = 0,
             },
+            // poll ignores the negative fd while no paste is in flight.
+            .{
+                .fd = shared.paste.fd,
+                .events = @intCast(posix.POLL.IN),
+                .revents = 0,
+            },
         };
         const ready = posix.poll(&fds, timeout_ms) catch 0;
         if (ready > 0 and (fds[0].revents & @as(i16, @intCast(posix.POLL.IN))) != 0) {
@@ -411,6 +491,9 @@ pub const Backend = struct {
         }
         if (ready > 0 and (fds[1].revents & @as(i16, @intCast(posix.POLL.IN))) != 0) {
             drainWake(shared);
+        }
+        if (ready > 0 and fds[2].revents != 0) {
+            shared.readPaste();
         }
 
         _ = shared.display.dispatchPending();
@@ -524,14 +607,18 @@ pub const Backend = struct {
         return drop_paths.copy(allocator, self.state.drop_slices[0..n]);
     }
 
-    pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
+    pub fn requestPaste(self: *Self, owner: *window.Window) !void {
         const shared = self.state.shared;
-        if (shared.selection_offer) |offer| {
-            const mime = shared.selection_mime orelse return null;
-            return receiveClipboardText(shared, allocator, offer, mime) catch null;
+        shared.paste.cancel();
+
+        if (shared.clipboard_source != null) {
+            owner.pushPaste(shared.clipboard_text);
+            return;
         }
-        if (shared.clipboard_text.len > 0) return try allocator.dupe(u8, shared.clipboard_text);
-        return null;
+
+        const offer = shared.selection_offer orelse return;
+        const mime = shared.selection_mime orelse return;
+        _ = shared.paste.start(shared.display, offer, mime, self.state);
     }
 
     pub fn setClipboardText(self: *Self, _: std.mem.Allocator, text: []const u8) !bool {
@@ -1067,35 +1154,6 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
         },
         .target, .dnd_drop_performed, .dnd_finished, .action => {},
     }
-}
-
-fn receiveClipboardText(state: *Shared, allocator: std.mem.Allocator, offer: *wl.DataOffer, mime: [*:0]const u8) !?[]u8 {
-    var fds: [2]i32 = undefined;
-    switch (posix.errno(linux.pipe2(&fds, .{ .CLOEXEC = true }))) {
-        .SUCCESS => {},
-        else => return null,
-    }
-    defer closeFd(fds[0]);
-
-    offer.receive(mime, fds[1]);
-    closeFd(fds[1]);
-    _ = state.display.flush();
-
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const n = try posix.read(fds[0], &buf);
-        if (n == 0) break;
-        if (out.items.len + n > MAX_CLIPBOARD_BYTES) {
-            out.deinit(allocator);
-            return null;
-        }
-        try out.appendSlice(allocator, buf[0..n]);
-    }
-
-    return try out.toOwnedSlice(allocator);
 }
 
 fn receiveUriListDrop(state: *State, offer: *wl.DataOffer) !usize {
