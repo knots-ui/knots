@@ -109,6 +109,9 @@ const Shared = struct {
     selection_offer: ?*wl.DataOffer = null,
     selection_mime: ?[*:0]const u8 = null,
     paste: OfferRead = .{},
+    drop: OfferRead = .{},
+    drop_offer: ?*wl.DataOffer = null,
+    drop_finish: bool = false,
     cursor_theme: ?*wl.CursorTheme = null,
     cursor_surface: ?*wl.Surface = null,
     wake_pipe: [2]posix.fd_t = .{ -1, -1 },
@@ -141,6 +144,8 @@ const Shared = struct {
         self.deinitXkb();
         self.clearClipboardSource();
         self.paste.deinit(self.allocator);
+        self.cancelDrop();
+        self.drop.deinit(self.allocator);
         if (self.selection_offer) |offer| offer.destroy();
 
         if (self.drag_offer) |offer| offer.destroy();
@@ -181,6 +186,38 @@ const Shared = struct {
         const state = self.paste.state orelse return;
         const owner = state.owner orelse return;
         owner.pushPaste(self.paste.buf.items);
+    }
+
+    fn startDrop(self: *Shared, offer: *wl.DataOffer, target: ?*State, accepted: bool, finish: bool) void {
+        self.cancelDrop();
+        self.drop_offer = offer;
+        self.drop_finish = finish;
+        const state = target orelse return self.cancelDrop();
+        if (!accepted) return self.cancelDrop();
+        if (!self.drop.start(self.display, offer, TEXT_URI_LIST, state)) return self.cancelDrop();
+    }
+
+    fn readDrop(self: *Shared) void {
+        switch (self.drop.drain(self.allocator)) {
+            .pending => return,
+            .failed => return self.cancelDrop(),
+            .done => {},
+        }
+        defer self.cancelDrop();
+        const offer = self.drop_offer orelse return;
+        if (self.drop_finish) offer.finish();
+        const target = self.drop.state orelse return;
+        const count = parseUriListIntoBuffers(self.drop.buf.items, &target.drop_paths_buf, &target.drop_slices);
+        if (count == 0) return;
+        const owner = target.owner orelse return;
+        owner.markDropped(count);
+    }
+
+    fn cancelDrop(self: *Shared) void {
+        self.drop.cancel();
+        if (self.drop_offer) |offer| offer.destroy();
+        self.drop_offer = null;
+        self.drop_finish = false;
     }
 
     fn deinitXkb(self: *Shared) void {
@@ -358,6 +395,7 @@ const State = struct {
             shared.clearRepeat();
         }
         if (shared.paste.state == self) shared.paste.cancel();
+        if (shared.drop.state == self) shared.cancelDrop();
         if (shared.drag_state == self) {
             if (shared.drag_offer) |offer| offer.destroy();
             shared.drag_offer = null;
@@ -476,9 +514,14 @@ pub const Backend = struct {
                 .events = @intCast(posix.POLL.IN),
                 .revents = 0,
             },
-            // poll ignores the negative fd while no paste is in flight.
+            // poll ignores negative fds while no transfer is in flight.
             .{
                 .fd = shared.paste.fd,
+                .events = @intCast(posix.POLL.IN),
+                .revents = 0,
+            },
+            .{
+                .fd = shared.drop.fd,
                 .events = @intCast(posix.POLL.IN),
                 .revents = 0,
             },
@@ -494,6 +537,9 @@ pub const Backend = struct {
         }
         if (ready > 0 and fds[2].revents != 0) {
             shared.readPaste();
+        }
+        if (ready > 0 and fds[3].revents != 0) {
+            shared.readDrop();
         }
 
         _ = shared.display.dispatchPending();
@@ -1080,20 +1126,14 @@ fn dataDeviceListener(_: *wl.DataDevice, event: wl.DataDevice.Event, state: *Sha
         },
         .drop => {
             const offer = state.drag_offer orelse return;
-            defer {
-                offer.destroy();
-                state.drag_offer = null;
-                state.drag_state = null;
-                state.drag_has_uri = false;
-                state.drag_action_ok = false;
-            }
-            const target = state.drag_state orelse return;
-            if (!state.drag_has_uri) return;
-            const count = receiveUriListDrop(target, offer) catch 0;
-            if (count > 0) {
-                if (target.owner) |owner| owner.markDropped(count);
-            }
-            if (offer.getVersion() >= 3 and state.drag_action_ok) offer.finish();
+            const target = state.drag_state;
+            const accepted = state.drag_has_uri;
+            const finish = offer.getVersion() >= 3 and state.drag_action_ok;
+            state.drag_offer = null;
+            state.drag_state = null;
+            state.drag_has_uri = false;
+            state.drag_action_ok = false;
+            state.startDrop(offer, target, accepted, finish);
         },
         .selection => |selection| {
             if (state.selection_offer) |old| {
@@ -1154,29 +1194,6 @@ fn dataSourceListener(data_source: *wl.DataSource, event: wl.DataSource.Event, s
         },
         .target, .dnd_drop_performed, .dnd_finished, .action => {},
     }
-}
-
-fn receiveUriListDrop(state: *State, offer: *wl.DataOffer) !usize {
-    var fds: [2]i32 = undefined;
-    switch (posix.errno(linux.pipe2(&fds, .{ .CLOEXEC = true }))) {
-        .SUCCESS => {},
-        else => return error.PipeFailed,
-    }
-    defer closeFd(fds[0]);
-
-    offer.receive(TEXT_URI_LIST, fds[1]);
-    closeFd(fds[1]);
-    _ = state.shared.display.flush();
-
-    var data: [8192]u8 = undefined;
-    var len: usize = 0;
-    while (len < data.len) {
-        const n = try posix.read(fds[0], data[len..]);
-        if (n == 0) break;
-        len += n;
-    }
-
-    return parseUriListIntoBuffers(data[0..len], &state.drop_paths_buf, &state.drop_slices);
 }
 
 fn decodeFileUriToBuffer(text: []const u8, out: []u8) ?[]const u8 {
