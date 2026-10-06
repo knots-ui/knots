@@ -275,6 +275,12 @@ pub const Backend = struct {
         return drop_paths.copy(allocator, self.drop_slices[0..n]);
     }
 
+    pub fn requestPaste(self: *Self, owner: *window.Window) !void {
+        const text = try self.getClipboardText(owner.allocator) orelse return;
+        defer owner.allocator.free(text);
+        owner.pushPaste(text);
+    }
+
     pub fn getClipboardText(self: *Self, allocator: std.mem.Allocator) !?[]u8 {
         if (win32.IsClipboardFormatAvailable(@backingInt(win32.CF_UNICODETEXT)) == 0) return null;
         if (win32.OpenClipboard(self.hwnd) == 0) return null;

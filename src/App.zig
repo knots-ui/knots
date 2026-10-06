@@ -364,11 +364,11 @@ fn renderFrame(
         dropped_paths,
     );
 
-    const paste_text = if (input_types.pasteRequested(input.key_events))
-        try viewport.window.getClipboardText(self.allocator)
-    else
-        null;
-    defer if (paste_text) |text| self.allocator.free(text);
+    if (input_types.pasteRequested(input.key_events)) {
+        try viewport.window.requestPaste();
+    }
+    const paste_text = viewport.window.takePaste();
+    defer if (paste_text) |text| viewport.window.allocator.free(text);
 
     var frame = try viewport.ui_ctx.beginFrame(.{
         .input = input,

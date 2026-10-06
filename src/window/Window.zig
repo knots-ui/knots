@@ -40,6 +40,7 @@ cursor_shape: CursorShape = .default,
 frame_handler: ?FrameHandler = null,
 accessibility: ?*if (builtin.target.cpu.arch.isWasm()) void else @import("native_accessibility") = null,
 input_dirty: bool = false,
+pending_paste: ?[]u8 = null,
 
 const Window = @This();
 
@@ -81,6 +82,7 @@ pub fn deinit(self: *Window) void {
     self.backend.deinit();
     self.char_buf.deinit(self.allocator);
     self.key_events.deinit(self.allocator);
+    if (self.pending_paste) |text| self.allocator.free(text);
 }
 
 pub fn startCapture(self: *Window) void {
@@ -234,8 +236,25 @@ pub fn consumeDrops(self: *Window, allocator: std.mem.Allocator) ![][]const u8 {
     return self.backend.consumeDrops(self, allocator, n);
 }
 
-pub fn getClipboardText(self: *Window, allocator: std.mem.Allocator) !?[]u8 {
-    return self.backend.getClipboardText(allocator);
+pub fn requestPaste(self: *Window) !void {
+    try self.backend.requestPaste(self);
+}
+
+pub fn takePaste(self: *Window) ?[]u8 {
+    const text = self.pending_paste;
+    self.pending_paste = null;
+    return text;
+}
+
+pub fn pushPaste(self: *Window, text: []const u8) void {
+    const owned = self.allocator.dupe(u8, text) catch |err| {
+        self.input_error = err;
+        self.markInputChanged();
+        return;
+    };
+    if (self.pending_paste) |old| self.allocator.free(old);
+    self.pending_paste = owned;
+    self.markInputChanged();
 }
 
 pub fn setClipboardText(self: *Window, allocator: std.mem.Allocator, text: []const u8) !bool {
