@@ -16,7 +16,7 @@ var counter_items: [100]isize = undefined;
 var counter_items_count: usize = 0;
 var show_details = true;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const arena = app.arena();
 
     const actions = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 8, .@"align" = .center } };

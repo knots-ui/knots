@@ -9,23 +9,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    configureModule(b, watch, target);
-
-    const tests = b.addTest(.{ .root_module = watch });
-    const test_step = b.step("test", "Run watcher tests");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
-}
-
-fn configureModule(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     switch (target.result.os.tag) {
-        .macos => {
-            module.linkFramework("CoreFoundation", .{});
-            module.linkFramework("CoreServices", .{});
-        },
-        .windows => {
-            const win32 = b.dependency("win32", .{});
-            module.addImport("win32", win32.module("win32"));
-        },
+        .macos => watch.linkFramework("CoreServices", .{}),
+        .windows => if (b.lazyDependency("win32", .{})) |win32| watch.addImport("win32", win32.module("win32")),
         else => {},
     }
+
+    const tests = b.addTest(.{ .root_module = watch });
+    b.step("test", "Test the watcher").dependOn(&b.addRunArtifact(tests).step);
 }

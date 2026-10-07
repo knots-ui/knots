@@ -12,6 +12,13 @@ pub const bridge_export_symbol_names = [_][]const u8{
     "knots_last_error_copy",
 };
 
+pub const dev_export_symbol_names = [_][]const u8{
+    "knots_dev_buffer",
+    "knots_dev_save",
+    "knots_dev_load",
+    "knots_dev_problem",
+};
+
 const thread_export_symbol_names = [_][]const u8{
     "knots_worker_run",
     "knots_worker_complete",

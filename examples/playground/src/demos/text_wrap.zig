@@ -21,7 +21,7 @@ const with_newlines =
 var notes: std.ArrayList(u8) = .empty;
 var allocator: ?std.mem.Allocator = null;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     allocator = app.ui().allocator;
     const root = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .column, .gap = 16 } };
     _ = try root.open(app);

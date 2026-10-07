@@ -22,7 +22,7 @@ var material: ui.Material = .glass;
 const white_tint: ui.Color.Input = .{ .color = ui.Color.rgba(255, 255, 255, 22) };
 const ink: ui.Color.Input = .{ .color = ui.Color.rgba(16, 20, 28, 255) };
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const row = Rect{ .key = .src(@src()), .style = &.{ .direction = .row, .gap = 20 } };
     _ = try row.open(app);
     try controls(app);

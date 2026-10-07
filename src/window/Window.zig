@@ -218,6 +218,20 @@ pub fn collectInput(self: *Window) !Input {
     };
 }
 
+pub fn setInput(self: *Window, frame: Input) void {
+    self.focused = frame.focused;
+    self.mouse = .{ .pos = frame.pos, .buttons = frame.mouse };
+    self.scroll = frame.scroll;
+    self.key_down = frame.key_down.*;
+    self.mods = .{ .shift = frame.shift_held, .ctrl = frame.ctrl_held, .alt = frame.alt_held, .super = frame.super_held };
+    self.char_buf.appendSlice(self.allocator, frame.chars) catch |err| {
+        self.input_error = err;
+    };
+    self.key_events.appendSlice(self.allocator, frame.key_events) catch |err| {
+        self.input_error = err;
+    };
+}
+
 pub fn finishInputFrame(self: *Window) void {
     self.char_buf.clearRetainingCapacity();
     self.key_events.clearRetainingCapacity();

@@ -14,7 +14,7 @@ const canvas_width = 720;
 const canvas_height = 480;
 var canvas_effect: u32 = 0;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const controls = Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(220) } };
     _ = try controls.open(app);
     const selection = try app.interact(SelectInput(Effect){

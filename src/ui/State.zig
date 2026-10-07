@@ -4,7 +4,6 @@ const math = @import("math");
 const animation = @import("animation.zig");
 const style = @import("style");
 const Layer = @import("layout").Layer;
-const StateBridge = @import("StateBridge.zig");
 
 pub const TextInput = struct {
     cursor: u32 = 0,
@@ -333,46 +332,56 @@ pub fn forEach(
     self.storage.forEach(name, ctx, f);
 }
 
-fn bridged(comptime field_name: []const u8) bool {
+/// Style transitions are rebuilt from styles, so they are not saved.
+fn saved(comptime field_name: []const u8) bool {
     return !std.mem.eql(u8, field_name, "style_transition");
 }
 
-/// Restore widget values from the host-owned bridge. Transient hit/focus
-/// scalars remain frame-local because the host input router owns them.
-pub fn importBridge(self: *State, bridge: *StateBridge) !void {
-    const field_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
-    inline for (field_names) |field_name| {
-        const name: std.meta.FieldEnum(Storage.StoragePools) = @field(std.meta.FieldEnum(Storage.StoragePools), field_name);
-        const PoolType = @FieldType(Storage.StoragePools, field_name);
-        const ValueType = PoolType.Value;
-        const Context = struct {
-            state: *State,
-
-            fn restore(context: @This(), source: *StateBridge, id: u64) !void {
-                const value = (try source.readDomain(ValueType, stateDomain(field_name), id)) orelse return error.MissingStateValue;
-                const target = try context.state.storage.getOrCreate(name, context.state.allocator, id, context.state.frame);
-                target.* = value;
-            }
-        };
-        if (comptime bridged(field_name)) try bridge.forEachDomain(stateDomain(field_name), Context{ .state = self }, Context.restore);
-    }
+fn SavedEntry(comptime T: type) type {
+    return struct { id: Element.Id, value: T };
 }
 
-/// Commit every live widget value after hit testing, before module execution.
-pub fn exportBridge(self: *State, bridge: *StateBridge) !void {
-    const field_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
-    inline for (field_names) |field_name| {
-        if (comptime !bridged(field_name)) continue;
+pub const Saved = blk: {
+    const pool_names = @typeInfo(Storage.StoragePools).@"struct".field_names;
+    var names: [pool_names.len - 1][]const u8 = undefined;
+    var types: [pool_names.len - 1]type = undefined;
+    var attrs: [pool_names.len - 1]std.builtin.Type.Struct.FieldAttributes = undefined;
+    var index: usize = 0;
+    for (pool_names) |pool_name| {
+        if (!saved(pool_name)) continue;
+        const List = []const SavedEntry(@FieldType(Storage.StoragePools, pool_name).Value);
+        const empty: List = &.{};
+        names[index] = pool_name;
+        types[index] = List;
+        attrs[index] = .{ .default_value_ptr = @ptrCast(&empty) };
+        index += 1;
+    }
+    break :blk @Struct(.auto, null, &names, &types, &attrs);
+};
+
+pub fn save(self: *State, allocator: std.mem.Allocator) !Saved {
+    var result: Saved = .{};
+    inline for (@typeInfo(Saved).@"struct".field_names) |field_name| {
         const pool = &@field(self.storage.pools, field_name);
+        const entries = try allocator.alloc(@typeInfo(@FieldType(Saved, field_name)).pointer.child, pool.map.count());
         var iterator = pool.map.iterator();
-        while (iterator.next()) |entry| {
-            try bridge.writeDomain(PoolValueType(@TypeOf(pool.*)), stateDomain(field_name), entry.key_ptr.*, entry.value_ptr.value);
+        var index: usize = 0;
+        while (iterator.next()) |entry| : (index += 1) {
+            entries[index] = .{ .id = entry.key_ptr.*, .value = entry.value_ptr.value };
+        }
+        @field(result, field_name) = entries;
+    }
+    return result;
+}
+
+pub fn load(self: *State, values: *const Saved) !void {
+    inline for (@typeInfo(Saved).@"struct".field_names) |field_name| {
+        const name = @field(std.meta.FieldEnum(Storage.StoragePools), field_name);
+        for (@field(values, field_name)) |entry| {
+            const target = try self.storage.getOrCreate(name, self.allocator, entry.id, self.frame);
+            target.* = entry.value;
         }
     }
-}
-
-fn stateDomain(comptime field_name: []const u8) u64 {
-    return StateBridge.key("knots.ui.state." ++ field_name);
 }
 
 // Window-stacking policy: floating windows occupy a band of layers between
@@ -538,6 +547,26 @@ fn uniformTtls(ttl: u32) Ttls {
         .measured = ttl,
         .anim = ttl,
     };
+}
+
+test "saved state survives the wire" {
+    const wire = @import("wire");
+    var state = init(testing.allocator, uniformTtls(DEFAULT_ANIM_TTL_FRAMES));
+    defer state.deinit();
+    const scroll = try state.getOrCreate(.scroll, testing.allocator, 7);
+    scroll.offset = .{ 3, 4 };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var bytes: std.ArrayList(u8) = .empty;
+    try wire.encode(allocator, &bytes, try state.save(allocator));
+    const decoded = try wire.decode(Saved, allocator, bytes.items);
+
+    var replacement = init(testing.allocator, uniformTtls(DEFAULT_ANIM_TTL_FRAMES));
+    defer replacement.deinit();
+    try replacement.load(&decoded);
+    try testing.expectEqual(@as(f32, 4), replacement.get(.scroll, 7).?.offset[1]);
 }
 
 test "getOrCreate returns default state" {

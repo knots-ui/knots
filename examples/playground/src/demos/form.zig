@@ -31,7 +31,7 @@ const FormState = struct {
 var form_state: FormState = .{};
 var allocator: ?std.mem.Allocator = null;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     allocator = app.ui().allocator;
     const arena = app.arena();
 
