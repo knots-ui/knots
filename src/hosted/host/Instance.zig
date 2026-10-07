@@ -4,14 +4,12 @@ const abi = @import("abi");
 const Workers = @import("Workers.zig");
 const wasm_module = @import("module.zig");
 
-const Guest = @This();
+const Instance = @This();
 const log = std.log.scoped(.dev_host);
 
 /// Stops a call that does not return.
 const fuel_per_call: u64 = 4_000_000_000;
 const memory_bytes: i64 = 1024 * 1024 * 1024;
-
-pub const Problem = enum(u32) { none, build_failed, crashed };
 
 pub const Runtime = struct {
     engine: wasmtime.Engine,
@@ -23,7 +21,7 @@ pub const Runtime = struct {
     }
 };
 
-pub const Error = error{ Trapped, MissingExport, OutOfMemory };
+pub const Error = error{ Trapped, MissingExport, OutOfMemory, InvalidMemory };
 
 gpa: std.mem.Allocator,
 runtime: *Runtime,
@@ -37,7 +35,7 @@ memory: union(enum) {
 workers: ?*Workers = null,
 trap: ?[]u8 = null,
 
-pub fn init(gpa: std.mem.Allocator, runtime: *Runtime, prepared: wasm_module.Prepared) !Guest {
+pub fn init(gpa: std.mem.Allocator, runtime: *Runtime, prepared: wasm_module.Prepared) !Instance {
     var diagnostics: wasmtime.Diagnostics = .{};
     defer diagnostics.deinit();
     errdefer logDiagnostics(gpa, "load_failed", &diagnostics);
@@ -71,7 +69,7 @@ pub fn init(gpa: std.mem.Allocator, runtime: *Runtime, prepared: wasm_module.Pre
     };
 }
 
-pub fn deinit(self: *Guest) void {
+pub fn deinit(self: *Instance) void {
     if (self.workers) |workers| workers.stop();
     self.store.deinit();
     self.module.deinit();
@@ -82,13 +80,13 @@ pub fn deinit(self: *Guest) void {
     if (self.trap) |message| self.gpa.free(message);
 }
 
-pub fn call(self: *Guest, name: []const u8, arguments: []const u32, comptime Result: type) Error!Result {
+pub fn call(self: *Instance, name: []const u8, arguments: []const u32, comptime Result: type) Error!Result {
     const result = try self.invoke(name, arguments, Result);
     try self.invoke("knots_hosted_flush", &.{}, void);
     return result;
 }
 
-fn invoke(self: *Guest, name: []const u8, arguments: []const u32, comptime Result: type) Error!Result {
+fn invoke(self: *Instance, name: []const u8, arguments: []const u32, comptime Result: type) Error!Result {
     var diagnostics: wasmtime.Diagnostics = .{};
     defer diagnostics.deinit();
     const function = self.instance.function(name) catch return error.MissingExport;
@@ -109,43 +107,45 @@ fn invoke(self: *Guest, name: []const u8, arguments: []const u32, comptime Resul
     return @bitCast(results[0].of.i32);
 }
 
-pub fn range(self: *Guest, pointer: u32, length: u32) []u8 {
+pub fn range(self: *Instance, pointer: u32, length: u32) []u8 {
     return switch (self.memory) {
         .own => |memory| memory.range(pointer, length),
         .shared => |memory| memory.range(pointer, length),
     } catch &.{};
 }
 
-pub fn frame(self: *Guest, window: abi.Window, input: []const u8) Error!void {
-    try self.write("knots_hosted_buffer", input);
+pub fn frame(self: *Instance, window: abi.Window, input: []const u8) Error!void {
+    try self.write(input);
     try self.call("knots_hosted_frame", &.{@backingInt(window)}, void);
 }
 
-pub fn saveState(self: *Guest) Error!?[]u8 {
+pub fn saveState(self: *Instance) Error!?[]u8 {
     const length = try self.call("knots_dev_save", &.{}, u32);
     if (length == 0) return null;
     // The buffer has the state, and keeps it at its length.
-    const pointer = try self.call("knots_dev_buffer", &.{length}, u32);
+    const pointer = try self.call("knots_buffer", &.{length}, u32);
     return try self.gpa.dupe(u8, self.range(pointer, length));
 }
 
-pub fn loadState(self: *Guest, state: []const u8) Error!void {
-    try self.write("knots_dev_buffer", state);
+pub fn loadState(self: *Instance, state: []const u8) Error!void {
+    try self.write(state);
     try self.call("knots_dev_load", &.{}, void);
 }
 
-pub fn showProblem(self: *Guest, problem: Problem, details: []const u8) Error!void {
-    try self.write("knots_dev_buffer", details);
+pub fn showProblem(self: *Instance, problem: abi.Problem, details: []const u8) Error!void {
+    try self.write(details);
     try self.call("knots_dev_problem", &.{@backingInt(problem)}, void);
 }
 
-fn write(self: *Guest, buffer: []const u8, bytes: []const u8) Error!void {
-    const pointer = try self.call(buffer, &.{@intCast(bytes.len)}, u32);
+fn write(self: *Instance, bytes: []const u8) Error!void {
+    const pointer = try self.call("knots_buffer", &.{@intCast(bytes.len)}, u32);
     if (pointer == 0) return error.OutOfMemory;
-    @memcpy(self.range(pointer, @intCast(bytes.len)), bytes);
+    const destination = self.range(pointer, @intCast(bytes.len));
+    if (destination.len != bytes.len) return error.InvalidMemory;
+    @memcpy(destination, bytes);
 }
 
-pub fn spawn(self: *Guest, io: std.Io, job: Workers.Job, context: *anyopaque, wake: *const fn (*anyopaque) void) bool {
+pub fn spawn(self: *Instance, io: std.Io, job: Workers.Job, context: *anyopaque, wake: *const fn (*anyopaque) void) bool {
     const memory = switch (self.memory) {
         .shared => |memory| memory,
         .own => return false,
@@ -163,7 +163,7 @@ pub fn spawn(self: *Guest, io: std.Io, job: Workers.Job, context: *anyopaque, wa
     });
 }
 
-pub fn releaseTasks(self: *Guest) Error!usize {
+pub fn releaseTasks(self: *Instance) Error!usize {
     const workers = self.workers orelse return 0;
     var finished: std.ArrayList(u32) = .empty;
     defer finished.deinit(self.gpa);

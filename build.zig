@@ -64,11 +64,13 @@ pub fn build(b: *std.Build) void {
         std.debug.panic("knots: the {t} platform needs a {s} target", .{ platform, if (platform == .native) "native" else "wasm32" });
     const dev_option = b.option(bool, "dev", "Build the application for `zig build dev` (see HMR.zig).") orelse false;
     const web_threads_option = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
+    if (dev_option and platform == .native)
+        std.debug.panic("knots: -Ddev needs a wasm32 target (see HMR.zig)", .{});
     const dev = dev_option or platform == .hosted;
     const web_threads = web_threads_option and platform == .browser;
     const wasm_threads = web_threads or
         (platform == .hosted and std.Target.wasm.featureSetHas(target.result.cpu.features, .atomics));
-    if (platform != .native) web_build.configureTarget(&target, wasm_threads);
+    if (platform != .native) web_build.configureWasmTarget(&target, wasm_threads);
 
     const accesskit_dep = if (platform == .native)
         b.dependency("accesskit", .{ .target = target, .optimize = optimize })
@@ -101,7 +103,7 @@ pub fn build(b: *std.Build) void {
     const hosted_imports_mod = if (platform == .hosted) b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/hosted/imports.zig"),
+        .root_source_file = b.path("src/hosted/guest/imports.zig"),
     }) else null;
 
     const wasm_threads_mod = if (wasm_threads) b.createModule(.{
@@ -133,7 +135,7 @@ pub fn build(b: *std.Build) void {
         .hosted => b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/hosted/guest.zig"),
+            .root_source_file = b.path("src/hosted/guest/root.zig"),
             .imports = &.{
                 .{ .name = "wire", .module = wire_mod },
                 .{ .name = "imports", .module = hosted_imports_mod.? },
@@ -141,6 +143,12 @@ pub fn build(b: *std.Build) void {
         }),
     };
     if (wasm_threads_mod) |threads| platform_impl_mod.?.addImport("wasm_threads", threads);
+    const wasm_buffer_mod = if (platform_impl_mod) |platform_impl| b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/wasm/buffer.zig"),
+        .imports = &.{.{ .name = "platform_impl", .module = platform_impl }},
+    }) else null;
 
     const gpu_impl_mod = if (platform == .hosted) b.createModule(.{
         .target = target,
@@ -218,6 +226,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "gpu", .module = gpu_mod },
                 .{ .name = "wire", .module = wire_mod },
                 .{ .name = "hosted", .module = platform_impl_mod.? },
+                .{ .name = "wasm_buffer", .module = wasm_buffer_mod.? },
                 .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
             },
         });
@@ -462,7 +471,11 @@ pub fn build(b: *std.Build) void {
     platform_opts.addOption(Platform, "platform", platform);
     platform_opts.addOption(bool, "dev", dev);
     mod.addOptions("platform_config", platform_opts);
-    if (dev) mod.addImport("wire", wire_mod);
+    if (dev) {
+        mod.addImport("wire", wire_mod);
+        mod.addImport("abi", abi_mod);
+        mod.addImport("wasm_buffer", wasm_buffer_mod.?);
+    }
     if (platform_impl_mod) |platform_impl| mod.addImport("platform_impl", platform_impl);
     if (accesskit_dep) |accesskit| mod.addImport("accesskit", accesskit.module("accesskit"));
     if (native_accessibility_mod) |native_accessibility| mod.addImport("native_accessibility", native_accessibility);
@@ -522,6 +535,16 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
     if (platform == .native) {
+        const dev_host_module_tests = b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("src/hosted/host/module.zig"),
+            .target = target,
+            .optimize = optimize,
+        }) });
+        test_step.dependOn(&b.addRunArtifact(dev_host_module_tests).step);
+    }
+    // Only the dev host's knots declares this, so other builds skip wasmtime.
+    const dev_host_option = b.option(bool, "dev_host", "Declare the HMR dev host's module (see HMR.zig).") orelse false;
+    if (platform == .native and dev_host_option) {
         const watch = b.dependency("watch", .{ .target = target, .optimize = .ReleaseFast }).module("watch");
         const hmr_builder = b.createModule(.{
             .root_source_file = b.path("src/hmr/Builder.zig"),
@@ -529,8 +552,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{.{ .name = "watch", .module = watch }},
         });
-        const host_mod = b.createModule(.{
-            .root_source_file = b.path("src/hosted/host/Host.zig"),
+        const host_mod = b.addModule("knots_dev_host", .{
+            .root_source_file = b.path("src/hosted/host/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -540,28 +563,13 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "gpu_impl", .module = gpu_impl_mod },
                 .{ .name = "wire", .module = wire_mod },
                 .{ .name = "abi", .module = abi_mod },
+                .{ .name = "hmr_builder", .module = hmr_builder },
             },
         });
         if (b.lazyDependency("wasmtime", .{ .target = target, .optimize = .debug })) |wasmtime|
             host_mod.addImport("wasmtime", wasmtime.module("wasmtime"));
         if (target.result.os.tag == .macos)
             host_mod.addImport("objc", b.dependency("zig_objc", .{ .target = target, .optimize = optimize }).module("objc"));
-        const dev_host = b.addExecutable(.{ .name = "knots-dev-host", .root_module = b.createModule(.{
-            .root_source_file = b.path("src/hmr/host.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "Host", .module = host_mod },
-                .{ .name = "hmr_builder", .module = hmr_builder },
-            },
-        }) });
-        b.installArtifact(dev_host);
-        const dev_host_module_tests = b.addTest(.{ .root_module = b.createModule(.{
-            .root_source_file = b.path("src/hosted/host/module.zig"),
-            .target = target,
-            .optimize = optimize,
-        }) });
-        test_step.dependOn(&b.addRunArtifact(dev_host_module_tests).step);
     }
 
     if (platform == .native) {

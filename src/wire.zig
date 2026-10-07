@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const bytes_max: usize = 32 * 1024 * 1024;
+pub const bytes_max: usize = std.math.maxInt(u32);
 pub const Error = error{ InvalidWire, LimitExceeded, OutOfMemory, Unsupported };
 
 pub fn encode(allocator: std.mem.Allocator, list: *std.ArrayList(u8), value: anytype) Error!void {
@@ -13,6 +13,56 @@ pub fn decode(comptime T: type, allocator: std.mem.Allocator, bytes: []const u8)
     const result = try reader.value(T);
     try reader.finish();
     return result;
+}
+
+/// Changes when the encoding of `T` does, so a reader can reject bytes that
+/// another version of `T` wrote.
+pub fn schema(comptime T: type) u64 {
+    return comptime blk: {
+        @setEvalBranchQuota(1_000_000);
+        var hasher = std.hash.Wyhash.init(0);
+        hashSchema(&hasher, T, 0);
+        break :blk hasher.final();
+    };
+}
+
+fn hashSchema(comptime hasher: *std.hash.Wyhash, comptime T: type, comptime depth: u32) void {
+    if (depth > 32) @compileError("wire: " ++ @typeName(T) ++ " nests too deeply for a schema");
+    hasher.update(@tagName(@typeInfo(T)));
+    switch (@typeInfo(T)) {
+        .int, .float => hasher.update(@typeName(T)),
+        .@"enum" => |info| {
+            hashSchema(hasher, info.tag_type, depth + 1);
+            for (info.field_names, info.field_values) |name, field_value|
+                hasher.update(std.fmt.comptimePrint("{s}={d};", .{ name, field_value }));
+        },
+        .optional => |info| hashSchema(hasher, info.child, depth + 1),
+        .array => |info| {
+            hasher.update(std.fmt.comptimePrint("{d}", .{info.len}));
+            hashSchema(hasher, info.child, depth + 1);
+        },
+        .vector => |info| {
+            hasher.update(std.fmt.comptimePrint("{d}", .{info.len}));
+            hashSchema(hasher, info.child, depth + 1);
+        },
+        .@"struct" => |info| {
+            if (info.backing_integer) |Backing| hashSchema(hasher, Backing, depth + 1);
+            for (info.field_names, info.field_types, info.field_attrs) |name, Field, attrs| {
+                if (attrs.@"comptime") continue;
+                hasher.update(name);
+                hashSchema(hasher, Field, depth + 1);
+            }
+        },
+        .@"union" => |info| for (info.field_names, info.field_types) |name, Field| {
+            hasher.update(name);
+            hashSchema(hasher, Field, depth + 1);
+        },
+        .pointer => |info| {
+            hasher.update(@tagName(info.size));
+            hashSchema(hasher, info.child, depth + 1);
+        },
+        else => {},
+    }
 }
 
 fn Wide(comptime T: type) type {
@@ -293,6 +343,16 @@ test "values round trip and truncation is rejected" {
 
     try std.testing.expectError(error.InvalidWire, decode(bool, arena.allocator(), &.{2}));
     try std.testing.expectError(error.InvalidWire, decode(Kind, arena.allocator(), &.{3}));
+}
+
+test "schemas change with the encoding" {
+    const A = struct { x: u32, y: []const u8 };
+    const B = struct { x: u32, y: []const u8 };
+    const Reordered = struct { y: []const u8, x: u32 };
+    const Wider = struct { x: u64, y: []const u8 };
+    try std.testing.expectEqual(schema(A), schema(B));
+    try std.testing.expect(schema(A) != schema(Reordered));
+    try std.testing.expect(schema(A) != schema(Wider));
 }
 
 test "pointers to code cannot be encoded" {

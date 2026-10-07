@@ -1,3 +1,5 @@
+//! Exports `__stack_pointer`, so each worker instance runs on its own stack.
+
 const std = @import("std");
 
 pub const stack_pointer_export = "__stack_pointer";

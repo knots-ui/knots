@@ -630,7 +630,7 @@ async function startDev(options) {
   return app;
 }
 
-// What the app shows over itself (see src/dev.zig).
+// What the app shows over itself: `Problem` in src/hosted/abi.zig.
 const DEV_NONE = 0;
 const DEV_BUILD_FAILED = 1;
 const DEV_CRASHED = 2;
@@ -644,7 +644,7 @@ async function fetchManifest() {
 
 function writeDevBuffer(dev, bytes) {
   const length = wasmUsizeArg(bytes.length, Number(dev.js_bridge_pointer_size()), "length");
-  new Uint8Array(dev.memory.buffer, Number(dev.knots_dev_buffer(length)), bytes.length).set(bytes);
+  new Uint8Array(dev.memory.buffer, Number(dev.knots_buffer(length)), bytes.length).set(bytes);
 }
 
 // The widget state as base64, or undefined.
@@ -652,7 +652,7 @@ function saveWidgetState(dev) {
   try {
     const length = Number(dev.knots_dev_save());
     if (length === 0) return undefined;
-    const pointer = Number(dev.knots_dev_buffer(wasmUsizeArg(length, Number(dev.js_bridge_pointer_size()), "length")));
+    const pointer = Number(dev.knots_buffer(wasmUsizeArg(length, Number(dev.js_bridge_pointer_size()), "length")));
     const bytes = new Uint8Array(dev.memory.buffer, pointer, length);
     let binary = "";
     for (let offset = 0; offset < length; offset += 0x8000)

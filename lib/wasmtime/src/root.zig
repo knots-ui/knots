@@ -273,6 +273,7 @@ pub const SharedMemory = struct {
         self.* = undefined;
     }
 
+    /// Thread-safe. A shared memory does not move when it grows.
     pub fn range(self: SharedMemory, offset: usize, length: usize) Error![]u8 {
         const length_total = c.wasmtime_sharedmemory_data_size(self.handle);
         if (offset > length_total) return error.InvalidMemoryRange;
@@ -296,6 +297,7 @@ pub const Linker = struct {
         self.* = undefined;
     }
 
+    /// Calls `function` with `context` first. An error result traps.
     pub fn defineFunction(
         self: *Linker,
         module: []const u8,

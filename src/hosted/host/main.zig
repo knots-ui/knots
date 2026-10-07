@@ -2,8 +2,7 @@
 
 const std = @import("std");
 const Builder = @import("hmr_builder");
-const Host = @import("Host");
-const app_nap = Host.app_nap;
+const Host = @import("Host.zig");
 
 pub fn main(init: std.process.Init) !void {
     const gpa = std.heap.smp_allocator;
@@ -18,8 +17,6 @@ pub fn main(init: std.process.Init) !void {
     var host: Host = undefined;
     try host.init(gpa, io);
     defer host.deinit();
-
-    app_nap.disable();
 
     const builder = try Builder.init(
         io,

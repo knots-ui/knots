@@ -1,13 +1,12 @@
 const std = @import("std");
 const ui = @import("ui");
 const wire = @import("wire");
+const Problem = @import("abi").Problem;
 const allocator = @import("platform_impl").allocator;
+const buffer = &@import("wasm_buffer").bytes;
 const App = @import("App.zig");
 
-pub const Problem = enum(u32) { none, build_failed, crashed };
-
 var app: ?*App = null;
-var buffer: std.ArrayList(u8) = .empty;
 var problem: Problem = .none;
 var details: []u8 = &.{};
 
@@ -16,12 +15,7 @@ pub fn attach(value: *App) void {
 }
 
 const WidgetState = struct { viewports: []const ui.State.Saved };
-
-export fn knots_dev_buffer(length: usize) usize {
-    buffer.ensureTotalCapacity(allocator, @max(length, 1)) catch return 0;
-    buffer.items.len = length;
-    return @intFromPtr(buffer.items.ptr);
-}
+const widget_state_schema = wire.schema(WidgetState);
 
 export fn knots_dev_save() usize {
     const target = app orelse return 0;
@@ -32,7 +26,8 @@ export fn knots_dev_save() usize {
     for (target.secondary_viewports.items, viewports[1..]) |viewport, *saved|
         saved.* = viewport.ui_ctx.ui.state.save(arena.allocator()) catch return 0;
     buffer.clearRetainingCapacity();
-    wire.encode(allocator, &buffer, WidgetState{ .viewports = viewports }) catch return 0;
+    wire.encode(allocator, buffer, widget_state_schema) catch return 0;
+    wire.encode(allocator, buffer, WidgetState{ .viewports = viewports }) catch return 0;
     return buffer.items.len;
 }
 
@@ -40,12 +35,22 @@ export fn knots_dev_load() void {
     const target = app orelse return;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const state = wire.decode(WidgetState, arena.allocator(), buffer.items) catch return;
+    var reader: wire.Reader = .{ .allocator = arena.allocator(), .data = buffer.items };
+    const schema = reader.value(u64) catch return;
+    if (schema != widget_state_schema) return std.log.info("dev: the widget state changed shape, so it starts over", .{});
+    const state = reader.value(WidgetState) catch return;
+    reader.finish() catch return;
     for (state.viewports, 0..) |*saved, index| {
-        const viewport = if (index == 0) target.main_viewport else if (index - 1 < target.secondary_viewports.items.len) target.secondary_viewports.items[index - 1] else break;
+        const viewport = viewportAt(target, index) orelse break;
         viewport.ui_ctx.ui.state.load(saved) catch {};
     }
     target.main_viewport.window.requestFrame();
+}
+
+fn viewportAt(target: *App, index: usize) ?@FieldType(App, "main_viewport") {
+    if (index == 0) return target.main_viewport;
+    if (index - 1 >= target.secondary_viewports.items.len) return null;
+    return target.secondary_viewports.items[index - 1];
 }
 
 export fn knots_dev_problem(kind: Problem) void {
@@ -59,7 +64,7 @@ pub fn render(frame: *ui.Frame) !void {
     const title, const reason = switch (problem) {
         .none => return,
         .build_failed => .{ "Build failed", "The last working build is still running. Fix the error and save to retry." },
-        .crashed => .{ "The app crashed", "It restarted. Fix the error and save to reload." },
+        .crashed => .{ "The app crashed", "It restarted on the last build that drew a frame. Fix the error and save to reload." },
     };
     const component = ui.component;
     var open = true;

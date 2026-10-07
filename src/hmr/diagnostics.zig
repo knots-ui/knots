@@ -57,21 +57,21 @@ fn runnerLine(line: []const u8) bool {
 
 const sample =
     \\dev
-    \\+- install generated to hmr/staging/app.wasm
-    \\   +- compile exe knots-hmr-app debug wasm32-freestanding 1 errors
+    \\+- install playground-dev to hmr/staging/app.wasm
+    \\   +- compile exe playground-dev debug wasm32-freestanding 1 errors
     \\/app/src/demos/buttons.zig:12:22: error: expected type 'isize', found '*const [4:0]u8'
     \\var counter: isize = "zero";
     \\                     ^~~~~~
     \\referenced by:
     \\    main: /app/src/demos/buttons.zig:33:72
-    \\    knots_hmr_init: /knots/src/hmr/guest.zig:38:46
+    \\    webMain: /app/src/main.zig:20:46
     \\error: 1 compilation errors
-    \\failed command: /zig build-exe -fno-entry -fstrip -Odebug -target wasm32-freestanding --dep hmr
+    \\failed command: /zig build-exe -fno-entry -fstrip -Odebug -target wasm32-freestanding --dep knots
     \\
     \\Build Summary: 29/32 steps succeeded (1 failed)
     \\dev transitive failure
-    \\+- install generated to hmr/staging/app.wasm transitive failure
-    \\   +- compile exe knots-hmr-app debug wasm32-freestanding 1 errors
+    \\+- install playground-dev to hmr/staging/app.wasm transitive failure
+    \\   +- compile exe playground-dev debug wasm32-freestanding 1 errors
     \\
 ;
 
@@ -85,7 +85,7 @@ test "diagnostics drop build runner noise" {
         \\                     ^~~~~~
         \\referenced by:
         \\    main: /app/src/demos/buttons.zig:33:72
-        \\    knots_hmr_init: /knots/src/hmr/guest.zig:38:46
+        \\    webMain: /app/src/main.zig:20:46
     , try summary(arena.allocator(), sample));
 }
 

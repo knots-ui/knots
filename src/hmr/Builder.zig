@@ -1,3 +1,6 @@
+//! Runs `zig build --verbose` once for the app's compiler command, then
+//! reruns that command as an incremental compiler on each change.
+
 const std = @import("std");
 const changes = @import("changes.zig");
 const command_line = @import("command.zig");
@@ -93,6 +96,7 @@ pub fn init(io: std.Io, gpa: std.mem.Allocator, environ: *const std.process.Envi
     try build_argv.appendSlice(allocator, &.{ options.zig_exe, "build", options.step, "-Dknots_hmr_app_only", "--build-file", options.build_file, "--prefix", prefix, "--verbose" });
     try build_argv.appendSlice(allocator, options.build_args);
 
+    // A terminal would make `zig build` force colors on its children.
     var tool_environ = try environ.clone(allocator);
     try tool_environ.put("NO_COLOR", "1");
 
@@ -126,7 +130,7 @@ fn watchChanges(self: *Builder, stop: *const std.atomic.Value(bool)) !void {
     defer watcher.deinit();
 
     // Watched before the first stamps, so no change falls between the two.
-    watchInputs(&watcher, self.arena.allocator(), self.inputs);
+    watchInputs(&watcher, self.gpa, self.inputs);
     var stamps_arena: std.heap.ArenaAllocator = .init(self.gpa);
     defer stamps_arena.deinit();
     var last_stamps = try changes.stamps(stamps_arena.allocator(), self.io, self.inputs);
@@ -152,7 +156,7 @@ fn watchChanges(self: *Builder, stop: *const std.atomic.Value(bool)) !void {
 
         if (watched_revision != self.inputs_revision) {
             watched_revision = self.inputs_revision;
-            watchInputs(&watcher, self.arena.allocator(), self.inputs);
+            watchInputs(&watcher, self.gpa, self.inputs);
             last_stamps = try changes.stamps(stamps_arena.allocator(), self.io, self.inputs);
         }
     }
@@ -322,13 +326,14 @@ fn run(self: *const Builder, allocator: std.mem.Allocator, argv: []const []const
     });
 }
 
-fn watchInputs(watcher: *Watch, allocator: std.mem.Allocator, inputs: []const []const u8) void {
+fn watchInputs(watcher: *Watch, gpa: std.mem.Allocator, inputs: []const []const u8) void {
     var directories: std.ArrayList([]const u8) = .empty;
+    defer directories.deinit(gpa);
     for (inputs) |file| {
         const directory = std.fs.path.dirname(file) orelse continue;
         for (directories.items) |known| {
             if (std.mem.eql(u8, known, directory)) break;
-        } else directories.append(allocator, directory) catch return;
+        } else directories.append(gpa, directory) catch return;
     }
     watcher.setDirectories(directories.items) catch |err| {
         log.warn("event=file_events_failed error={t} action=rescan interval_ms={d}", .{ err, rescan_interval_ms });
@@ -453,6 +458,8 @@ const Compiler = struct {
         }
     }
 
+    /// Each entry is a directory byte plus one, then a path. Only the working
+    /// directory (0) and the build root (4) hold the user's files.
     fn readInputs(self: *Compiler, body: []const u8) !void {
         _ = self.inputs_arena.reset(.retain_capacity);
         const allocator = self.inputs_arena.allocator();

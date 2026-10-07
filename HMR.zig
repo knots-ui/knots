@@ -1,9 +1,8 @@
+//! Hot reloading: `zig build dev` rebuilds the app to wasm on every save.
 //!
 //!     const dev = Knots.HMR.init(b, .{ .target = target });
 //!     const exe = buildApp(b, dev.knots, dev.target);
 //!     dev.addRunner(exe, b.step("dev", "Run with HMR"));
-//!
-//!
 const std = @import("std");
 const Knots = @import("build.zig");
 
@@ -37,12 +36,13 @@ pub const Dev = struct {
             }) catch @panic("OOM");
             Knots.configureWebExecutable(b, dev.knots, exe.root_module, exe, web);
         } else configureGuest(exe);
+        // The builder reruns the step with this option to build only the app.
         if (b.option(bool, "knots_hmr_app_only", "Internal: used by the HMR runner") orelse false) {
             step.dependOn(&b.addInstallFileWithDir(exe.getEmittedBin(), .prefix, "hmr/staging/app.wasm").step);
             return;
         }
 
-        const run = b.addRunArtifact(if (dev.host) |host| host.artifact("knots-dev-host") else server(b, dev.knots));
+        const run = b.addRunArtifact(tool(dev));
         run.addPrefixedFileArg("--zig=", .zig_exe);
         run.addPrefixedFileArg("--build-file=", dev.options.build_file orelse b.path("build.zig"));
         run.addArg(b.fmt("--step={s}", .{step.name}));
@@ -100,29 +100,29 @@ pub fn init(b: *std.Build, options: Options) Dev {
             .target = options.target,
             .optimize = .Debug,
             .gpu_backend = gpu_backend,
+            .dev_host = true,
         }),
         .options = options,
     };
 }
 
-fn server(b: *std.Build, knots: *std.Build.Dependency) *std.Build.Step.Compile {
-    const exe = b.addExecutable(.{
-        .name = "knots-hmr-server",
-        .root_module = b.createModule(.{
-            .root_source_file = knots.builder.path("src/hmr/server.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        }),
+fn tool(dev: Dev) *std.Build.Step.Compile {
+    const b = dev.b;
+    if (dev.host) |host| return b.addExecutable(.{
+        .name = "knots-dev-host",
+        .root_module = host.module("knots_dev_host"),
     });
-    exe.root_module.addImport("celer", knots.builder.dependency("celer", .{
+    const knots = dev.knots.builder;
+    const root = b.createModule(.{
+        .root_source_file = knots.path("src/hmr/server.zig"),
         .target = b.graph.host,
-        .optimize = .fast,
-    }).module("celer"));
-    exe.root_module.addImport("watch", knots.builder.dependency("watch", .{
-        .target = b.graph.host,
-        .optimize = .fast,
-    }).module("watch"));
-    return exe;
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "celer", .module = knots.dependency("celer", .{ .target = b.graph.host, .optimize = .fast }).module("celer") },
+            .{ .name = "watch", .module = knots.dependency("watch", .{ .target = b.graph.host, .optimize = .fast }).module("watch") },
+        },
+    });
+    return b.addExecutable(.{ .name = "knots-hmr-server", .root_module = root });
 }
 
 fn configureGuest(guest: *std.Build.Step.Compile) void {

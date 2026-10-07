@@ -1,3 +1,6 @@
+//! The boundary between the HMR dev host and its guest. Calls get a reply,
+//! commands queue until the next call or the end of a frame.
+
 const std = @import("std");
 const input = @import("input");
 const gpu = @import("gpu");
@@ -12,6 +15,8 @@ pub const Sampler = enum(u32) { _ };
 pub const Pipeline = enum(u32) { _ };
 pub const BindGroup = enum(u32) { _ };
 pub const Frame = enum(u32) { _ };
+
+pub const Problem = enum(u32) { none, build_failed, crashed };
 
 pub const Call = union(enum) {
     window: WindowCall,
@@ -75,6 +80,7 @@ pub const Failure = enum(u8) {
 };
 
 pub const WindowCall = union(enum) {
+    /// A new guest reopens the old one's windows, in order.
     open: Open,
     set_title: struct { Window, []const u8 },
     set_display_mode: struct { Window, window.DisplayMode },

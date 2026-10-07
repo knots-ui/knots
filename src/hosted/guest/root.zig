@@ -90,15 +90,3 @@ fn encode(list: *std.ArrayList(u8), value: anytype) abi.Error!void {
         else => error.HostCallFailed,
     };
 }
-
-var incoming: std.ArrayList(u8) = .empty;
-
-pub fn received() []const u8 {
-    return incoming.items;
-}
-
-export fn knots_hosted_buffer(length: usize) usize {
-    incoming.ensureTotalCapacity(allocator, @max(length, 1)) catch return 0;
-    incoming.items.len = length;
-    return @intFromPtr(incoming.items.ptr);
-}

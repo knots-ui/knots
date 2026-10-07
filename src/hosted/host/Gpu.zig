@@ -217,6 +217,7 @@ fn storeOp(op: abi.StoreOp) impl.RenderPass.StoreOp {
     };
 }
 
+/// Each object has its own allocation: some point into themselves.
 fn Pool(comptime T: type, comptime Handle: type) type {
     return struct {
         objects: std.ArrayList(?*T) = .empty,

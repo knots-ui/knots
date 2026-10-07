@@ -4,6 +4,7 @@ const gpu = @import("gpu");
 const window = @import("window");
 const wire = @import("wire");
 const guest = @import("hosted");
+const buffer = &@import("wasm_buffer").bytes;
 const drop_paths = @import("window_drop_paths");
 const abi = guest.abi;
 
@@ -11,11 +12,12 @@ const windows_max = 32;
 var windows: [windows_max]?*Backend = @splat(null);
 
 export fn knots_hosted_frame(handle: u32) void {
-    const self = (if (handle < windows_max) windows[handle] else null) orelse return;
+    if (handle >= windows_max) return;
+    const self = windows[handle] orelse return;
     const owner = self.owner orelse return;
     var arena = std.heap.ArenaAllocator.init(guest.allocator);
     defer arena.deinit();
-    const frame = wire.decode(abi.Input, arena.allocator(), guest.received()) catch |err|
+    const frame = wire.decode(abi.Input, arena.allocator(), buffer.items) catch |err|
         return std.log.err("hosted: invalid frame input: {t}", .{err});
     self.metrics = frame.metrics;
     owner.setInput(frame.input);

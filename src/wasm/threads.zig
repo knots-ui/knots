@@ -149,15 +149,8 @@ fn sleep(_: ?*anyopaque, timeout: std.Io.Timeout) std.Io.Cancelable!void {
     const cancel_ptr = Runtime.cancelAddress() orelse return error.Canceled;
     while (true) {
         try checkCancel(null);
-        const timeout_ns: i64 = if (deadline.toDurationFromNow(clock)) |duration|
-            if (duration.raw.nanoseconds <= 0)
-                return
-            else if (duration.raw.nanoseconds >= std.math.maxInt(i64))
-                std.math.maxInt(i64)
-            else
-                @intCast(duration.raw.nanoseconds)
-        else
-            -1;
+        const timeout_ns = waitNanoseconds(deadline.toDurationFromNow(clock));
+        if (timeout_ns == 0) return;
         if (Runtime.atomicWait(cancel_ptr, 0, timeout_ns) == 2) return;
     }
 }
@@ -167,18 +160,14 @@ fn futexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, timeout: std.Io.Tim
     Runtime.beginWait(ptr);
     defer Runtime.endWait();
     try checkCancel(null);
-    const duration = timeout.toDurationFromNow(clock);
-    const timeout_ns: i64 = if (duration) |value|
-        if (value.raw.nanoseconds <= 0)
-            0
-        else if (value.raw.nanoseconds >= std.math.maxInt(i64))
-            std.math.maxInt(i64)
-        else
-            @intCast(value.raw.nanoseconds)
-    else
-        -1;
-    _ = Runtime.atomicWait(ptr, expected, timeout_ns);
+    _ = Runtime.atomicWait(ptr, expected, waitNanoseconds(timeout.toDurationFromNow(clock)));
     try checkCancel(null);
+}
+
+/// -1 waits without a timeout, 0 means the time is up.
+fn waitNanoseconds(remaining: ?std.Io.Clock.Duration) i64 {
+    const duration = remaining orelse return -1;
+    return @intCast(std.math.clamp(duration.raw.nanoseconds, 0, std.math.maxInt(i64)));
 }
 
 fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {

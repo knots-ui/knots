@@ -1,3 +1,5 @@
+//! App Nap would slow reloads while the editor is in front.
+
 const builtin = @import("builtin");
 
 pub fn disable() void {

@@ -2,14 +2,14 @@ const std = @import("std");
 const wasmtime = @import("wasmtime");
 const wire = @import("wire");
 const abi = @import("abi");
-const Guest = @import("Guest.zig");
+const Instance = @import("Instance.zig");
 const Windows = @import("Windows.zig");
 const Gpu = @import("Gpu.zig");
 const Reply = @import("Reply.zig");
 const Workers = @import("Workers.zig");
 const module = @import("module.zig");
 const imports = @import("imports.zig");
-pub const app_nap = @import("app_nap.zig");
+const app_nap = @import("app_nap.zig");
 
 const Host = @This();
 const log = std.log.scoped(.dev_host);
@@ -18,16 +18,19 @@ gpa: std.mem.Allocator,
 io: std.Io,
 /// Winch compiles about 4x faster than Cranelift. The guest's frames are
 /// slower, but a reload is the cost that matters while editing.
-single: Guest.Runtime,
-threaded: ?Guest.Runtime = null,
-guest: ?Guest = null,
+single: Instance.Runtime,
+threaded: ?Instance.Runtime = null,
+guest: ?Instance = null,
 app: ?[]u8 = null,
+app_rendered: bool = false,
+/// The last other build that drew a frame, to fall back to.
+working: ?[]u8 = null,
 windows: Windows,
 gpu: Gpu,
 inbox: struct {
     mutex: std.Io.Mutex = .init,
     app: ?[]u8 = null,
-    diagnostics: ?[]u8 = null,
+    diagnostics: Diagnostics = .unchanged,
 } = .{},
 published: std.atomic.Value(bool) = .init(false),
 tasks_finished: std.atomic.Value(bool) = .init(false),
@@ -35,7 +38,9 @@ build_error: ?[]u8 = null,
 crash: ?[]u8 = null,
 restart_pending: bool = false,
 restarted: bool = false,
-seed: u64,
+seed: std.atomic.Value(u64),
+
+const Diagnostics = union(enum) { unchanged, cleared, failed: []u8 };
 
 /// The host stays at its address: its windows and its imports point to it.
 pub fn init(self: *Host, gpa: std.mem.Allocator, io: std.Io) !void {
@@ -45,10 +50,12 @@ pub fn init(self: *Host, gpa: std.mem.Allocator, io: std.Io) !void {
         .single = try runtime(.{ .consume_fuel = true, .compiler = .winch }),
         .windows = .{ .gpa = gpa, .io = io, .on_frame = .{ .context = self, .run = frame } },
         .gpu = .{ .gpa = gpa },
-        .seed = @truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds))),
+        .seed = .init(@truncate(@as(u96, @bitCast(std.Io.Clock.real.now(io).nanoseconds)))),
     };
     errdefer self.single.deinit();
     try imports.define(&self.single.linker, self);
+    // Reloads would slow down while the window is in the background.
+    app_nap.disable();
 }
 
 pub fn deinit(self: *Host) void {
@@ -58,12 +65,13 @@ pub fn deinit(self: *Host) void {
     }
     self.windows.deinit(&self.gpu);
     self.gpu.deinit();
-    for ([_]?[]u8{ self.app, self.build_error, self.crash, self.inbox.app, self.inbox.diagnostics }) |bytes| if (bytes) |value| self.gpa.free(value);
+    self.setDiagnostics(.unchanged);
+    for ([_]?[]u8{ self.app, self.working, self.build_error, self.crash, self.inbox.app }) |bytes| if (bytes) |value| self.gpa.free(value);
     if (self.threaded) |*threaded| threaded.deinit();
     self.single.deinit();
 }
 
-fn runtime(options: wasmtime.Engine.Options) !Guest.Runtime {
+fn runtime(options: wasmtime.Engine.Options) !Instance.Runtime {
     var engine = try wasmtime.Engine.init(options);
     errdefer engine.deinit();
     return .{ .engine = engine, .linker = try wasmtime.Linker.init(engine) };
@@ -85,7 +93,7 @@ pub fn run(self: *Host) !void {
 pub fn publishApp(self: *Host, bytes: []const u8) void {
     self.inbox.mutex.lockUncancelable(self.io);
     replace(self.gpa, &self.inbox.app, bytes);
-    replace(self.gpa, &self.inbox.diagnostics, "");
+    self.setDiagnostics(.cleared);
     self.inbox.mutex.unlock(self.io);
     self.published.store(true, .release);
     self.wake();
@@ -93,10 +101,23 @@ pub fn publishApp(self: *Host, bytes: []const u8) void {
 
 pub fn publishFailure(self: *Host, diagnostics: []const u8) void {
     self.inbox.mutex.lockUncancelable(self.io);
-    replace(self.gpa, &self.inbox.diagnostics, diagnostics);
+    self.setDiagnostics(failed(self.gpa, diagnostics));
     self.inbox.mutex.unlock(self.io);
     self.published.store(true, .release);
     self.wake();
+}
+
+fn setDiagnostics(self: *Host, next: Diagnostics) void {
+    switch (self.inbox.diagnostics) {
+        .failed => |previous| self.gpa.free(previous),
+        .unchanged, .cleared => {},
+    }
+    self.inbox.diagnostics = next;
+}
+
+fn failed(gpa: std.mem.Allocator, diagnostics: []const u8) Diagnostics {
+    const copy = gpa.dupe(u8, diagnostics) catch return .unchanged;
+    return .{ .failed = copy };
 }
 
 fn replace(gpa: std.mem.Allocator, slot: *?[]u8, bytes: []const u8) void {
@@ -105,7 +126,7 @@ fn replace(gpa: std.mem.Allocator, slot: *?[]u8, bytes: []const u8) void {
 }
 
 pub fn wake(self: *Host) void {
-    if (self.windows.main()) |main| main.window.postEmptyEvent();
+    self.windows.wake();
 }
 
 pub fn memory(self: *Host, pointer: u32, length: u32) []u8 {
@@ -136,13 +157,13 @@ fn takePublished(self: *Host) void {
     const app = self.inbox.app;
     const diagnostics = self.inbox.diagnostics;
     self.inbox.app = null;
-    self.inbox.diagnostics = null;
+    self.inbox.diagnostics = .unchanged;
     self.inbox.mutex.unlock(self.io);
 
-    if (diagnostics) |message| {
-        if (self.build_error) |previous| self.gpa.free(previous);
-        self.build_error = if (message.len > 0) message else null;
-        if (message.len == 0) self.gpa.free(message);
+    switch (diagnostics) {
+        .unchanged => {},
+        .cleared => self.setBuildError(null),
+        .failed => |message| self.setBuildError(message),
     }
     const bytes = app orelse return self.showProblem();
     if (self.app) |running| {
@@ -150,17 +171,39 @@ fn takePublished(self: *Host) void {
             self.gpa.free(bytes);
             return self.showProblem();
         }
-        self.gpa.free(running);
+        self.retire(running);
     }
     self.app = bytes;
+    self.app_rendered = false;
     if (self.crash) |previous| self.gpa.free(previous);
     self.crash = null;
     self.restarted = false;
     self.load(bytes);
 }
 
+fn setBuildError(self: *Host, message: ?[]u8) void {
+    if (self.build_error) |previous| self.gpa.free(previous);
+    self.build_error = message;
+}
+
+fn retire(self: *Host, running: []u8) void {
+    if (!self.app_rendered) return self.gpa.free(running);
+    if (self.working) |previous| self.gpa.free(previous);
+    self.working = running;
+}
+
+/// A build that never drew a frame would trap again before showing why,
+/// so the last one that did runs instead.
 fn restart(self: *Host) void {
     self.restart_pending = false;
+    if (!self.app_rendered) if (self.working) |working| {
+        log.warn("event=guest_trapped_before_frame action=load_last_working_build", .{});
+        if (self.app) |running| self.gpa.free(running);
+        self.app = working;
+        self.working = null;
+        self.app_rendered = true;
+        return self.load(working);
+    };
     const bytes = self.app orelse return;
     if (self.restarted) return log.warn("event=guest_trapped_again action=wait_for_next_build", .{});
     self.restarted = true;
@@ -185,14 +228,12 @@ fn load(self: *Host, bytes: []const u8) void {
 
     const current = &self.guest.?;
     self.windows.opened = 0;
-    const status: ?u32 = current.call("main", &.{}, u32) catch |err| status: {
-        self.trapped(err);
-        break :status null;
-    };
+    // The windows stay open to show why after the restart.
+    const status = current.call("main", &.{}, u32) catch |err| return self.trapped(err);
     self.windows.closeUnopened(&self.gpu);
     if (state) |value| current.loadState(value) catch |err| self.trapped(err);
     self.showProblem();
-    log.info("event=guest_loaded status={?d} compile_ms={d} start_ms={d} widget_state_bytes={d}", .{
+    log.info("event=guest_loaded status={d} compile_ms={d} start_ms={d} widget_state_bytes={d}", .{
         status,
         started.durationTo(compiled).toMilliseconds(),
         compiled.durationTo(std.Io.Clock.awake.now(self.io)).toMilliseconds(),
@@ -200,13 +241,13 @@ fn load(self: *Host, bytes: []const u8) void {
     });
 }
 
-fn instantiate(self: *Host, bytes: []const u8) !Guest {
+fn instantiate(self: *Host, bytes: []const u8) !Instance {
     const prepared = try module.prepare(self.gpa, bytes);
     defer self.gpa.free(prepared.bytes);
-    return Guest.init(self.gpa, if (prepared.shared) try self.threadedRuntime() else &self.single, prepared);
+    return Instance.init(self.gpa, if (prepared.shared) try self.threadedRuntime() else &self.single, prepared);
 }
 
-fn threadedRuntime(self: *Host) !*Guest.Runtime {
+fn threadedRuntime(self: *Host) !*Instance.Runtime {
     if (self.threaded == null) {
         // Without optimizations, Cranelift compiles about 20% faster.
         var threaded = try runtime(.{ .consume_fuel = true, .compiler = .cranelift, .threads = true, .optimize = false });
@@ -219,7 +260,7 @@ fn threadedRuntime(self: *Host) !*Guest.Runtime {
     return &self.threaded.?;
 }
 
-fn trapped(self: *Host, err: Guest.Error) void {
+fn trapped(self: *Host, err: Instance.Error) void {
     if (err != error.Trapped) return log.err("event=guest_call_failed error={t}", .{err});
     if (self.guest.?.trap) |trap| replace(self.gpa, &self.crash, trap);
     self.restart_pending = true;
@@ -247,7 +288,8 @@ fn frame(context: *anyopaque, entry: *Windows.Entry) void {
         .paste = paste,
         .drops = entry.window.consumeDrops(allocator) catch &.{},
     }) catch return;
-    guest.frame(entry.handle, bytes.items) catch |err| self.trapped(err);
+    guest.frame(entry.handle, bytes.items) catch |err| return self.trapped(err);
+    self.app_rendered = true;
 }
 
 fn releaseTasks(self: *Host) void {
@@ -259,13 +301,9 @@ fn releaseTasks(self: *Host) void {
 
 fn showProblem(self: *Host) void {
     const guest = &(self.guest orelse return);
-    const problem: Guest.Problem, const details = if (self.crash) |crash|
-        .{ .crashed, crash }
-    else if (self.build_error) |diagnostics|
-        .{ .build_failed, diagnostics }
-    else
-        .{ .none, "" };
-    guest.showProblem(problem, details) catch {};
+    if (self.crash) |crash| return guest.showProblem(.crashed, crash) catch {};
+    if (self.build_error) |diagnostics| return guest.showProblem(.build_failed, diagnostics) catch {};
+    guest.showProblem(.none, "") catch {};
 }
 
 pub fn taskFinished(context: *anyopaque) void {

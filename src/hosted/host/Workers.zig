@@ -49,6 +49,7 @@ pub fn create(gpa: std.mem.Allocator, io: std.Io, context: *anyopaque, notify: *
     return self;
 }
 
+/// A thread whose task does not wait within 2 s frees this on its way out.
 pub fn stop(self: *Workers) void {
     self.mutex.lockUncancelable(self.io);
     self.stopping.store(true, .release);

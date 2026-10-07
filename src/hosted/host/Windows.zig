@@ -30,6 +30,8 @@ io: std.Io,
 entries: std.ArrayList(?*Entry) = .empty,
 opened: u32 = 0,
 on_frame: struct { context: *anyopaque, run: *const fn (*anyopaque, *Entry) void },
+wake_mutex: std.Io.Mutex = .init,
+wake_target: ?*window.Window = null,
 
 pub fn deinit(self: *Windows, device: *Gpu) void {
     for (self.entries.items) |slot| if (slot) |entry| self.destroy(entry, device);
@@ -45,6 +47,18 @@ pub fn get(self: *Windows, handle: abi.Window) !*Entry {
 pub fn main(self: *Windows) ?*Entry {
     if (self.entries.items.len == 0) return null;
     return self.entries.items[0];
+}
+
+pub fn wake(self: *Windows) void {
+    self.wake_mutex.lockUncancelable(self.io);
+    defer self.wake_mutex.unlock(self.io);
+    if (self.wake_target) |target| target.postEmptyEvent();
+}
+
+fn setWakeTarget(self: *Windows, target: ?*window.Window) void {
+    self.wake_mutex.lockUncancelable(self.io);
+    defer self.wake_mutex.unlock(self.io);
+    self.wake_target = target;
 }
 
 pub fn closeUnopened(self: *Windows, device: *Gpu) void {
@@ -120,6 +134,7 @@ fn open(self: *Windows, desc: abi.Open) !abi.Opened {
     entry.window.setFrameHandler(.{ .ctx = entry, .step = Entry.step });
     while (self.entries.items.len <= self.opened) self.entries.appendAssumeCapacity(null);
     self.entries.items[self.opened] = entry;
+    if (self.opened == 0) self.setWakeTarget(&entry.window);
     self.opened += 1;
     log.info("event=window_opened id={d} title=\"{s}\"", .{ @backingInt(handle), desc.title });
     return .{ .window = handle, .metrics = entry.metrics() };
@@ -134,6 +149,7 @@ fn setTitle(self: *Windows, entry: *Entry, title: []const u8) !void {
 }
 
 fn destroy(self: *Windows, entry: *Entry, device: *Gpu) void {
+    if (@backingInt(entry.handle) == 0) self.setWakeTarget(null);
     device.destroySurface(entry);
     entry.window.deinit();
     self.gpa.free(entry.title);

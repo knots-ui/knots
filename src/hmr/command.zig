@@ -1,5 +1,6 @@
 const std = @import("std");
 
+/// Reverses `std.zig.SubprocessCommand.format`, dropping `cd` and env.
 pub fn parse(allocator: std.mem.Allocator, text: []const u8) !?[]const []const u8 {
     var rest = text;
     if (std.mem.startsWith(u8, rest, "cd ")) {

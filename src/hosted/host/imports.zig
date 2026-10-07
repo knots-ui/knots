@@ -27,8 +27,7 @@ const functions = struct {
     }
 
     pub fn random(host: *Host, pointer: u32, length: u32) void {
-        var prng = std.Random.DefaultPrng.init(host.seed);
-        host.seed +%= 0x9e3779b97f4a7c15;
+        var prng = std.Random.DefaultPrng.init(host.seed.fetchAdd(0x9e3779b97f4a7c15, .monotonic));
         prng.fill(host.memory(pointer, length));
     }
 
@@ -41,7 +40,9 @@ const functions = struct {
             std.log.scoped(.dev_host).err("event=reply_too_long length={d}", .{reply.bytes.items.len});
             return 0;
         }
-        @memcpy(host.memory(reply_pointer, @intCast(reply.bytes.items.len)), reply.bytes.items);
+        const destination = host.memory(reply_pointer, @intCast(reply.bytes.items.len));
+        if (destination.len != reply.bytes.items.len) return 0;
+        @memcpy(destination, reply.bytes.items);
         return @intCast(reply.bytes.items.len);
     }
 
@@ -72,6 +73,7 @@ const functions = struct {
         Workers.task = task;
     }
 
+    /// Wakes after at most 50 ms: the caller checks its deadline.
     pub fn atomic_wait(host: *Host, pointer: u32, expected: u32, timeout_ns: i64) error{GuestStopped}!u32 {
         if (Workers.current) |worker| if (worker.workers.stopping.load(.acquire)) return error.GuestStopped;
         const bytes = host.memory(pointer, 4);
