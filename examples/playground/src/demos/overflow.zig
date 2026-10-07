@@ -6,7 +6,7 @@ const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Spacer = ui.component.Spacer;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     try caption(app, "hidden", .src(@src()));
     try app.e(.{
         Rect{

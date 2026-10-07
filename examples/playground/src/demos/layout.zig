@@ -6,7 +6,7 @@ const Rect = ui.component.Rect;
 const Spacer = ui.component.Spacer;
 const Text = ui.component.Text;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     @setEvalBranchQuota(3000);
     try section(app, "Sizing", .src(@src()));
     try sizing(app);

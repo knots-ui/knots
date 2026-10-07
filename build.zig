@@ -35,6 +35,7 @@ pub fn vulkanUIShaderSource(knots_dep: *std.Build.Dependency, which: VulkanShade
 }
 
 pub const web_bridge_export_symbol_names = web_build.bridge_export_symbol_names;
+pub const web_dev_export_symbol_names = web_build.dev_export_symbol_names;
 
 pub const WebInstallOptions = struct {
     dir: []const u8 = "web",
@@ -47,22 +48,34 @@ pub const WebInstallOptions = struct {
     extra_export_symbol_names: []const []const u8 = &.{},
 };
 
+pub const Platform = enum {
+    native,
+    browser,
+    hosted,
+};
+
 pub fn build(b: *std.Build) void {
     var target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    if (b.option(bool, "module_guest", "Build portable UI module dependencies.") orelse false) {
-        buildModuleDependencies(b, target, optimize);
-        return;
-    }
-    const browser_wasm = target.result.cpu.arch.isWasm();
-    const web_threads = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
-    if (browser_wasm) web_build.configureTarget(&target, web_threads);
+    const platform = b.option(Platform, "platform", "Where the application runs: browser (default) or hosted, for a wasm32 target.") orelse
+        if (target.result.cpu.arch.isWasm()) Platform.browser else .native;
+    if ((platform == .native) == target.result.cpu.arch.isWasm())
+        std.debug.panic("knots: the {t} platform needs a {s} target", .{ platform, if (platform == .native) "native" else "wasm32" });
+    const dev_option = b.option(bool, "dev", "Build the application for `zig build dev` (see HMR.zig).") orelse false;
+    const web_threads_option = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
+    if (dev_option and platform == .native)
+        std.debug.panic("knots: -Ddev needs a wasm32 target (see HMR.zig)", .{});
+    const dev = dev_option or platform == .hosted;
+    const web_threads = web_threads_option and platform == .browser;
+    const wasm_threads = web_threads or
+        (platform == .hosted and std.Target.wasm.featureSetHas(target.result.cpu.features, .atomics));
+    if (platform != .native) web_build.configureWasmTarget(&target, wasm_threads);
 
-    const accesskit_dep = if (browser_wasm)
-        null
+    const accesskit_dep = if (platform == .native)
+        b.dependency("accesskit", .{ .target = target, .optimize = optimize })
     else
-        b.dependency("accesskit", .{ .target = target, .optimize = optimize });
+        null;
 
     const gpu_backend =
         b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
@@ -70,13 +83,13 @@ pub fn build(b: *std.Build) void {
 
     const truetype_dep = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
 
-    const js_bridge_mod = if (browser_wasm)
+    const js_bridge_mod = if (platform == .browser)
         b.dependency("js_bridge", .{ .target = target, .optimize = optimize }).module("js-bridge")
     else
         null;
 
     if (js_bridge_mod) |m| b.modules.put(b.graph.arena, "js-bridge", m) catch @panic("OOM");
-    if (browser_wasm) {
+    if (platform == .browser) {
         b.addNamedLazyPath("web-host-js", b.path("src/web/host.js"));
         b.addNamedLazyPath("web-bridge-js", b.path("lib/js-bridge/src/runtime.js"));
         b.addNamedLazyPath("web-wasi-js", b.path("src/web/wasi.js"));
@@ -86,20 +99,63 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    const browser_exports_mod = if (browser_wasm) blk: {
-        const mod = b.createModule(.{
+    const wire_mod = b.createModule(.{ .target = target, .optimize = optimize, .root_source_file = b.path("src/wire.zig") });
+    const hosted_imports_mod = if (platform == .hosted) b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/hosted/guest/imports.zig"),
+    }) else null;
+
+    const wasm_threads_mod = if (wasm_threads) b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/wasm/threads.zig"),
+        .imports = &.{.{ .name = "worker_host", .module = hosted_imports_mod orelse b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/web/main.zig"),
+            .root_source_file = b.path("src/web/worker_host.zig"),
             .imports = &.{.{ .name = "js-bridge", .module = js_bridge_mod.? }},
-        });
-        var web_config = b.addOptions();
-        web_config.addOption(bool, "worker_concurrency_enabled", web_threads);
-        mod.addOptions("web_config", web_config);
-        break :blk mod;
-    } else null;
+        }) }},
+    }) else null;
 
-    const gpu_impl_mod = blk: switch (gpu_backend) {
+    const platform_impl_mod = switch (platform) {
+        .native => null,
+        .browser => blk: {
+            const mod = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/web/main.zig"),
+                .imports = &.{.{ .name = "js-bridge", .module = js_bridge_mod.? }},
+            });
+            var web_config = b.addOptions();
+            web_config.addOption(bool, "worker_concurrency_enabled", web_threads);
+            mod.addOptions("web_config", web_config);
+            break :blk mod;
+        },
+        .hosted => b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/hosted/guest/root.zig"),
+            .imports = &.{
+                .{ .name = "wire", .module = wire_mod },
+                .{ .name = "imports", .module = hosted_imports_mod.? },
+            },
+        }),
+    };
+    if (wasm_threads_mod) |threads| platform_impl_mod.?.addImport("wasm_threads", threads);
+    const wasm_buffer_mod = if (platform_impl_mod) |platform_impl| b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/wasm/buffer.zig"),
+        .imports = &.{.{ .name = "platform_impl", .module = platform_impl }},
+    }) else null;
+
+    const gpu_impl_mod = if (platform == .hosted) b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/gpu/backend/hosted/root.zig"),
+        .imports = &.{.{ .name = "hosted", .module = platform_impl_mod.? }},
+    }) else blk: switch (gpu_backend) {
         .webgpu => {
             const webgpu_mod = b.createModule(.{
                 .target = target,
@@ -107,7 +163,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path("src/gpu/backend/webgpu/root.zig"),
             });
 
-            if (browser_wasm)
+            if (platform == .browser)
                 webgpu_mod.addImport("js-bridge", js_bridge_mod.?)
             else {
                 const wgpu = b.dependency("wgpu", .{ .target = target, .optimize = optimize });
@@ -162,6 +218,18 @@ pub fn build(b: *std.Build) void {
     });
 
     const window_impl_mod = blk: {
+        if (platform == .hosted) break :blk b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/window/backend/hosted/root.zig"),
+            .imports = &.{
+                .{ .name = "gpu", .module = gpu_mod },
+                .{ .name = "wire", .module = wire_mod },
+                .{ .name = "hosted", .module = platform_impl_mod.? },
+                .{ .name = "wasm_buffer", .module = wasm_buffer_mod.? },
+                .{ .name = "window_drop_paths", .module = window_drop_paths_mod },
+            },
+        });
         switch (target.result.os.tag) {
             .macos => {
                 const objc_dep = b.dependency("zig_objc", .{ .target = target, .optimize = optimize });
@@ -228,7 +296,7 @@ pub fn build(b: *std.Build) void {
                 break :blk m;
             },
             .freestanding, .wasi => {
-                if (browser_wasm) {
+                if (platform == .browser) {
                     break :blk b.createModule(.{
                         .target = target,
                         .optimize = optimize,
@@ -259,16 +327,22 @@ pub fn build(b: *std.Build) void {
     window_impl_mod.addImport("input", input_mod);
     window_mod.addImport("input", input_mod);
 
+    const abi_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/hosted/abi.zig"),
+        .imports = &.{
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "window", .module = window_mod },
+        },
+    });
+    if (platform == .hosted) platform_impl_mod.?.addImport("abi", abi_mod);
+
     const math_mod = b.addModule("math", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/math/root.zig"),
-    });
-
-    const signal_mod = b.addModule("signal", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/signal/root.zig"),
     });
 
     const text_mod = b.createModule(.{
@@ -337,8 +411,6 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    var state_bridge_config = b.addOptions();
-    state_bridge_config.addOption(bool, "host_graph_enabled", true);
     const ui_mod = b.addModule("ui", .{
         .target = target,
         .optimize = optimize,
@@ -351,7 +423,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "render_types", .module = render_types_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
-            .{ .name = "signal", .module = signal_mod },
+            .{ .name = "wire", .module = wire_mod },
         },
     });
     const native_accessibility_mod = if (accesskit_dep) |accesskit| blk: {
@@ -368,16 +440,12 @@ pub fn build(b: *std.Build) void {
         window_mod.addImport("native_accessibility", native_accessibility);
         break :blk native_accessibility;
     } else null;
-    ui_mod.addOptions("state_bridge_config", state_bridge_config);
 
-    const portable = b.createModule(.{ .root_source_file = b.path("src/portable.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "ui", .module = ui_mod }} });
-    const hmr_mod = b.addModule("hmr", .{
+    const hmr_tests_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/hmr/root.zig"),
-        .imports = &.{ .{ .name = "ui", .module = ui_mod }, .{ .name = "input", .module = input_mod }, .{ .name = "render", .module = render_mod }, .{ .name = "math", .module = math_mod }, .{ .name = "knots", .module = portable } },
     });
-    hmr_mod.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
 
     var debug_opts = b.addOptions();
     debug_opts.addOption([]const u8, "version", build_zon.version);
@@ -399,7 +467,16 @@ pub fn build(b: *std.Build) void {
         },
     });
     mod.addOptions("debug_config", debug_opts);
-    if (browser_wasm) mod.addImport("browser_exports", browser_exports_mod.?);
+    const platform_opts = b.addOptions();
+    platform_opts.addOption(Platform, "platform", platform);
+    platform_opts.addOption(bool, "dev", dev);
+    mod.addOptions("platform_config", platform_opts);
+    if (dev) {
+        mod.addImport("wire", wire_mod);
+        mod.addImport("abi", abi_mod);
+        mod.addImport("wasm_buffer", wasm_buffer_mod.?);
+    }
+    if (platform_impl_mod) |platform_impl| mod.addImport("platform_impl", platform_impl);
     if (accesskit_dep) |accesskit| mod.addImport("accesskit", accesskit.module("accesskit"));
     if (native_accessibility_mod) |native_accessibility| mod.addImport("native_accessibility", native_accessibility);
 
@@ -410,7 +487,6 @@ pub fn build(b: *std.Build) void {
     const text_tests = b.addTest(.{ .root_module = text_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
     const input_tests = b.addTest(.{ .root_module = input_mod });
-    const signal_tests = b.addTest(.{ .root_module = signal_mod });
     const public_render_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
@@ -439,10 +515,14 @@ pub fn build(b: *std.Build) void {
     const renderer_tests = b.addTest(.{ .root_module = renderer_mod });
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = hmr_mod })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = hmr_tests_mod })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = wire_mod })).step);
     test_step.dependOn(&b.addRunArtifact(render_tests).step);
     test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
+    if (platform == .native and gpu_backend == .vulkan) {
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = gpu_impl_mod })).step);
+    }
     if (native_accessibility_mod) |native_accessibility| {
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = native_accessibility })).step);
     }
@@ -452,11 +532,47 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(text_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
     test_step.dependOn(&b.addRunArtifact(input_tests).step);
-    test_step.dependOn(&b.addRunArtifact(signal_tests).step);
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
+    if (platform == .native) {
+        const dev_host_module_tests = b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("src/hosted/host/module.zig"),
+            .target = target,
+            .optimize = optimize,
+        }) });
+        test_step.dependOn(&b.addRunArtifact(dev_host_module_tests).step);
+    }
+    // Only the dev host's knots declares this, so other builds skip wasmtime.
+    const dev_host_option = b.option(bool, "dev_host", "Declare the HMR dev host's module (see HMR.zig).") orelse false;
+    if (platform == .native and dev_host_option) {
+        const watch = b.dependency("watch", .{ .target = target, .optimize = .ReleaseFast }).module("watch");
+        const hmr_builder = b.createModule(.{
+            .root_source_file = b.path("src/hmr/Builder.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "watch", .module = watch }},
+        });
+        const host_mod = b.addModule("knots_dev_host", .{
+            .root_source_file = b.path("src/hosted/host/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "window", .module = window_mod },
+                .{ .name = "input", .module = input_mod },
+                .{ .name = "gpu", .module = gpu_mod },
+                .{ .name = "gpu_impl", .module = gpu_impl_mod },
+                .{ .name = "wire", .module = wire_mod },
+                .{ .name = "abi", .module = abi_mod },
+                .{ .name = "hmr_builder", .module = hmr_builder },
+            },
+        });
+        if (b.lazyDependency("wasmtime", .{ .target = target, .optimize = .debug })) |wasmtime|
+            host_mod.addImport("wasmtime", wasmtime.module("wasmtime"));
+        if (target.result.os.tag == .macos)
+            host_mod.addImport("objc", b.dependency("zig_objc", .{ .target = target, .optimize = optimize }).module("objc"));
+    }
 
-    if (!browser_wasm) {
+    if (platform == .native) {
         const snapshot_exe = b.addExecutable(.{
             .name = "knots-snapshots",
             .root_module = b.createModule(.{
@@ -501,9 +617,17 @@ pub fn addWebInstall(
     exe: *std.Build.Step.Compile,
     options: WebInstallOptions,
 ) *std.Build.Step {
-    const web_threads = knots.builder.named_lazy_paths.contains("web-worker-js");
     configureWebExecutable(b, knots, root_module, exe, options);
     const install = b.step(b.fmt("install-web-{s}-{s}", .{ options.dir, exe.name }), "Install a browser application");
+    install.dependOn(addWebHostInstall(b, knots, options));
+    const install_wasm = b.addInstallFileWithDir(exe.getEmittedBin(), .{ .custom = options.dir }, options.wasm_name);
+    install.dependOn(&install_wasm.step);
+    return install;
+}
+
+pub fn addWebHostInstall(b: *std.Build, knots: *std.Build.Dependency, options: WebInstallOptions) *std.Build.Step {
+    const web_threads = knots.builder.named_lazy_paths.contains("web-worker-js");
+    const install = b.step(b.fmt("install-web-host-{s}", .{options.dir}), "Install the page of a browser application");
     if (options.index_html) |index_html| {
         const install_index = b.addInstallFileWithDir(index_html, .{ .custom = options.dir }, options.index_name);
         install.dependOn(&install_index.step);
@@ -511,13 +635,10 @@ pub fn addWebInstall(
 
     const install_host_js = b.addInstallFileWithDir(knots.namedLazyPath("web-host-js"), .{ .custom = options.dir }, options.host_js_name);
     const install_bridge_js = b.addInstallFileWithDir(knots.namedLazyPath("web-bridge-js"), .{ .custom = options.dir }, options.bridge_js_name);
-    const install_wasm = b.addInstallFileWithDir(exe.getEmittedBin(), .{ .custom = options.dir }, options.wasm_name);
-
     install.dependOn(&install_host_js.step);
     install.dependOn(&install_bridge_js.step);
     const install_wasi_js = b.addInstallFileWithDir(knots.namedLazyPath("web-wasi-js"), .{ .custom = options.dir }, "knots-wasi.js");
     install.dependOn(&install_wasi_js.step);
-    install.dependOn(&install_wasm.step);
     if (web_threads) {
         const install_worker_pool_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-pool-js"), .{ .custom = options.dir }, "knots-worker-pool.js");
         const install_worker_js = b.addInstallFileWithDir(knots.namedLazyPath("web-worker-js"), .{ .custom = options.dir }, "knots-worker.js");
@@ -535,7 +656,7 @@ pub fn configureWebExecutable(b: *std.Build, knots: *std.Build.Dependency, root_
     });
 }
 
-fn defaultGpuBackend(target: std.Target) GPUBackend {
+pub fn defaultGpuBackend(target: std.Target) GPUBackend {
     if (target.cpu.arch.isWasm()) return .webgpu;
     return switch (target.os.tag) {
         .macos => .webgpu,
@@ -605,105 +726,4 @@ fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build
 /// Outside `--watch`, incremental compiles skip the build cache and would rebuild these tools every time.
 fn buildTool(compile: *std.Build.Step.Compile) void {
     compile.incremental = false;
-}
-
-/// Portable modules have no window, GPU, JavaScript, or operating-system imports.
-fn buildModuleDependencies(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const math = b.addModule("math", .{
-        .root_source_file = b.path("src/math/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const signal = b.addModule("signal", .{
-        .root_source_file = b.path("src/signal/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const input = b.addModule("input", .{
-        .root_source_file = b.path("src/input/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const types = b.createModule(.{
-        .root_source_file = b.path("src/render/types/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const layout = b.createModule(.{
-        .root_source_file = b.path("src/layout/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "math", .module = math }},
-    });
-    const style = b.createModule(.{
-        .root_source_file = b.path("src/style/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "layout", .module = layout },
-            .{ .name = "math", .module = math },
-            .{ .name = "render_types", .module = types },
-        },
-    });
-    const truetype = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
-    const text = b.createModule(.{
-        .root_source_file = b.path("src/text/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "TrueType", .module = truetype.module("TrueType") }},
-    });
-    const render = b.addModule("render", .{
-        .root_source_file = b.path("src/render/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "math", .module = math },
-            .{ .name = "render_types", .module = types },
-        },
-    });
-    const shader_config = b.addOptions();
-    shader_config.addOption(bool, "has_spirv_shaders", false);
-    render.addOptions("shader_config", shader_config);
-    addRenderShaderSources(b, render);
-    var state_bridge_config = b.addOptions();
-    state_bridge_config.addOption(bool, "host_graph_enabled", false);
-    const ui = b.addModule("ui", .{
-        .root_source_file = b.path("src/ui/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "math", .module = math },
-            .{ .name = "input", .module = input },
-            .{ .name = "render_types", .module = types },
-            .{ .name = "layout", .module = layout },
-            .{ .name = "style", .module = style },
-            .{ .name = "render", .module = render },
-            .{ .name = "text", .module = text },
-            .{ .name = "signal", .module = signal },
-        },
-    });
-    ui.addOptions("state_bridge_config", state_bridge_config);
-    const portable = b.addModule("knots", .{
-        .root_source_file = b.path("src/portable.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "ui", .module = ui }},
-    });
-    const hmr = b.addModule("hmr", .{
-        .root_source_file = b.path("src/hmr/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "ui", .module = ui },
-            .{ .name = "input", .module = input },
-            .{ .name = "render", .module = render },
-            .{ .name = "math", .module = math },
-        },
-    });
-    hmr.addImport("knots", portable);
-    hmr.addImport("pack", b.dependency("pack", .{ .target = target, .optimize = optimize }).module("pack"));
-    if (!target.result.cpu.arch.isWasm()) {
-        const tests = b.addTest(.{ .root_module = hmr });
-        b.step("test", "Test the portable HMR boundary").dependOn(&b.addRunArtifact(tests).step);
-    }
 }

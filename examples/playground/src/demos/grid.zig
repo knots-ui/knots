@@ -9,7 +9,7 @@ const Spacer = ui.component.Spacer;
 const cols = [_]Rect.GridTrack{ .{ .fixed = 100 }, .{ .fr = 1 }, .{ .fr = 1 } };
 const rows = [_]Rect.GridTrack{ .{ .fixed = 28 }, .{ .fr = 1 }, .{ .fr = 1 }, .{ .fixed = 24 } };
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     try app.e(.{
         Rect{
             .key = .src(@src()),

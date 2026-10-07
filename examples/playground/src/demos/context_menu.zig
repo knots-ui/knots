@@ -11,7 +11,7 @@ const Menu = ContextMenu(ContextActions);
 var last_action: []const u8 = "none";
 var last_target: []const u8 = "none";
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const arena = app.arena();
 
     try app.e(.{

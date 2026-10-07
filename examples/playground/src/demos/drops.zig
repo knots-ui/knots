@@ -10,7 +10,7 @@ const For = ui.control.For;
 var dropped_paths: std.ArrayList([]const u8) = .empty;
 var allocator: ?std.mem.Allocator = null;
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const active_allocator = app.ui().allocator;
     allocator = active_allocator;
     const arena = app.arena();

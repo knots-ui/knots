@@ -11,4 +11,6 @@ pub const Sampler = @import("Sampler.zig");
 
 test {
     _ = @import("MemoryAllocator.zig");
+    // Nothing in the tree calls `initExternal` yet; keep it analyzed.
+    _ = &Device.initExternal;
 }

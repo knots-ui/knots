@@ -12,6 +12,13 @@ pub const bridge_export_symbol_names = [_][]const u8{
     "knots_last_error_copy",
 };
 
+pub const dev_export_symbol_names = [_][]const u8{
+    "knots_buffer",
+    "knots_dev_save",
+    "knots_dev_load",
+    "knots_dev_problem",
+};
+
 const thread_export_symbol_names = [_][]const u8{
     "knots_worker_run",
     "knots_worker_complete",
@@ -30,8 +37,8 @@ pub const Options = struct {
 pub fn configureExecutable(b: *std.Build, root_module: *std.Build.Module, executable: *std.Build.Step.Compile, threads: bool, options: Options) void {
     std.debug.assert(root_module.resolved_target != null);
     std.debug.assert(executable.root_module.resolved_target != null);
-    configureTarget(&root_module.resolved_target.?, threads);
-    configureTarget(&executable.root_module.resolved_target.?, threads);
+    configureWasmTarget(&root_module.resolved_target.?, threads);
+    configureWasmTarget(&executable.root_module.resolved_target.?, threads);
     executable.import_memory = threads;
     executable.export_memory = true;
     executable.export_table = threads;
@@ -62,7 +69,7 @@ pub fn configureExecutable(b: *std.Build, root_module: *std.Build.Module, execut
     root_module.export_symbol_names = names;
 }
 
-pub fn configureTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
+pub fn configureWasmTarget(target: *std.Build.ResolvedTarget, threads: bool) void {
     if (!target.result.cpu.arch.isWasm())
         return;
     if (!threads) {

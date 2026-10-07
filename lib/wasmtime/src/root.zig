@@ -56,11 +56,23 @@ fn check(failure: ?*c.wasmtime_error_t, trap: ?*c.wasm_trap_t, diagnostics: ?*Di
 pub const Engine = struct {
     handle: *c.wasm_engine_t,
 
-    pub const Options = struct { consume_fuel: bool };
+    pub const Options = struct {
+        consume_fuel: bool,
+        compiler: enum { cranelift, winch } = .cranelift,
+        threads: bool = false,
+        optimize: bool = true,
+    };
 
     pub fn init(options: Options) Error!Engine {
         const config = c.wasm_config_new() orelse return error.OutOfMemory;
         c.wasmtime_config_consume_fuel_set(config, options.consume_fuel);
+        c.wasmtime_config_wasm_threads_set(config, options.threads);
+        c.wasmtime_config_shared_memory_set(config, options.threads);
+        if (!options.optimize) c.wasmtime_config_cranelift_opt_level_set(config, c.WASMTIME_OPT_LEVEL_NONE);
+        c.wasmtime_config_strategy_set(config, switch (options.compiler) {
+            .cranelift => c.WASMTIME_STRATEGY_CRANELIFT,
+            .winch => c.WASMTIME_STRATEGY_WINCH,
+        });
         // Engine creation takes ownership of config, including on failure.
         const handle = c.wasm_engine_new_with_config(config) orelse return error.OutOfMemory;
         assert(@intFromPtr(handle) != 0);
@@ -175,6 +187,13 @@ pub const Instance = struct {
         return .{ .handle = exported.of.func, .context = self.context };
     }
 
+    pub fn setGlobal(self: *const Instance, name: []const u8, value: Value, diagnostics: ?*Diagnostics) Error!void {
+        var exported = try self.getExport(name);
+        defer c.wasmtime_extern_delete(&exported);
+        if (exported.kind != c.WASMTIME_EXTERN_GLOBAL) return error.WrongExportType;
+        try check(c.wasmtime_global_set(self.context, &exported.of.global, &value), null, diagnostics);
+    }
+
     pub fn memory(self: *const Instance, name: []const u8) Error!Memory {
         var exported = try self.getExport(name);
         defer c.wasmtime_extern_delete(&exported);
@@ -230,6 +249,150 @@ pub const Memory = struct {
         assert(length <= length_total - offset);
         const pointer = c.wasmtime_memory_data(self.context, &self.handle);
         return pointer[offset..][0..length];
+    }
+};
+
+pub const SharedMemory = struct {
+    handle: *c.wasmtime_sharedmemory_t,
+
+    pub fn init(engine: Engine, minimum: u64, maximum: u64, diagnostics: ?*Diagnostics) Error!SharedMemory {
+        var memory_type: ?*c.wasm_memorytype_t = null;
+        try check(c.wasmtime_memorytype_new(minimum, true, maximum, false, true, 16, &memory_type), null, diagnostics);
+        defer c.wasm_memorytype_delete(memory_type);
+        var handle: ?*c.wasmtime_sharedmemory_t = null;
+        try check(c.wasmtime_sharedmemory_new(engine.handle, memory_type, &handle), null, diagnostics);
+        return .{ .handle = handle.? };
+    }
+
+    pub fn clone(self: SharedMemory) SharedMemory {
+        return .{ .handle = c.wasmtime_sharedmemory_clone(self.handle).? };
+    }
+
+    pub fn deinit(self: *SharedMemory) void {
+        c.wasmtime_sharedmemory_delete(self.handle);
+        self.* = undefined;
+    }
+
+    /// Thread-safe. A shared memory does not move when it grows.
+    pub fn range(self: SharedMemory, offset: usize, length: usize) Error![]u8 {
+        const length_total = c.wasmtime_sharedmemory_data_size(self.handle);
+        if (offset > length_total) return error.InvalidMemoryRange;
+        if (length > length_total - offset) return error.InvalidMemoryRange;
+        const pointer = c.wasmtime_sharedmemory_data(self.handle);
+        return pointer[offset..][0..length];
+    }
+};
+
+pub const Linker = struct {
+    handle: *c.wasmtime_linker_t,
+    engine: *c.wasm_engine_t,
+
+    pub fn init(engine: Engine) Error!Linker {
+        const handle = c.wasmtime_linker_new(engine.handle) orelse return error.OutOfMemory;
+        return .{ .handle = handle, .engine = engine.handle };
+    }
+
+    pub fn deinit(self: *Linker) void {
+        c.wasmtime_linker_delete(self.handle);
+        self.* = undefined;
+    }
+
+    /// Calls `function` with `context` first. An error result traps.
+    pub fn defineFunction(
+        self: *Linker,
+        module: []const u8,
+        name: []const u8,
+        comptime Context: type,
+        context: *Context,
+        comptime function: anytype,
+        diagnostics: ?*Diagnostics,
+    ) Error!void {
+        const Function_ = @TypeOf(function);
+        const info = @typeInfo(Function_).@"fn";
+        const parameter_types = info.param_types[1..];
+        const Result = switch (@typeInfo(info.return_type.?)) {
+            .error_union => |error_union| error_union.payload,
+            else => info.return_type.?,
+        };
+
+        var parameters: c.wasm_valtype_vec_t = undefined;
+        var kinds: [parameter_types.len]?*c.wasm_valtype_t = undefined;
+        inline for (parameter_types, 0..) |Parameter, index| kinds[index] = c.wasm_valtype_new(comptime valueKind(Parameter.?));
+        c.wasm_valtype_vec_new(&parameters, kinds.len, &kinds);
+        var results: c.wasm_valtype_vec_t = undefined;
+        if (Result == void) {
+            c.wasm_valtype_vec_new_empty(&results);
+        } else {
+            var result_kinds = [1]?*c.wasm_valtype_t{c.wasm_valtype_new(comptime valueKind(Result))};
+            c.wasm_valtype_vec_new(&results, 1, &result_kinds);
+        }
+        const function_type = c.wasm_functype_new(&parameters, &results) orelse return error.OutOfMemory;
+        defer c.wasm_functype_delete(function_type);
+
+        const Callback = struct {
+            fn call(env: ?*anyopaque, _: ?*c.wasmtime_caller_t, arguments: [*c]const Value, _: usize, results_out: [*c]Value, _: usize) callconv(.c) ?*c.wasm_trap_t {
+                const self_context: *Context = @ptrCast(@alignCast(env.?));
+                var values: std.meta.ArgsTuple(Function_) = undefined;
+                values[0] = self_context;
+                inline for (parameter_types, 0..) |Parameter, index| values[index + 1] = fromValue(Parameter.?, arguments[index]);
+                const returned = @call(.auto, function, values);
+                const result = if (Result == info.return_type.?) returned else returned catch |err|
+                    return c.wasmtime_trap_new(@errorName(err).ptr, @errorName(err).len);
+                if (Result != void) results_out[0] = toValue(Result, result);
+                return null;
+            }
+        };
+        try check(c.wasmtime_linker_define_func(self.handle, module.ptr, module.len, name.ptr, name.len, function_type, Callback.call, context, null), null, diagnostics);
+    }
+
+    pub fn defineSharedMemory(self: *Linker, store: *Store, module: []const u8, name: []const u8, memory: SharedMemory, diagnostics: ?*Diagnostics) Error!void {
+        c.wasmtime_linker_allow_shadowing(self.handle, true);
+        var item: Extern = .{ .kind = c.WASMTIME_EXTERN_SHAREDMEMORY, .of = .{ .sharedmemory = memory.handle } };
+        try check(c.wasmtime_linker_define(self.handle, store.context, module.ptr, module.len, name.ptr, name.len, &item), null, diagnostics);
+    }
+
+    pub fn instantiate(self: *Linker, store: *Store, module: *const Module, diagnostics: ?*Diagnostics) Error!Instance {
+        assert(store.engine == self.engine);
+        var handle: c.wasmtime_instance_t = undefined;
+        var trap: ?*c.wasm_trap_t = null;
+        try check(c.wasmtime_linker_instantiate(self.handle, store.context, module.handle, &handle, &trap), trap, diagnostics);
+        return .{ .handle = handle, .context = store.context };
+    }
+
+    fn valueKind(comptime T: type) c.wasm_valkind_t {
+        return switch (T) {
+            bool, u8, u16, u32, i32, usize => c.WASM_I32,
+            u64, i64 => c.WASM_I64,
+            f32 => c.WASM_F32,
+            f64 => c.WASM_F64,
+            else => @compileError("unsupported host function type " ++ @typeName(T)),
+        };
+    }
+
+    fn fromValue(comptime T: type, value: Value) T {
+        return switch (T) {
+            bool => value.of.i32 != 0,
+            u8, u16, u32, usize => @intCast(@as(u32, @bitCast(value.of.i32))),
+            i32 => value.of.i32,
+            u64 => @bitCast(value.of.i64),
+            i64 => value.of.i64,
+            f32 => value.of.f32,
+            f64 => value.of.f64,
+            else => unreachable,
+        };
+    }
+
+    fn toValue(comptime T: type, value: T) Value {
+        return switch (T) {
+            bool => .{ .kind = c.WASMTIME_I32, .of = .{ .i32 = @intFromBool(value) } },
+            u8, u16, u32, usize => .{ .kind = c.WASMTIME_I32, .of = .{ .i32 = @bitCast(@as(u32, @intCast(value))) } },
+            i32 => .{ .kind = c.WASMTIME_I32, .of = .{ .i32 = value } },
+            u64 => .{ .kind = c.WASMTIME_I64, .of = .{ .i64 = @bitCast(value) } },
+            i64 => .{ .kind = c.WASMTIME_I64, .of = .{ .i64 = value } },
+            f32 => .{ .kind = c.WASMTIME_F32, .of = .{ .f32 = value } },
+            f64 => .{ .kind = c.WASMTIME_F64, .of = .{ .f64 = value } },
+            else => unreachable,
+        };
     }
 };
 

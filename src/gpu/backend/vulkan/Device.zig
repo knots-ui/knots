@@ -238,7 +238,7 @@ pub fn init(allocator: std.mem.Allocator, window_handle: gpu.Context.WindowHandl
 
 /// Imports a device created elsewhere. The device is not destroyed by `deinit`.
 pub fn initExternal(allocator: std.mem.Allocator, external: External) !Device {
-    const get_instance_proc_addr: vk.PfnGetInstanceProcAddr = @ptrCast(external.get_instance_proc_addr);
+    const get_instance_proc_addr: vk.PfnGetInstanceProcAddr = @ptrCast(@alignCast(external.get_instance_proc_addr));
     const instance: vk.Instance = @ptrFromInt(external.instance);
     const physical_device: vk.PhysicalDevice = @ptrFromInt(external.physical_device);
     const device: vk.Device = @ptrFromInt(external.device);
@@ -734,7 +734,7 @@ fn getInstanceExtensions(window_handle: gpu.Context.WindowHandle) [if (builtin.o
             .wayland => vk.extensions.khr_wayland_surface.name,
             .x11 => vk.extensions.khr_xlib_surface.name,
         },
-        .web => @panic("browser wasm not supported with the vulkan backend"),
+        .web, .hosted => @panic("browser wasm not supported with the vulkan backend"),
     };
 
     if (builtin.os.tag.isDarwin())
@@ -758,7 +758,7 @@ fn createSurface(vki: vk.InstanceWrapper, instance: vk.Instance, window_handle: 
             .wayland => |wl| vki.createWaylandSurfaceKHR(instance, &.{ .display = @ptrCast(wl.display), .surface = @ptrCast(wl.surface) }, null),
             .x11 => |x11| vki.createXlibSurfaceKHR(instance, &.{ .dpy = @ptrCast(x11.display), .window = @intCast(x11.window) }, null),
         },
-        .web => @panic("browser wasm not supported with the vulkan backend"),
+        .web, .hosted => @panic("browser wasm not supported with the vulkan backend"),
     };
 }
 

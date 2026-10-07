@@ -10,7 +10,7 @@ const WindowConfig = @import("window").Config;
 
 const App = @import("App.zig");
 const Timer = @import("Timer.zig");
-const NativeAccessibility = if (@import("platform.zig").is_browser_wasm) void else @import("native_accessibility");
+const NativeAccessibility = if (@import("platform.zig").is_wasm) void else @import("native_accessibility");
 
 const Viewport = @This();
 
@@ -32,7 +32,6 @@ id: Id,
 window: Window,
 ui_ctx: Context,
 renderer: *render.Renderer,
-overlay_painter: *render.Painter,
 timer: Timer,
 ui_cfg: UI.Config,
 
@@ -45,22 +44,17 @@ renderer_reconfigure_error: ?render.Renderer.ReconfigureError = null,
 
 frame_active: bool = false,
 frame_pending: bool = false,
-contribution_painters: std.AutoHashMapUnmanaged(u64, *render.Painter) = .empty,
 accessibility: ?*NativeAccessibility = null,
 
 fn init(self: *Viewport, allocator: std.mem.Allocator, id: Id, window_value: Window, renderer_value: *render.Renderer, cfg: Config) !void {
     var ui_ctx = try Context.init(allocator, .{ .ui = cfg.ui, .arena_reset_mode = cfg.arena_reset_mode, .accessibility = cfg.accessibility });
     errdefer ui_ctx.deinit();
 
-    const overlay_painter = try renderer_value.createLayerPainter();
-    errdefer overlay_painter.destroyAfterWait();
-
     self.* = .{
         .id = id,
         .window = window_value,
         .ui_ctx = ui_ctx,
         .renderer = renderer_value,
-        .overlay_painter = overlay_painter,
         .timer = .init(cfg.timer_clock),
         .ui_cfg = cfg.ui,
     };
@@ -78,11 +72,8 @@ pub fn create(
     errdefer allocator.destroy(self);
 
     try self.init(allocator, id, window_value, renderer_value, cfg);
-    errdefer {
-        self.overlay_painter.destroyAfterWait();
-        self.ui_ctx.deinit();
-    }
-    if (!@import("platform.zig").is_browser_wasm) {
+    errdefer self.ui_ctx.deinit();
+    if (!@import("platform.zig").is_wasm) {
         if (cfg.accessibility) {
             self.accessibility = try NativeAccessibility.create(allocator, io, self.window.getWindowHandle(), &self.window, wakeAccessibility);
             self.window.accessibility = self.accessibility;
@@ -133,16 +124,11 @@ pub fn createSecondary(
 
 pub fn destroy(self: *Viewport, allocator: std.mem.Allocator) void {
     self.window.clearFrameHandler();
-    if (!@import("platform.zig").is_browser_wasm) {
+    if (!@import("platform.zig").is_wasm) {
         self.window.accessibility = null;
         if (self.accessibility) |adapter| adapter.destroy();
     }
     self.ui_ctx.deinit();
-    self.renderer.context.device.waitIdle() catch |err| std.log.warn("Layer shutdown: {s}", .{@errorName(err)});
-    var painters = self.contribution_painters.valueIterator();
-    while (painters.next()) |painter| painter.*.destroyAfterWait();
-    self.contribution_painters.deinit(allocator);
-    self.overlay_painter.destroyAfterWait();
     self.renderer.destroy();
     self.window.deinit();
     allocator.destroy(self);

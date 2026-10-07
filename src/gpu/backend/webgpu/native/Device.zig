@@ -108,7 +108,7 @@ pub fn createSurface(instance: wgpu.Instance, window_handle: gpu.Context.WindowH
                 .linux = .{ .wayland = .{ .display = wl.display, .surface = wl.surface } },
             },
         },
-        .web => return error.UnsupportedPlatform,
+        .web, .hosted => return error.UnsupportedPlatform,
     };
     var surface_desc = try wgpu.descriptorFromRawHandle(wgpu_handle);
     const desc = surface_desc.getDescriptor();

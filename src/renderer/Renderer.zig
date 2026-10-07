@@ -154,53 +154,6 @@ const RenderFailure = union(enum) {
     renderer: anyerror,
 };
 
-pub const CompositionNode = struct {
-    painter: *Painter,
-    packet: *const Packet,
-};
-
-/// Create one painter per independent UI context. The caller owns the painter.
-pub fn createLayerPainter(self: *Renderer) !*Painter {
-    return Painter.create(self.allocator, self.context, self.frame.uploadSlotCount());
-}
-
-/// Compose the host-owned graph in order, preserving each contribution's atlas.
-/// All painters must belong to this renderer's context and be distinct.
-pub fn renderGraph(self: *Renderer, graph: []const CompositionNode, content_scale: f32) !void {
-    if (graph.len == 0) return error.EmptyCompositionGraph;
-    if (graph.len > 32) return error.CompositionGraphTooLarge;
-    std.debug.assert(content_scale > 0);
-    std.debug.assert(std.math.isFinite(content_scale));
-    for (graph, 0..) |node, index| {
-        std.debug.assert(node.painter.context == self.context);
-        for (graph[0..index]) |previous| std.debug.assert(previous.painter != node.painter);
-    }
-    const linear = self.context.linear_pipeline != null;
-    // Backdrops sample what is drawn, so they need the offscreen target.
-    var offscreen = linear;
-    for (graph) |node| offscreen = offscreen or node.packet.hasBackdrop();
-    if (offscreen) try self.ensureSceneTarget(self.context.device, self.context);
-    try self.syncDepthTarget(self.context.device);
-    var frame_context = try self.frame.begin();
-    var prepared: [32]Painter.Prepared = undefined;
-    for (graph, 0..) |node, index| {
-        prepared[index] = try node.painter.prepare(node.packet, &.{
-            .width = self.surface.cfg.window_width,
-            .height = self.surface.cfg.window_height,
-            .content_scale = content_scale,
-            .upload_slot = frame_context.upload_slot,
-            .linear_target = linear,
-            .backdrops = offscreen,
-        });
-    }
-    var nodes: [32]EncodeNode = undefined;
-    for (graph, 0..) |node, index| nodes[index] = .{ .painter = node.painter, .prepared = &prepared[index] };
-    if (self.encodeFrame(&frame_context, nodes[0..graph.len], offscreen)) |failure| switch (failure) {
-        .callback, .renderer => |err| return err,
-    };
-    try self.finishFrame(&frame_context, &graph[0].painter.frame_uploads[frame_context.upload_slot], content_scale, offscreen);
-}
-
 /// Upload resources, encode, submit, and present to this renderer's owned surface.
 /// The packet is borrowed for this call; texture handles must outlive GPU work.
 pub fn render(self: *Renderer, packet: *const Packet, content_scale: f32) RenderResult {

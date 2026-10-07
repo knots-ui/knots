@@ -53,7 +53,7 @@ Select a backend with the `gpu_backend` dependency option. Read
 | wayland | Linux windowing | System `libwayland` |
 | TrueType | Text | - |
 | js_bridge (`lib/js-bridge`) | Browser host | - |
-| pack, celer, watch, wasmtime | Hot reloading (dev only) | wasmtime shared |
+| celer, watch, wasmtime | Hot reloading (dev only) | wasmtime shared |
 
 ## Install
 
@@ -110,10 +110,19 @@ address until `start` returns.
 
 ## Hot reloading
 
-Knots can compile UI modules to WebAssembly and reload them in a running native
-or browser host. Use `Knots.HMR` in `build.zig` and `knots.Modules` in the host.
-Read [Hot reloading](https://knotsui.com/docs/hot-reloading.html). The
-[playground](examples/playground) is a complete HMR host.
+`zig build dev` rebuilds your app to WebAssembly on every save and swaps it in
+while it runs. Widget state carries over; build errors and crashes show over
+the app.
+
+```zig
+const dev = Knots.HMR.init(b, .{ .target = target });
+const exe = buildApp(b, dev.knots, dev.target);
+dev.addRunner(exe, b.step("dev", "Run with HMR"));
+```
+
+Native apps run in a dev host that keeps their windows open. Browser apps
+reload the page. See [Hot reloading](https://knotsui.com/docs/hot-reloading.html)
+and the [playground](examples/playground).
 
 ## Embedding in an existing renderer
 
@@ -229,7 +238,7 @@ Set `.web_threads = false` for a build without shared memory.
 
 ## Examples
 
-- [examples/playground](examples/playground): a component catalog and HMR host.
+- [examples/playground](examples/playground): a component catalog, with hot reloading.
 - [examples/embedded](examples/embedded): a host that owns its render passes.
 - [examples/triangle](examples/triangle): drawing with the `Canvas` component.
 - [examples/benchmark](examples/benchmark): a stress test with Tracy zones.

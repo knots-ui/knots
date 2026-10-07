@@ -33,6 +33,7 @@ pub const WindowHandle = union(enum) {
     web: struct {
         selector: []const u8,
     },
+    hosted: u32,
 };
 
 pub const PresentMode = enum {

@@ -25,7 +25,7 @@ const menu_item: ui.Style = .{
     .hover = &.{ .background = .muted, .state_layer = 0 },
 };
 
-pub fn main(app: *knots.Frame) !void {
+pub fn render(_: *knots.App, app: *ui.Frame) !void {
     const arena = app.arena();
 
     try app.e(.{

@@ -2,9 +2,9 @@ const std = @import("std");
 const knots = @import("knots");
 const triangle = @import("triangle");
 
-pub const std_options: std.Options = if (knots.platform.is_browser_wasm) .{ .logFn = knots.web.logFn } else .{};
+pub const std_options: std.Options = if (knots.platform.is_wasm) .{ .logFn = knots.wasm.logFn } else .{};
 
-pub const main = if (knots.platform.is_browser_wasm) struct {
+pub const main = if (knots.platform.is_wasm) struct {
     fn main() void {}
 }.main else nativeMain;
 
@@ -16,18 +16,18 @@ fn nativeMain(init: std.process.Init) !void {
 }
 
 comptime {
-    if (knots.platform.is_browser_wasm) @export(&struct {
+    if (knots.platform.is_wasm) @export(&struct {
         fn webMain() callconv(.{ .wasm_mvp = .{} }) i32 {
-            const allocator = knots.web.allocator;
-            const ptr = allocator.create(triangle) catch |err| return knots.web.fail(err);
-            ptr.* = triangle.init(knots.web.io, allocator) catch |err| {
+            const allocator = knots.wasm.allocator;
+            const ptr = allocator.create(triangle) catch |err| return knots.wasm.fail(err);
+            ptr.* = triangle.init(knots.wasm.io, allocator) catch |err| {
                 allocator.destroy(ptr);
-                return knots.web.fail(err);
+                return knots.wasm.fail(err);
             };
             ptr.start() catch |err| {
                 ptr.deinit(allocator);
                 allocator.destroy(ptr);
-                return knots.web.fail(err);
+                return knots.wasm.fail(err);
             };
 
             return 0;
