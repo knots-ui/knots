@@ -629,7 +629,13 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
             return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        win32.WM_CONTEXTMENU => return 0,
+        win32.WM_CONTEXTMENU => {
+            if (lparam != -1) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            return 0;
+        },
         win32.WM_SETFOCUS => {
             if (ownerOf(hwnd)) |o| {
                 o.setFocused(true);
