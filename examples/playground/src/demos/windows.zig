@@ -7,6 +7,8 @@ const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Button = ui.component.Button;
 const FloatingWindow = ui.component.FloatingWindow;
+const TitleBar = ui.component.TitleBar;
+const Dialog = ui.component.Dialog;
 const Spacer = ui.component.Spacer;
 
 const PanelBounds = @FieldType(ui.State.Measured, "box");
@@ -42,6 +44,15 @@ pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
         .style = &.{ .height = .fixed(32), .width = .fixed(176), .disabled = &.{ .background = .muted, .foreground = .text } },
     });
     if (native.clicked) try openNativeWindow(self);
+    const undecorated = try app.interact(Button{
+        .key = .src(@src()),
+        .label = "open custom title bar",
+        .disabled = !knots.platform.secondary_windows,
+        .style = &.{ .height = .fixed(32), .width = .fixed(176), .disabled = &.{ .background = .muted, .foreground = .text } },
+    });
+    if (undecorated.clicked) {
+        try openUndecoratedWindow(self);
+    }
     try actions.close(app);
     try renderFloatingWindows(desktop, app);
 }
@@ -141,5 +152,64 @@ fn nativeWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
         .label = "close this window",
         .style = &.{ .height = .fixed(32), .width = .fixed(176), .tone = .@"error" },
     })).clicked) frame.requestClose();
+    try root.close(frame);
+}
+
+fn openUndecoratedWindow(self: *Self) !void {
+    _ = try self.app.openWindow(self.app.main_viewport.id, .{
+        .window = .{
+            .width = 560,
+            .height = 360,
+            .title = "Knots custom title bar",
+            .decorations = .none,
+        },
+    }, undecoratedWindowFrame);
+}
+
+fn undecoratedWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
+    const self = Self.of(view.app);
+    const size = frame.input().logical_extent;
+
+    const root = Rect{
+        .key = .str("windows.undecorated.root"),
+        .style = &.{ .width = .fixed(@floatFromInt(size.width)), .height = .fixed(@floatFromInt(size.height)), .direction = .column, .background = .bg, .radius = .none },
+    };
+    _ = try root.open(frame);
+
+    const bar = TitleBar{ .key = .str("windows.undecorated.title_bar"), .title = "Custom title bar" };
+    _ = try bar.open(frame);
+    _ = try frame.interact(Button{
+        .key = .str("windows.undecorated.title_bar.action"),
+        .label = "action",
+        .style = &.{ .height = .fixed(24), .padding = .xy(10, 0), .tone = .secondary },
+    });
+    try bar.close(frame);
+
+    const content = Rect{
+        .key = .str("windows.undecorated.content"),
+        .style = &.{ .width = .grow(), .height = .grow(), .padding = .all(24), .direction = .column, .gap = 12 },
+    };
+    _ = try content.open(frame);
+    try frame.e(Text{
+        .content = "This window has no platform title bar. Drag the bar to move it, double-click it to maximize, and resize from the edges. The window buttons keep working while the dialog is open.",
+        .key = .str("windows.undecorated.description"),
+        .style = &.{ .width = .grow(), .wrap = true },
+    });
+    if ((try frame.interact(Button{
+        .key = .str("windows.undecorated.open_dialog"),
+        .label = "open dialog",
+        .style = &.{ .height = .fixed(32), .width = .fixed(176) },
+    })).clicked) self.demo_state.title_bar_dialog_open = true;
+    try content.close(frame);
+
+    const dialog = Dialog{ .is_open = &self.demo_state.title_bar_dialog_open, .key = .str("windows.undecorated.dialog") };
+    if (try dialog.open(frame) != ui.UI.INVALID_ID) {
+        try frame.e(Text{
+            .content = "A modal dialog. Press Escape or click outside to close it.",
+            .key = .str("windows.undecorated.dialog.text"),
+        });
+    }
+    try dialog.close(frame);
+
     try root.close(frame);
 }
