@@ -11,6 +11,7 @@ pub const base: Layer = .{ .z = 0 };
 pub const dropdown: Layer = .{ .z = 1 };
 pub const popup: Layer = .{ .z = 10 };
 pub const modal: Layer = .{ .z = 200 };
+pub const chrome: Layer = .{ .z = 240 };
 
 pub fn fromIndex(i: usize) Layer {
     std.debug.assert(i < count);

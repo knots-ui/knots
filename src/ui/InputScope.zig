@@ -6,6 +6,7 @@ const InputScope = @This();
 
 pub const Config = union(enum) {
     modal,
+    chrome,
 };
 
 const ModalEntry = struct {
@@ -33,15 +34,20 @@ stack: std.ArrayList(Element.Id) = .empty,
 entries: std.ArrayList(Entry) = .empty,
 active: Active = .none,
 next_order: u32 = 0,
+chrome_building: std.ArrayList(Element.Id) = .empty,
+chrome: std.ArrayList(Element.Id) = .empty,
 
 pub fn deinit(self: *InputScope, allocator: std.mem.Allocator) void {
     self.stack.deinit(allocator);
     self.entries.deinit(allocator);
+    self.chrome_building.deinit(allocator);
+    self.chrome.deinit(allocator);
 }
 
 pub fn resetFrame(self: *InputScope) void {
     self.stack.clearRetainingCapacity();
     self.entries.clearRetainingCapacity();
+    self.chrome_building.clearRetainingCapacity();
     self.next_order = 0;
 }
 
@@ -54,6 +60,7 @@ pub fn begin(self: *InputScope, allocator: std.mem.Allocator, id: Element.Id, co
     try self.stack.ensureUnusedCapacity(allocator, 1);
     switch (config) {
         .modal => try self.entries.ensureUnusedCapacity(allocator, 1),
+        .chrome => try self.chrome_building.ensureUnusedCapacity(allocator, 1),
     }
 
     self.stack.appendAssumeCapacity(id);
@@ -66,6 +73,7 @@ pub fn begin(self: *InputScope, allocator: std.mem.Allocator, id: Element.Id, co
             } });
             self.next_order += 1;
         },
+        .chrome => self.chrome_building.appendAssumeCapacity(id),
     }
 }
 
@@ -86,6 +94,8 @@ pub fn cancel(self: *InputScope, id: Element.Id) void {
 }
 
 pub fn resolveActive(self: *InputScope) void {
+    std.mem.swap(std.ArrayList(Element.Id), &self.chrome, &self.chrome_building);
+    self.chrome_building.clearRetainingCapacity();
     self.active = .none;
     var has_best = false;
     var best_z: Layer = Layer.base;
@@ -123,6 +133,11 @@ pub fn isActive(self: *const InputScope, id: Element.Id) bool {
 pub fn allows(self: *const InputScope, scope: Element.Id) bool {
     return switch (self.active) {
         .none => true,
-        .modal => |active_id| scope == active_id,
+        .modal => |active_id| scope == active_id or self.isChrome(scope),
     };
+}
+
+fn isChrome(self: *const InputScope, scope: Element.Id) bool {
+    return std.mem.indexOfScalar(Element.Id, self.chrome.items, scope) != null or
+        std.mem.indexOfScalar(Element.Id, self.chrome_building.items, scope) != null;
 }
