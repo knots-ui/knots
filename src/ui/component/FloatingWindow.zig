@@ -5,10 +5,10 @@ const Element = @import("layout").Element;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
 
-const Decoration = ui_mod.Decoration;
 const Key = ui_mod.Key;
 const Style = ui_mod.Style;
 const animation = ui_mod.animation;
+const window_icon = @import("window_icon.zig");
 
 pub const CloseReason = enum {
     close_button,
@@ -80,12 +80,6 @@ const FloatingWindow = @This();
 pub const OpenResponse = struct {
     id: Element.Id,
     close_reason: ?CloseReason,
-};
-
-const TitleIcon = enum {
-    maximize,
-    restore,
-    close,
 };
 
 const TITLE_INDEX: usize = 1;
@@ -319,45 +313,12 @@ fn openTitleButton(self: *const FloatingWindow, frame: *Frame, comptime index: u
     try ui.setAccessibility(button_id, .{ .role = .button, .name = name });
 }
 
-fn openTitleIcon(self: *const FloatingWindow, frame: *Frame, icon: TitleIcon, title_bar_height: f32) !void {
-    const ui = frame.ui();
-    // The icon draws in the title button's (transitioned) foreground.
-    const icon_color = ui.contents.items[ui.currentSlot()].foreground;
-    const icon_size = @max(10, title_bar_height * 0.34);
-    const cmds = try frame.arena().alloc(Decoration.DrawCmd, switch (icon) {
-        .close => 2,
-        .maximize => 4,
-        .restore => 8,
-    });
-    switch (icon) {
-        .close => {
-            cmds[0] = .{ .line = .{
-                .from = .{ icon_size * 0.25, icon_size * 0.25 },
-                .to = .{ icon_size * 0.75, icon_size * 0.75 },
-                .color = icon_color,
-                .thickness = 1.75,
-            } };
-            cmds[1] = .{ .line = .{
-                .from = .{ icon_size * 0.75, icon_size * 0.25 },
-                .to = .{ icon_size * 0.25, icon_size * 0.75 },
-                .color = icon_color,
-                .thickness = 1.75,
-            } };
-        },
-        .maximize => appendSquareIcon(cmds[0..4], icon_size, 0.22, 0.22, 0.56, icon_color),
-        .restore => {
-            appendSquareIcon(cmds[0..4], icon_size, 0.18, 0.34, 0.48, icon_color);
-            appendSquareIcon(cmds[4..8], icon_size, 0.34, 0.18, 0.48, icon_color);
-        },
-    }
-    _ = try ui.open(self.key.indexed(switch (icon) {
+fn openTitleIcon(self: *const FloatingWindow, frame: *Frame, icon: window_icon.Icon, title_bar_height: f32) !void {
+    const index: usize = switch (icon) {
         .close => CLOSE_ICON_INDEX,
-        .maximize, .restore => MAXIMIZE_ICON_INDEX,
-    }), .{
-        .width = .fixed(icon_size),
-        .height = .fixed(icon_size),
-    }, .{ .canvas = .{ .cmds = cmds } });
-    ui.close();
+        .maximize, .restore, .minimize => MAXIMIZE_ICON_INDEX,
+    };
+    try window_icon.open(frame, self.key.indexed(index), icon, @max(10, title_bar_height * 0.34));
 }
 
 fn effectiveMinSize(self: *const FloatingWindow, title_bar_height: f32) math.Vec2 {
@@ -396,16 +357,4 @@ fn clampPosition(position: math.Vec2, size: math.Vec2, bounds: math.Rect) math.V
         std.math.clamp(position[0], min[0], max[0]),
         std.math.clamp(position[1], min[1], max[1]),
     };
-}
-
-fn appendSquareIcon(cmds: []Decoration.DrawCmd, icon_size: f32, x: f32, y: f32, size: f32, color: [4]f32) void {
-    std.debug.assert(cmds.len == 4);
-    const left = icon_size * x;
-    const top = icon_size * y;
-    const right = icon_size * (x + size);
-    const bottom = icon_size * (y + size);
-    cmds[0] = .{ .line = .{ .from = .{ left, top }, .to = .{ right, top }, .color = color, .thickness = 1.75 } };
-    cmds[1] = .{ .line = .{ .from = .{ right, top }, .to = .{ right, bottom }, .color = color, .thickness = 1.75 } };
-    cmds[2] = .{ .line = .{ .from = .{ right, bottom }, .to = .{ left, bottom }, .color = color, .thickness = 1.75 } };
-    cmds[3] = .{ .line = .{ .from = .{ left, bottom }, .to = .{ left, top }, .color = color, .thickness = 1.75 } };
 }
