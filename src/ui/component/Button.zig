@@ -52,7 +52,7 @@ pub fn open(self: *const Button, frame: *Frame) !Element.Id {
 pub fn openResponse(self: *const Button, frame: *Frame) !Response {
     const ui = frame.ui();
     const id = self.key.hash();
-    const st = ui.states(id, .{ .disabled = self.disabled });
+    const st = ui.states(id, .{ .disabled = self.disabled, .hover = ui.isHoveredWithin(id) });
 
     const root = try ui.openStyled(self.key, .{ .base = &base.root, .user = self.style }, st, .{
         .interactive = !self.disabled,
