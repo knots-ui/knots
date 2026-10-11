@@ -41,6 +41,7 @@ frame_handler: ?FrameHandler = null,
 accessibility: ?*if (builtin.target.cpu.arch.isWasm()) void else @import("native_accessibility") = null,
 input_dirty: bool = false,
 pending_paste: ?[]u8 = null,
+pointer_inside: bool = true,
 
 const Window = @This();
 
@@ -206,6 +207,7 @@ pub fn collectInput(self: *Window) !Input {
     return .{
         .focused = self.focused,
         .pos = mouse.pos,
+        .pointer_inside = self.pointer_inside,
         .mouse = mouse.buttons,
         .scroll = scroll,
         .chars = chars,
@@ -220,6 +222,7 @@ pub fn collectInput(self: *Window) !Input {
 
 pub fn setInput(self: *Window, frame: Input) void {
     self.focused = frame.focused;
+    self.pointer_inside = frame.pointer_inside;
     self.mouse = .{ .pos = frame.pos, .buttons = frame.mouse };
     self.scroll = frame.scroll;
     self.key_down = frame.key_down.*;
@@ -346,8 +349,20 @@ pub fn addScrollPages(self: *Window, dx: f64, dy: f64) void {
 }
 
 pub fn setCursorPos(self: *Window, pos: [2]f64) void {
-    if (self.mouse.pos[0] == pos[0] and self.mouse.pos[1] == pos[1]) return;
+    if (self.pointer_inside and self.mouse.pos[0] == pos[0] and self.mouse.pos[1] == pos[1]) {
+        return;
+    }
+    self.pointer_inside = true;
     self.mouse.pos = pos;
+    self.markInputChanged();
+}
+
+/// The pointer left the window, so nothing under the last position stays hovered.
+pub fn pointerLeft(self: *Window) void {
+    if (!self.pointer_inside) {
+        return;
+    }
+    self.pointer_inside = false;
     self.markInputChanged();
 }
 

@@ -321,6 +321,18 @@ fn initWindow(cfg: window.Config) !Backend {
         .msgSend(objc.Object, "initWithFrame:", .{frame});
     ns_window.msgSend(void, "setContentView:", .{view});
 
+    const NSTrackingArea = objc.getClass("NSTrackingArea").?;
+    const tracking_area = NSTrackingArea
+        .msgSend(objc.Object, "alloc", .{})
+        .msgSend(objc.Object, "initWithRect:options:owner:userInfo:", .{
+        frame,
+        ak.NSTrackingMouseEnteredAndExited | ak.NSTrackingActiveAlways | ak.NSTrackingInVisibleRect,
+        view,
+        @as(c.id, null),
+    });
+    view.msgSend(void, "addTrackingArea:", .{tracking_area});
+    tracking_area.msgSend(void, "release", .{});
+
     const NSArray = objc.getClass("NSArray").?;
     const drag_types = NSArray.msgSend(objc.Object, "arrayWithObject:", .{objc.Object{ .value = ak.NSPasteboardTypeFileURL }});
     view.msgSend(void, "registerForDraggedTypes:", .{drag_types});

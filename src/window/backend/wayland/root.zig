@@ -973,7 +973,13 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             if (state.owner) |owner| owner.setCursorPos(state.cursor_pos);
             state.applyCursor();
         },
-        .leave => shared.pointer_state = null,
+        .leave => {
+            const state = shared.pointer_state orelse return;
+            shared.pointer_state = null;
+            if (state.owner) |owner| {
+                owner.pointerLeft();
+            }
+        },
         .motion => |motion| {
             const state = shared.pointer_state orelse return;
             state.cursor_pos = .{ motion.surface_x.toDouble(), motion.surface_y.toDouble() };

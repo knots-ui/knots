@@ -164,6 +164,7 @@ pub const ScrollInput = struct {
 pub const Input = struct {
     focused: bool = true,
     pos: [2]f64,
+    pointer_inside: bool = true,
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
     chars: []const u21 = &.{},

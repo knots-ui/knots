@@ -25,6 +25,7 @@ pub const mouse_methods = .{
     .{ "otherMouseUp:", otherMouseUp },
     .{ "otherMouseDragged:", otherMouseDragged },
     .{ "scrollWheel:", scrollWheel },
+    .{ "mouseExited:", mouseExited },
 };
 
 pub const keyboard_methods = .{
@@ -68,6 +69,11 @@ fn eventPos(self: c.id, event_id: c.id) [2]f64 {
 fn mouseLeftDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
     owner.setMouseButton(.left, true, eventPos(self, event_id));
+}
+
+fn mouseExited(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
+    const owner = ak.unwrapOwner(self) orelse return;
+    owner.pointerLeft();
 }
 
 fn mouseLeftUp(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {

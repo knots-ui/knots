@@ -51,6 +51,16 @@ fn wheelMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
     });
 }
 
+fn trackLeave(hwnd: win32.HWND, nonclient: bool) void {
+    var track: win32.TRACKMOUSEEVENT = .{
+        .cbSize = @sizeOf(win32.TRACKMOUSEEVENT),
+        .dwFlags = .{ .LEAVE = 1, .NONCLIENT = @intFromBool(nonclient) },
+        .hwndTrack = hwnd,
+        .dwHoverTime = 0,
+    };
+    _ = win32.TrackMouseEvent(&track);
+}
+
 fn systemPrefersDarkTheme() bool {
     var hkey: ?win32.HKEY = undefined;
 
@@ -95,6 +105,7 @@ pub const Backend = struct {
     drop_slices: [64][]const u8 = undefined,
     min_size: ?input_types.Size,
     max_size: ?input_types.Size,
+    tracking_client_leave: bool = false,
 
     const Self = @This();
 
@@ -533,18 +544,38 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             return 0;
         },
         win32.WM_MOUSEMOVE => {
-            if (ownerOf(hwnd)) |o| o.setCursorPos(mousePos(hwnd, lparam));
+            if (ownerOf(hwnd)) |o| {
+                if (!o.backend.tracking_client_leave) {
+                    trackLeave(hwnd, false);
+                    o.backend.tracking_client_leave = true;
+                }
+
+                o.setCursorPos(mousePos(hwnd, lparam));
+            }
+            return 0;
+        },
+        win32.WM_MOUSELEAVE => {
+            if (ownerOf(hwnd)) |o| {
+                o.backend.tracking_client_leave = false;
+                o.pointerLeft();
+            }
             return 0;
         },
         win32.WM_LBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
-            if (ownerOf(hwnd)) |o| o.setMouseButton(.left, true, mousePos(hwnd, lparam));
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, true, mousePos(hwnd, lparam));
+            }
+
             return 0;
         },
         win32.WM_LBUTTONUP => {
             if (ownerOf(hwnd)) |o| {
                 o.setMouseButton(.left, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             } else {
                 _ = win32.ReleaseCapture();
             }
@@ -552,13 +583,19 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
         },
         win32.WM_RBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
-            if (ownerOf(hwnd)) |o| o.setMouseButton(.right, true, mousePos(hwnd, lparam));
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.right, true, mousePos(hwnd, lparam));
+            }
+
             return 0;
         },
         win32.WM_RBUTTONUP => {
             if (ownerOf(hwnd)) |o| {
                 o.setMouseButton(.right, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             } else {
                 _ = win32.ReleaseCapture();
             }
@@ -576,7 +613,9 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             if (ownerOf(hwnd)) |o| {
                 const button: input_types.MouseButton = if (msg == win32.WM_MBUTTONUP) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
                 o.setMouseButton(button, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             }
             return 0;
         },

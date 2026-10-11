@@ -406,6 +406,9 @@ fn syncStateBounds(ui: *UI) void {
 }
 
 fn currentMouseHit(ui: *UI) Element.Id {
+    if (!ui.input.pointer_inside) {
+        return Element.INVALID_ID;
+    }
     return mouseHit(ui, ui.input.mouse_pos);
 }
 
@@ -1416,6 +1419,39 @@ test "frame carries host input, effects, and retryable glyph data" {
     const second = try view.endFrame(&frame);
     try std.testing.expectEqual(glyph.id, second.packet.glyphAtlas().?.id);
     try std.testing.expectEqual(glyph.revision, second.packet.glyphAtlas().?.revision);
+}
+
+fn chromeTestInput(pos: [2]f64, pointer_inside: bool) input_types.FrameInput {
+    return .{
+        .input = .{ .pos = pos, .pointer_inside = pointer_inside },
+        .now_ms = 0,
+        .delta_ns = 0,
+        .logical_extent = .{ .width = 200, .height = 100 },
+        .physical_extent = .{ .width = 200, .height = 100 },
+        .content_scale = 1,
+    };
+}
+
+fn buildChromeTest(ui: *UI) !void {
+    _ = try ui.open(.str("bar"), .{ .width = .fixed(200), .height = .fixed(30), .interactive = true }, .none);
+    _ = try ui.open(.str("tab"), .{ .width = .fixed(40), .height = .fixed(30), .interactive = true }, .none);
+    ui.close();
+    ui.close();
+}
+
+test "a pointer outside the window hovers nothing" {
+    var view = try Context.init(std.testing.allocator, .{});
+    defer view.deinit();
+
+    var frame = try view.beginFrame(chromeTestInput(.{ 10, 10 }, true));
+    try buildChromeTest(frame.ui());
+    _ = try view.endFrame(&frame);
+    try std.testing.expectEqual(Key.str("tab").hash(), view.ui.state.hovered);
+
+    frame = try view.beginFrame(chromeTestInput(.{ 10, 10 }, false));
+    try buildChromeTest(frame.ui());
+    _ = try view.endFrame(&frame);
+    try std.testing.expectEqual(Element.INVALID_ID, view.ui.state.hovered);
 }
 
 test "frame validates extents and scale" {
