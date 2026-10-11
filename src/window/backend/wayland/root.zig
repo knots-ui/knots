@@ -458,9 +458,16 @@ const State = struct {
 
     fn reconcileDisplayMode(self: *State) void {
         if (self.display_mode_transition or self.display_mode == self.desired_display_mode) return;
-        switch (self.desired_display_mode) {
-            .windowed => self.toplevel.unsetFullscreen(),
-            .fullscreen => self.toplevel.setFullscreen(null),
+        switch (self.display_mode) {
+            .fullscreen => self.toplevel.unsetFullscreen(),
+            .maximized => switch (self.desired_display_mode) {
+                .fullscreen => self.toplevel.setFullscreen(null),
+                .windowed, .maximized => self.toplevel.unsetMaximized(),
+            },
+            .windowed => switch (self.desired_display_mode) {
+                .fullscreen => self.toplevel.setFullscreen(null),
+                .windowed, .maximized => self.toplevel.setMaximized(),
+            },
         }
         self.surface.commit();
         _ = self.shared.display.flush();
@@ -637,6 +644,11 @@ pub const Backend = struct {
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
         return self.state.display_mode;
+    }
+
+    pub fn minimize(self: *Self) void {
+        self.state.toplevel.setMinimized();
+        _ = self.state.shared.display.flush();
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
@@ -889,6 +901,9 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, state: *Stat
                     mode = .fullscreen;
                     break;
                 }
+                if (configured_state == @backingInt(xdg.Toplevel.State.maximized)) {
+                    mode = .maximized;
+                }
             }
             const changed = state.display_mode != mode;
             if (!state.display_mode_transition) state.desired_display_mode = mode;
@@ -995,7 +1010,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
                 BTN_EXTRA => .forward,
                 else => null,
             };
-            if (translated) |mouse_button| if (state.owner) |owner| owner.setMouseButton(mouse_button, button.state == .pressed, state.cursor_pos);
+            const mouse_button = translated orelse return;
+            const pressed = button.state == .pressed;
+            if (state.owner) |owner| {
+                owner.setMouseButton(mouse_button, pressed, state.cursor_pos);
+            }
         },
         .axis => |axis| {
             const state = shared.pointer_state orelse return;

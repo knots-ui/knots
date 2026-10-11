@@ -79,7 +79,6 @@ fn answer(self: *Windows, comptime tag: std.meta.Tag(abi.WindowCall), args: @Fie
         .open => return self.open(args),
         .set_title => try self.setTitle(try self.get(args[0]), args[1]),
         .set_display_mode => return (try self.get(args[0])).window.setDisplayMode(args[1]),
-        .display_mode => return (try self.get(args)).window.getDisplayMode(),
         .request_paste => try (try self.get(args)).window.requestPaste(),
         .set_clipboard_text => return (try self.get(args[0])).window.setClipboardText(self.gpa, args[1]),
     }
@@ -96,6 +95,7 @@ pub fn command(self: *Windows, request: abi.WindowCommand, device: *Gpu) !void {
         .request_frame => |handle| (try self.get(handle)).window.requestFrame(),
         .set_cursor_visible => |args| (try self.get(args[0])).window.setCursorVisible(args[1]),
         .set_cursor_shape => |args| (try self.get(args[0])).window.setCursorShape(args[1]),
+        .minimize => |handle| (try self.get(handle)).window.minimize(),
     }
 }
 

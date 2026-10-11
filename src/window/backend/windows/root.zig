@@ -220,17 +220,17 @@ pub const Backend = struct {
     pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) bool {
         switch (mode) {
             .windowed => {
-                if (!self.is_fullscreen) return true;
-                const style_bits: u32 = @bitCast(self.saved_style);
-                _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWL_STYLE, @bitCast(@as(usize, style_bits)));
-                _ = win32.SetWindowPlacement(self.hwnd, &self.saved_placement);
-                _ = win32.SetWindowPos(self.hwnd, null, 0, 0, 0, 0, .{
-                    .NOMOVE = 1,
-                    .NOSIZE = 1,
-                    .NOZORDER = 1,
-                    .DRAWFRAME = 1,
-                });
-                self.is_fullscreen = false;
+                self.leaveFullscreen();
+                if (win32.IsZoomed(self.hwnd) != 0) {
+                    _ = win32.ShowWindow(self.hwnd, win32.SW_RESTORE);
+                }
+                return true;
+            },
+            .maximized => {
+                self.leaveFullscreen();
+                if (win32.IsZoomed(self.hwnd) == 0) {
+                    _ = win32.ShowWindow(self.hwnd, win32.SW_MAXIMIZE);
+                }
                 return true;
             },
             .fullscreen => {
@@ -268,8 +268,34 @@ pub const Backend = struct {
         }
     }
 
+    fn leaveFullscreen(self: *Self) void {
+        if (!self.is_fullscreen) {
+            return;
+        }
+        const style_bits: u32 = @bitCast(self.saved_style);
+        _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWL_STYLE, @bitCast(@as(usize, style_bits)));
+        _ = win32.SetWindowPlacement(self.hwnd, &self.saved_placement);
+        _ = win32.SetWindowPos(self.hwnd, null, 0, 0, 0, 0, .{
+            .NOMOVE = 1,
+            .NOSIZE = 1,
+            .NOZORDER = 1,
+            .DRAWFRAME = 1,
+        });
+        self.is_fullscreen = false;
+    }
+
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return if (self.is_fullscreen) .fullscreen else .windowed;
+        if (self.is_fullscreen) {
+            return .fullscreen;
+        }
+        if (win32.IsZoomed(self.hwnd) != 0) {
+            return .maximized;
+        }
+        return .windowed;
+    }
+
+    pub fn minimize(self: *Self) void {
+        _ = win32.ShowWindow(self.hwnd, win32.SW_MINIMIZE);
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {

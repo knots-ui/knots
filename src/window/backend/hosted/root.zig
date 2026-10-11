@@ -20,6 +20,7 @@ export fn knots_hosted_frame(handle: u32) void {
     const frame = wire.decode(abi.Input, arena.allocator(), buffer.items) catch |err|
         return std.log.err("hosted: invalid frame input: {t}", .{err});
     self.metrics = frame.metrics;
+    self.display_mode = frame.input.display_mode;
     owner.setInput(frame.input);
     if (frame.resized) owner.markResized();
     if (frame.closed) owner.markClosed();
@@ -41,6 +42,7 @@ pub const Backend = struct {
     owner: ?*window.Window = null,
     open: bool = true,
     drops: []const []const u8 = &.{},
+    display_mode: window.DisplayMode = .windowed,
 
     const Self = @This();
 
@@ -107,7 +109,11 @@ pub const Backend = struct {
     }
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return call(.display_mode, self.handle) catch .windowed;
+        return self.display_mode;
+    }
+
+    pub fn minimize(self: *Self) void {
+        guest.queue(.{ .window = .{ .minimize = self.handle } });
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {

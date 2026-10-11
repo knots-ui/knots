@@ -187,6 +187,8 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
             self.ui.anim_active,
         .close = self.frame_state.?.effects.close,
         .clipboard_write = self.frame_state.?.effects.clipboard_write,
+        .display_mode = self.frame_state.?.effects.display_mode,
+        .minimize = self.frame_state.?.effects.minimize,
     };
 }
 

@@ -27,7 +27,4 @@ pub const FrameHandler = struct {
     step: *const fn (ctx: *anyopaque) void,
 };
 
-pub const DisplayMode = enum {
-    windowed,
-    fullscreen,
-};
+pub const DisplayMode = input.DisplayMode;

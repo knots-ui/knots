@@ -166,6 +166,10 @@ pub fn getDisplayMode(self: *const Window) DisplayMode {
     return self.backend.getDisplayMode();
 }
 
+pub fn minimize(self: *Window) void {
+    self.backend.minimize();
+}
+
 pub fn isFocused(self: *const Window) bool {
     return self.focused;
 }
@@ -208,6 +212,7 @@ pub fn collectInput(self: *Window) !Input {
         .focused = self.focused,
         .pos = mouse.pos,
         .pointer_inside = self.pointer_inside,
+        .display_mode = self.backend.getDisplayMode(),
         .mouse = mouse.buttons,
         .scroll = scroll,
         .chars = chars,

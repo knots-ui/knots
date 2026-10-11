@@ -20,7 +20,7 @@ pub const Backend = struct {
     should_close: bool = false,
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
-    display_mode: window.DisplayMode = .windowed,
+    fullscreen: bool = false,
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
     frame_source: ?ak.CFRunLoopSourceRef = null,
@@ -201,13 +201,36 @@ pub const Backend = struct {
     }
 
     pub fn reconcileDisplayMode(self: *Self) void {
-        if (self.display_mode_transition or self.display_mode == self.desired_display_mode) return;
-        self.display_mode_transition = true;
-        self.ns_window.msgSend(void, "toggleFullScreen:", .{@as(c.id, null)});
+        if (self.display_mode_transition) {
+            return;
+        }
+        const want_fullscreen = self.desired_display_mode == .fullscreen;
+        if (want_fullscreen != self.fullscreen) {
+            self.display_mode_transition = true;
+            self.ns_window.msgSend(void, "toggleFullScreen:", .{@as(c.id, null)});
+            return;
+        }
+        if (want_fullscreen) {
+            return;
+        }
+        const zoomed = self.ns_window.msgSend(bool, "isZoomed", .{});
+        if (zoomed != (self.desired_display_mode == .maximized)) {
+            self.ns_window.msgSend(void, "zoom:", .{@as(c.id, null)});
+        }
     }
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return self.display_mode;
+        if (self.fullscreen) {
+            return .fullscreen;
+        }
+        if (self.ns_window.msgSend(bool, "isZoomed", .{})) {
+            return .maximized;
+        }
+        return .windowed;
+    }
+
+    pub fn minimize(self: *Self) void {
+        self.ns_window.msgSend(void, "miniaturize:", .{@as(c.id, null)});
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {

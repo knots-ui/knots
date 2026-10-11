@@ -120,6 +120,10 @@ pub const Backend = struct {
     }
 
     pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) bool {
+        // A page cannot resize the browser window.
+        if (mode == .maximized) {
+            return false;
+        }
         self.desired_display_mode = mode;
         return self.reconcileDisplayMode();
     }
@@ -138,6 +142,7 @@ pub const Backend = struct {
         const result = switch (self.desired_display_mode) {
             .windowed => self.exitFullscreen(),
             .fullscreen => self.requestFullscreen(),
+            .maximized => false,
         };
         if (!result) return false;
         self.display_mode_transition = true;
@@ -145,8 +150,13 @@ pub const Backend = struct {
     }
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return if (self.is_fullscreen) .fullscreen else .windowed;
+        if (self.is_fullscreen) {
+            return .fullscreen;
+        }
+        return .windowed;
     }
+
+    pub fn minimize(_: *Self) void {}
 
     pub fn refreshCanvas(self: *Self) void {
         const ev = readCanvasSize(self.canvas, self.logical_size.width, self.logical_size.height) catch return;

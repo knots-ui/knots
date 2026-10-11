@@ -417,6 +417,14 @@ fn renderFrame(
         output.cursor_shape,
     );
 
+    if (output.display_mode) |mode| {
+        _ = viewport.window.setDisplayMode(mode);
+    }
+
+    if (output.minimize) {
+        viewport.window.minimize();
+    }
+
     if (output.clipboard_write) |text| {
         _ = try viewport.window.setClipboardText(
             self.allocator,

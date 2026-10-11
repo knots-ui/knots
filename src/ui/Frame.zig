@@ -16,6 +16,8 @@ pub const State = struct {
         redraw: bool = false,
         close: bool = false,
         clipboard_write: ?[]const u8 = null,
+        display_mode: ?input_types.DisplayMode = null,
+        minimize: bool = false,
     };
 
     pub fn init(
@@ -51,6 +53,8 @@ pub const Output = struct {
     redraw: bool,
     close: bool,
     clipboard_write: ?[]const u8,
+    display_mode: ?input_types.DisplayMode,
+    minimize: bool,
 };
 
 _state: *State,
@@ -92,6 +96,18 @@ pub fn requestRedraw(self: *Frame) void {
 
 pub fn requestClose(self: *Frame) void {
     self.state().effects.close = true;
+}
+
+pub fn displayMode(self: *const Frame) input_types.DisplayMode {
+    return self.input().input.display_mode;
+}
+
+pub fn setDisplayMode(self: *Frame, mode: input_types.DisplayMode) void {
+    self.state().effects.display_mode = mode;
+}
+
+pub fn minimizeWindow(self: *Frame) void {
+    self.state().effects.minimize = true;
 }
 
 pub fn writeClipboard(self: *Frame, value: []const u8) !void {

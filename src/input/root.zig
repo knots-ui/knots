@@ -161,10 +161,17 @@ pub const ScrollInput = struct {
     }
 };
 
+pub const DisplayMode = enum {
+    windowed,
+    maximized,
+    fullscreen,
+};
+
 pub const Input = struct {
     focused: bool = true,
     pos: [2]f64,
     pointer_inside: bool = true,
+    display_mode: DisplayMode = .windowed,
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
     chars: []const u21 = &.{},

@@ -262,7 +262,7 @@ fn windowDidChangeOcclusionState(self: c.id, _: c.SEL, _: c.id) callconv(.c) voi
 
 fn windowDidEnterFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
-    owner.backend.display_mode = .fullscreen;
+    owner.backend.fullscreen = true;
     if (!owner.backend.display_mode_transition) owner.backend.desired_display_mode = .fullscreen;
     owner.backend.display_mode_transition = false;
     owner.requestFrame();
@@ -271,8 +271,10 @@ fn windowDidEnterFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
 
 fn windowDidExitFullScreen(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
-    owner.backend.display_mode = .windowed;
-    if (!owner.backend.display_mode_transition) owner.backend.desired_display_mode = .windowed;
+    owner.backend.fullscreen = false;
+    if (!owner.backend.display_mode_transition) {
+        owner.backend.desired_display_mode = owner.backend.getDisplayMode();
+    }
     owner.backend.display_mode_transition = false;
     owner.requestFrame();
     owner.backend.reconcileDisplayMode();
