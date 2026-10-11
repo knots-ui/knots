@@ -112,6 +112,7 @@ pub const Open = struct {
     min_size: ?input.Size,
     max_size: ?input.Size,
     decorations: window.Decorations,
+    app_id: ?[]const u8,
 };
 
 pub const Opened = struct {

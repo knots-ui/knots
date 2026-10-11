@@ -120,6 +120,7 @@ fn open(self: *Windows, desc: abi.Open) !abi.Opened {
         .min_size = desc.min_size,
         .max_size = desc.max_size,
         .decorations = desc.decorations,
+        .app_id = desc.app_id,
     };
     try self.entries.ensureTotalCapacity(self.gpa, self.opened + 1);
     entry.* = .{

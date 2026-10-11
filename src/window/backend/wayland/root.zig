@@ -844,7 +844,15 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
     xdg_surface.setListener(*State, xdgSurfaceListener, state);
     state.toplevel.setListener(*State, xdgToplevelListener, state);
     state.toplevel.setTitle(@ptrCast(&state.title_buf));
-    state.toplevel.setAppId("knots");
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const app_id = cfg.app_id orelse executableName(shared.io, &exe_buf);
+    if (app_id.len >= 256) {
+        return error.AppIdTooLong;
+    }
+    var app_id_buf: [256:0]u8 = undefined;
+    @memcpy(app_id_buf[0..app_id.len], app_id);
+    app_id_buf[app_id.len] = 0;
+    state.toplevel.setAppId(@ptrCast(&app_id_buf));
 
     if (!cfg.resizable) {
         state.toplevel.setMinSize(@intCast(cfg.width), @intCast(cfg.height));
@@ -881,6 +889,12 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
     }
 
     return .{ .state = state };
+}
+
+/// Desktops match the app ID against a .desktop file, which is usually named after the executable.
+fn executableName(io: std.Io, buf: []u8) []const u8 {
+    const len = std.process.executablePath(io, buf) catch return "knots";
+    return std.fs.path.basename(buf[0..len]);
 }
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Shared) void {

@@ -15,6 +15,8 @@ pub const Config = struct {
     max_size: ?input.Size = null,
     canvas_selector: ?[:0]const u8 = null,
     decorations: Decorations = .native,
+    /// Wayland app ID, which desktops match against a .desktop file. Defaults to the executable name.
+    app_id: ?[]const u8 = null,
 };
 
 pub const Decorations = enum {

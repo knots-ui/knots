@@ -158,6 +158,7 @@ fn open(cfg: window.Config) !Backend {
         .min_size = cfg.min_size,
         .max_size = cfg.max_size,
         .decorations = cfg.decorations,
+        .app_id = cfg.app_id,
     });
     if (@backingInt(opened.window) >= windows_max) return error.WindowUnavailable;
     return .{ .handle = opened.window, .metrics = opened.metrics };
