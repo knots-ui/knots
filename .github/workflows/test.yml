@@ -11,6 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fmt:
+    name: zig fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+      - run: zig fmt --check build.zig HMR.zig web_build.zig src lib examples tests
+
   native:
     name: ${{ matrix.name }}
     strategy:
