@@ -46,7 +46,7 @@ pub fn ContextMenu(comptime Menu: type) type {
                 ui.input.consumeKeyboard();
             }
 
-            if (ui.input.mouseButton(.right).pressed and containsInputPoint(s.anchor_box, ui.input.mouse_pos)) {
+            if (ui.input.mouseButton(.right).pressed and ui.isHoveredWithin(id)) {
                 openAtPointer(s, ui.input.mouse_pos);
                 frame.requestRedraw();
             } else if (ui.focused(id) and ui.input.containsKey(.menu)) {
@@ -75,7 +75,8 @@ pub fn ContextMenu(comptime Menu: type) type {
             try self.renderPopup(frame, s, &content);
 
             const popup_id = self.key.indexed(POPUP_INDEX).hash();
-            if (ui.input.mouseButton(.left).released and ui.isHoveredWithin(popup_id)) {
+            // Clicks on popup padding keep the menu open
+            if (ui.isHoveredWithin(popup_id) and ui.state.hovered != popup_id and ui.leftClicked(ui.state.hovered, .within)) {
                 s.open = false;
                 frame.requestRedraw();
             }

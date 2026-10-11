@@ -647,7 +647,10 @@ pub fn focused(self: *UI, id: Element.Id) bool {
 
 pub fn isHoveredWithin(self: *UI, ancestor_id: Element.Id) bool {
     if (!self.inputScopeAllowsId(ancestor_id)) return false;
-    return self.isDescendantOrSelf(self.state.hovered, ancestor_id);
+    // Hit path is captured pre-rebuild, slots may not exist yet
+    if (self.state.hovered == Element.INVALID_ID) return false;
+    return self.state.hovered == ancestor_id or
+        matchesHitTarget(self.state.hovered, self.hover_ancestors.items, ancestor_id, .within);
 }
 
 pub fn isFocusedWithin(self: *UI, ancestor_id: Element.Id) bool {
