@@ -8,7 +8,7 @@ const keymap = @import("keymap.zig");
 const Backend = @import("root.zig").Backend;
 
 fn keyDown(vk: anytype) bool {
-    return win32.GetKeyState(@intFromEnum(vk)) < 0;
+    return win32.GetKeyState(@backingInt(vk)) < 0;
 }
 
 pub fn modsFromKeyState() input_types.Mods {
@@ -27,7 +27,7 @@ pub fn onKey(owner: *window.Window, wparam: win32.WPARAM, lparam: win32.LPARAM, 
     const repeat_bit: u1 = @intCast((lp >> 30) & 1);
     const action: input_types.KeyAction =
         if (!pressed) .release else if (repeat_bit == 1) .repeat else .press;
-    owner.pushKey(@intFromEnum(key), action, modsFromKeyState());
+    owner.pushKey(@backingInt(key), action, modsFromKeyState());
 }
 
 pub fn onChar(owner: *window.Window, high_surrogate: *u16, w: u16) void {

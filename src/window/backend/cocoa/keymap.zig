@@ -5,7 +5,7 @@ const Key = input_types.Key;
 
 const kVK_To_Key = blk: {
     var t: [128]Key = undefined;
-    for (&t) |*slot| slot.* = @enumFromInt(0);
+    for (&t) |*slot| slot.* = @fromBackingInt(@intCast(0));
     t[0x00] = .a;
     t[0x01] = .s;
     t[0x02] = .d;
@@ -108,6 +108,6 @@ const kVK_To_Key = blk: {
 };
 
 pub fn translateKeyCode(kc: u16) Key {
-    if (kc >= kVK_To_Key.len) return @enumFromInt(0);
+    if (kc >= kVK_To_Key.len) return @fromBackingInt(@intCast(0));
     return kVK_To_Key[kc];
 }

@@ -30,7 +30,7 @@ pub fn create(device: *Device, desc: Desc) !Sampler {
         .border_color = .float_opaque_black,
         .unnormalized_coordinates = .false,
     }, null);
-    device.setDebugName(.sampler, @intFromEnum(sampler), desc.label);
+    device.setDebugName(.sampler, @backingInt(sampler), desc.label);
 
     return .{
         .sampler = sampler,

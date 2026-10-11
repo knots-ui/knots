@@ -72,7 +72,7 @@ pub fn containsKey(self: *const Input, key: input_types.Key) bool {
 }
 
 pub fn mouseButton(self: *const Input, button: input_types.MouseButton) *const input_types.MouseButtonState {
-    return &self.mouse[@intFromEnum(button)];
+    return &self.mouse[@backingInt(button)];
 }
 
 pub fn keyPressed(self: *const Input, key: input_types.Key) bool {
@@ -91,6 +91,6 @@ pub fn keyReleased(self: *const Input, key: input_types.Key) bool {
 }
 
 pub fn keyDown(self: *const Input, key: input_types.Key) bool {
-    const value = @intFromEnum(key);
+    const value = @backingInt(key);
     return value >= 0 and value < input_types.key_count and self.key_down[@intCast(value)];
 }

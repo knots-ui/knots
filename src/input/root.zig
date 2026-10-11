@@ -214,7 +214,7 @@ pub const Input = struct {
     super_held: bool = false,
 
     pub fn mouseButton(self: *const Input, button: MouseButton) *const MouseButtonState {
-        return &self.mouse[@intFromEnum(button)];
+        return &self.mouse[@backingInt(button)];
     }
 
     pub fn keyPressed(self: Input, key: Key) bool {
@@ -239,7 +239,7 @@ pub const Input = struct {
     }
 
     pub fn keyDown(self: Input, key: Key) bool {
-        const value = @intFromEnum(key);
+        const value = @backingInt(key);
         return value >= 0 and value < key_count and self.key_down[@intCast(value)];
     }
 };
@@ -260,7 +260,7 @@ pub const KeyEvent = struct {
     mods: Mods,
 };
 
-pub const key_count = @intFromEnum(Key.menu) + 1;
+pub const key_count = @backingInt(Key.menu) + 1;
 pub const no_keys_down: [key_count]bool = @splat(false);
 
 pub const Size = struct {

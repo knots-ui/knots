@@ -48,7 +48,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
             .p_bindings = binding_buf[0..bgl.entries.len].ptr,
         }, null);
         dsls_created += 1;
-        device.setDebugName(.descriptor_set_layout, @intFromEnum(dsls[i]), desc.bind_group_layouts[i].label);
+        device.setDebugName(.descriptor_set_layout, @backingInt(dsls[i]), desc.bind_group_layouts[i].label);
     }
 
     const pipeline_layout = try vkd.createPipelineLayout(vk_device, &.{
@@ -58,7 +58,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .p_push_constant_ranges = null,
     }, null);
     errdefer vkd.destroyPipelineLayout(vk_device, pipeline_layout, null);
-    device.setDebugName(.pipeline_layout, @intFromEnum(pipeline_layout), desc.label);
+    device.setDebugName(.pipeline_layout, @backingInt(pipeline_layout), desc.label);
 
     const vert_module = try vkd.createShaderModule(vk_device, &.{
         .code_size = spirv.vs.len,
@@ -194,7 +194,7 @@ pub fn create(allocator: std.mem.Allocator, device: *Device, desc: CommonPipelin
         .subpass = 0,
         .base_pipeline_index = -1,
     }}, null, vk_pipeline[0..1]);
-    device.setDebugName(.pipeline, @intFromEnum(vk_pipeline[0]), desc.label);
+    device.setDebugName(.pipeline, @backingInt(vk_pipeline[0]), desc.label);
 
     return .{
         .allocator = allocator,

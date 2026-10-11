@@ -29,7 +29,7 @@ pub const Task = struct {
     context_alignment: std.mem.Alignment,
     canceled: std.atomic.Value(u32) = .init(0),
     finished: std.atomic.Value(u32) = .init(0),
-    cancel_protection: std.atomic.Value(u32) = .init(@intFromEnum(std.Io.CancelProtection.unblocked)),
+    cancel_protection: std.atomic.Value(u32) = .init(@backingInt(std.Io.CancelProtection.unblocked)),
     waiting_on: std.atomic.Value(usize) = .init(0),
 };
 
@@ -160,7 +160,7 @@ pub const abort = complete;
 
 pub fn isCanceled() bool {
     const task = currentTask() orelse return false;
-    if (task.cancel_protection.load(.acquire) != @intFromEnum(std.Io.CancelProtection.unblocked)) return false;
+    if (task.cancel_protection.load(.acquire) != @backingInt(std.Io.CancelProtection.unblocked)) return false;
     return task.canceled.swap(0, .acq_rel) != 0;
 }
 
@@ -171,7 +171,7 @@ pub fn recancel() void {
 
 pub fn swapCancelProtection(new: std.Io.CancelProtection) std.Io.CancelProtection {
     const task = currentTask() orelse return .unblocked;
-    return @enumFromInt(task.cancel_protection.swap(@intFromEnum(new), .acq_rel));
+    return @fromBackingInt(@intCast(task.cancel_protection.swap(@backingInt(new), .acq_rel)));
 }
 
 pub fn cancelAddress() ?*const u32 {

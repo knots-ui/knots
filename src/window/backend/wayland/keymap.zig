@@ -6,7 +6,7 @@ const Key = input_types.Key;
 pub fn translateEvdev(code: u32) Key {
     return switch (code) {
         1 => .escape,
-        2...11 => @enumFromInt(@intFromEnum(Key.@"1") + @as(i32, @intCast(code - 2))),
+        2...11 => @fromBackingInt(@intCast(@backingInt(Key.@"1") + @as(i32, @intCast(code - 2)))),
         12 => .minus,
         13 => .equal,
         14 => .backspace,
@@ -54,7 +54,7 @@ pub fn translateEvdev(code: u32) Key {
         56 => .left_alt,
         57 => .space,
         58 => .caps_lock,
-        59...68 => @enumFromInt(@intFromEnum(Key.f1) + @as(i32, @intCast(code - 59))),
+        59...68 => @fromBackingInt(@intCast(@backingInt(Key.f1) + @as(i32, @intCast(code - 59)))),
         69 => .num_lock,
         70 => .scroll_lock,
         71 => .kp_7,
@@ -91,7 +91,7 @@ pub fn translateEvdev(code: u32) Key {
         125 => .left_super,
         126 => .right_super,
         127 => .menu,
-        183...194 => @enumFromInt(@intFromEnum(Key.f13) + @as(i32, @intCast(code - 183))),
-        else => @enumFromInt(0),
+        183...194 => @fromBackingInt(@intCast(@backingInt(Key.f13) + @as(i32, @intCast(code - 183)))),
+        else => @fromBackingInt(@intCast(0)),
     };
 }
