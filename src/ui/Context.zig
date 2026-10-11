@@ -170,6 +170,7 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     self.draw_list.reset();
     try tessellate(&self.ui, self.frame_arena.allocator(), &self.draw_list);
     const hover_changed = resolveHit(&self.ui);
+    const hit_regions = try collectHitRegions(&self.ui, self.frame_arena.allocator());
     self.frame_state.?.active = false;
     const packet = try self.draw_list.buildPacket(&self.packet_commands, self.glyphAtlas());
     return .{
@@ -189,7 +190,54 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
         .clipboard_write = self.frame_state.?.effects.clipboard_write,
         .display_mode = self.frame_state.?.effects.display_mode,
         .minimize = self.frame_state.?.effects.minimize,
+        .hit_regions = hit_regions,
     };
+}
+
+/// Every reachable hit record that overlaps a marked one, so elements on top
+/// of a caption carve it out the same way the UI's own hit test does.
+fn collectHitRegions(ui: *UI, allocator: Allocator) ![]const input_types.HitRegion {
+    if (ui.hit_region_marks.items.len == 0) {
+        return &.{};
+    }
+    var regions: std.ArrayList(input_types.HitRegion) = .empty;
+    for (ui.hit_records.items) |rec| {
+        if (!ui.input_scopes.allows(rec.input_scope)) {
+            continue;
+        }
+        const rect = visibleHitBounds(rec);
+        if (rect.isEmpty() or !overlapsMarkedHit(ui, rect)) {
+            continue;
+        }
+        try regions.append(allocator, .{
+            .x = rect.x(),
+            .y = rect.y(),
+            .w = rect.w(),
+            .h = rect.h(),
+            .kind = ui.hitRegionKind(rec.id),
+        });
+    }
+    return regions.items;
+}
+
+fn overlapsMarkedHit(ui: *UI, rect: math.Rect) bool {
+    for (ui.hit_records.items) |rec| {
+        if (ui.hitRegionKind(rec.id) == .client) {
+            continue;
+        }
+        if (!ui.input_scopes.allows(rec.input_scope)) {
+            continue;
+        }
+        if (visibleHitBounds(rec).overlaps(rect)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn visibleHitBounds(rec: HitRecord) math.Rect {
+    const scissor = rec.clip.scissor orelse return rec.bounds;
+    return rec.bounds.intersect(scissor);
 }
 
 fn semanticDigest(snapshot: Accessibility.Snapshot) u64 {
@@ -291,6 +339,7 @@ fn reset(ui: *UI) void {
     ui.contents.clearRetainingCapacity();
     ui.clip_shapes.clearRetainingCapacity();
     ui.hit_records.clearRetainingCapacity();
+    ui.hit_region_marks.clearRetainingCapacity();
     ui.focus_order.clearRetainingCapacity();
     Accessibility.freeNodes(ui.allocator, ui.accessibility_nodes.items);
     ui.accessibility_nodes.clearRetainingCapacity();
@@ -1435,10 +1484,25 @@ fn chromeTestInput(pos: [2]f64, pointer_inside: bool) input_types.FrameInput {
 }
 
 fn buildChromeTest(ui: *UI) !void {
-    _ = try ui.open(.str("bar"), .{ .width = .fixed(200), .height = .fixed(30), .interactive = true }, .none);
+    const bar = try ui.open(.str("bar"), .{ .width = .fixed(200), .height = .fixed(30), .interactive = true }, .none);
+    try ui.markHitRegion(bar, .caption);
     _ = try ui.open(.str("tab"), .{ .width = .fixed(40), .height = .fixed(30), .interactive = true }, .none);
     ui.close();
     ui.close();
+}
+
+test "interactive elements carve themselves out of a caption region" {
+    var view = try Context.init(std.testing.allocator, .{});
+    defer view.deinit();
+
+    var frame = try view.beginFrame(chromeTestInput(.{ 0, 0 }, true));
+    try buildChromeTest(frame.ui());
+    const output = try view.endFrame(&frame);
+
+    try std.testing.expectEqual(@as(usize, 2), output.hit_regions.len);
+    try std.testing.expectEqual(input_types.HitRegion.Kind.client, input_types.hitRegionAt(output.hit_regions, .{ 10, 10 }));
+    try std.testing.expectEqual(input_types.HitRegion.Kind.caption, input_types.hitRegionAt(output.hit_regions, .{ 100, 10 }));
+    try std.testing.expectEqual(input_types.HitRegion.Kind.client, input_types.hitRegionAt(output.hit_regions, .{ 100, 50 }));
 }
 
 test "a pointer outside the window hovers nothing" {

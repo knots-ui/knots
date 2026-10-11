@@ -96,6 +96,7 @@ pub fn command(self: *Windows, request: abi.WindowCommand, device: *Gpu) !void {
         .set_cursor_visible => |args| (try self.get(args[0])).window.setCursorVisible(args[1]),
         .set_cursor_shape => |args| (try self.get(args[0])).window.setCursorShape(args[1]),
         .minimize => |handle| (try self.get(handle)).window.minimize(),
+        .set_hit_regions => |args| try (try self.get(args[0])).window.setHitRegions(args[1]),
     }
 }
 

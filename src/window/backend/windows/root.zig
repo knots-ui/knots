@@ -44,7 +44,7 @@ fn lparamPoint(lparam: win32.LPARAM) win32.POINT {
     return .{ .x = @intCast(x), .y = @intCast(y) };
 }
 
-fn wheelMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
+fn screenMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
     var pt = lparamPoint(lparam);
     _ = win32.ScreenToClient(hwnd, &pt);
     return clientPxToLogical(hwnd, .{
@@ -120,6 +120,7 @@ pub const Backend = struct {
     decorations: window.Decorations,
     resizable: bool,
     tracking_client_leave: bool = false,
+    tracking_nonclient_leave: bool = false,
 
     const Self = @This();
 
@@ -575,7 +576,12 @@ fn hitTestClient(hwnd: win32.HWND, owner: *window.Window, lparam: win32.LPARAM) 
         }
         return win32.HTTOP;
     }
-    return win32.HTCLIENT;
+    const pos = clientPxToLogical(hwnd, .{ @floatFromInt(pt.x), @floatFromInt(pt.y) });
+    return switch (owner.hitRegionAt(pos)) {
+        .client => win32.HTCLIENT,
+        .caption => win32.HTCAPTION,
+        .maximize => win32.HTMAXBUTTON,
+    };
 }
 
 fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) callconv(.winapi) win32.LRESULT {
@@ -641,6 +647,13 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
             return 0;
         },
+        win32.WM_NCMOUSELEAVE => {
+            if (ownerOf(hwnd)) |o| {
+                o.backend.tracking_nonclient_leave = false;
+                o.pointerLeft();
+            }
+            return 0;
+        },
         win32.WM_NCCALCSIZE => {
             if (wparam == 0 or !isUndecorated(hwnd)) {
                 return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -672,6 +685,43 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
 
             return hitTestClient(hwnd, o, lparam);
+        },
+        win32.WM_NCMOUSEMOVE => {
+            const o = ownerOf(hwnd) orelse return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            if (wparam != win32.HTMAXBUTTON) {
+                o.pointerLeft();
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            if (!o.backend.tracking_nonclient_leave) {
+                trackLeave(hwnd, true);
+                o.backend.tracking_nonclient_leave = true;
+            }
+            o.setCursorPos(screenMousePos(hwnd, lparam));
+            return 0;
+        },
+        win32.WM_NCLBUTTONDOWN, win32.WM_NCLBUTTONDBLCLK => {
+            if (wparam != win32.HTMAXBUTTON) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            _ = win32.SetCapture(hwnd);
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, true, screenMousePos(hwnd, lparam));
+            }
+
+            return 0;
+        },
+        win32.WM_NCLBUTTONUP => {
+            if (wparam != win32.HTMAXBUTTON) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, false, screenMousePos(hwnd, lparam));
+            }
+
+            return 0;
         },
         win32.WM_LBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
@@ -768,7 +818,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             const hi: u16 = @truncate((wparam >> 16) & 0xFFFF);
             const delta: i16 = @bitCast(hi);
             if (ownerOf(hwnd)) |o| {
-                o.setCursorPos(wheelMousePos(hwnd, lparam));
+                o.setCursorPos(screenMousePos(hwnd, lparam));
                 applyWheelLines(o, .y, wheelSteps(delta), o.backend.wheel_scroll_lines);
             }
             return 0;
@@ -777,7 +827,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             const hi: u16 = @truncate((wparam >> 16) & 0xFFFF);
             const delta: i16 = @bitCast(hi);
             if (ownerOf(hwnd)) |o| {
-                o.setCursorPos(wheelMousePos(hwnd, lparam));
+                o.setCursorPos(screenMousePos(hwnd, lparam));
                 applyWheelLines(o, .x, wheelSteps(delta), o.backend.wheel_scroll_chars);
             }
             return 0;

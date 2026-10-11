@@ -102,6 +102,7 @@ pub const WindowCommand = union(enum) {
     set_cursor_visible: struct { Window, bool },
     set_cursor_shape: struct { Window, input.CursorShape },
     minimize: Window,
+    set_hit_regions: struct { Window, []const input.HitRegion },
 };
 
 pub const Open = struct {

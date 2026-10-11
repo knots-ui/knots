@@ -55,6 +55,8 @@ pub const Output = struct {
     clipboard_write: ?[]const u8,
     display_mode: ?input_types.DisplayMode,
     minimize: bool,
+    /// Back to front, for `Window.setHitRegions`.
+    hit_regions: []const input_types.HitRegion,
 };
 
 _state: *State,

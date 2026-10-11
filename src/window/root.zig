@@ -24,6 +24,8 @@ pub const Decorations = enum {
     none,
 };
 
+pub const HitRegion = input.HitRegion;
+
 pub const ResizeEvent = struct {
     logical: input.Size,
     physical: input.Size,

@@ -122,6 +122,10 @@ pub const Backend = struct {
         return self.native_controls_width;
     }
 
+    pub fn setHitRegions(self: *Self, regions: []const window.HitRegion) void {
+        guest.queue(.{ .window = .{ .set_hit_regions = .{ self.handle, regions } } });
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;

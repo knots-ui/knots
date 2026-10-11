@@ -11,6 +11,7 @@ const Window = @import("window").Window;
 pub const view_misc_methods = .{
     .{ "acceptsFirstResponder", acceptsFirstResponder },
     .{ "isFlipped", isFlipped },
+    .{ "mouseDownCanMoveWindow", mouseDownCanMoveWindow },
 };
 
 pub const mouse_methods = .{
@@ -58,6 +59,10 @@ fn isFlipped(_: c.id, _: c.SEL) callconv(.c) c.BOOL {
     return ak.boolParam(true);
 }
 
+fn mouseDownCanMoveWindow(_: c.id, _: c.SEL) callconv(.c) c.BOOL {
+    return ak.boolParam(false);
+}
+
 fn eventPos(self: c.id, event_id: c.id) [2]f64 {
     const view = objc.Object.fromId(self);
     const event = objc.Object.fromId(event_id);
@@ -68,7 +73,32 @@ fn eventPos(self: c.id, event_id: c.id) [2]f64 {
 
 fn mouseLeftDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const owner = ak.unwrapOwner(self) orelse return;
-    owner.setMouseButton(.left, true, eventPos(self, event_id));
+    const pos = eventPos(self, event_id);
+    if (owner.hitRegionAt(pos) == .caption) {
+        return captionMouseDown(owner, objc.Object.fromId(event_id));
+    }
+    owner.setMouseButton(.left, true, pos);
+}
+
+fn captionMouseDown(owner: *Window, event: objc.Object) void {
+    const ns_window = owner.backend.ns_window;
+    if (event.msgSend(c_long, "clickCount", .{}) != 2) {
+        ns_window.msgSend(void, "performWindowDragWithEvent:", .{event});
+        return;
+    }
+    const NSUserDefaults = objc.getClass("NSUserDefaults").?;
+    const defaults = NSUserDefaults.msgSend(objc.Object, "standardUserDefaults", .{});
+    const action = defaults.msgSend(objc.Object, "stringForKey:", .{ak.nsstring("AppleActionOnDoubleClick")});
+    if (action.value != null) {
+        if (action.msgSend(bool, "isEqualToString:", .{ak.nsstring("None")})) {
+            return;
+        }
+        if (action.msgSend(bool, "isEqualToString:", .{ak.nsstring("Minimize")})) {
+            ns_window.msgSend(void, "miniaturize:", .{@as(c.id, null)});
+            return;
+        }
+    }
+    ns_window.msgSend(void, "zoom:", .{@as(c.id, null)});
 }
 
 fn mouseExited(self: c.id, _: c.SEL, _: c.id) callconv(.c) void {

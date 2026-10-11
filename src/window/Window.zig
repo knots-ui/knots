@@ -14,6 +14,7 @@ const KeyEvent = input.KeyEvent;
 const Size = input.Size;
 const ResizeEvent = @import("root.zig").ResizeEvent;
 const DisplayMode = @import("root.zig").DisplayMode;
+const HitRegion = input.HitRegion;
 const FrameHandler = @import("root.zig").FrameHandler;
 const MouseButton = input.MouseButton;
 const mouse_button_count = input.mouse_button_count;
@@ -42,6 +43,7 @@ accessibility: ?*if (builtin.target.cpu.arch.isWasm()) void else @import("native
 input_dirty: bool = false,
 pending_paste: ?[]u8 = null,
 pointer_inside: bool = true,
+hit_regions: std.ArrayList(HitRegion) = .empty,
 
 const Window = @This();
 
@@ -83,6 +85,7 @@ pub fn deinit(self: *Window) void {
     self.backend.deinit();
     self.char_buf.deinit(self.allocator);
     self.key_events.deinit(self.allocator);
+    self.hit_regions.deinit(self.allocator);
     if (self.pending_paste) |text| self.allocator.free(text);
 }
 
@@ -168,6 +171,35 @@ pub fn getDisplayMode(self: *const Window) DisplayMode {
 
 pub fn minimize(self: *Window) void {
     self.backend.minimize();
+}
+
+/// Replaces the window's hit regions, back to front. Backends answer platform
+/// hit tests from them, so caption drags never round-trip through the UI.
+pub fn setHitRegions(self: *Window, regions: []const HitRegion) !void {
+    if (sameRegions(self.hit_regions.items, regions)) {
+        return;
+    }
+    try self.hit_regions.resize(self.allocator, regions.len);
+    @memcpy(self.hit_regions.items, regions);
+    if (@hasDecl(impl.Backend, "setHitRegions")) {
+        self.backend.setHitRegions(regions);
+    }
+}
+
+pub fn hitRegionAt(self: *const Window, pos: [2]f64) HitRegion.Kind {
+    return input.hitRegionAt(self.hit_regions.items, pos);
+}
+
+fn sameRegions(a: []const HitRegion, b: []const HitRegion) bool {
+    if (a.len != b.len) {
+        return false;
+    }
+    for (a, b) |x, y| {
+        if (!std.meta.eql(x, y)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 pub fn isFocused(self: *const Window) bool {

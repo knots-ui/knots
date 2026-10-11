@@ -417,6 +417,8 @@ fn renderFrame(
         output.cursor_shape,
     );
 
+    try viewport.window.setHitRegions(output.hit_regions);
+
     if (output.display_mode) |mode| {
         _ = viewport.window.setDisplayMode(mode);
     }

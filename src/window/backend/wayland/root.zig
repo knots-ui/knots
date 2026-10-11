@@ -25,6 +25,7 @@ const TEXT_UTF8: [*:0]const u8 = "text/plain;charset=utf-8";
 const TEXT_PLAIN: [*:0]const u8 = "text/plain";
 const MAX_OFFER_BYTES: usize = 1024 * 1024;
 const RESIZE_BORDER: f64 = 6;
+const DOUBLE_CLICK_MS: u32 = 400;
 const ResizeEdge = xdg.Toplevel.ResizeEdge;
 
 /// A read of a data offer's pipe, drained from the event loop so a slow or
@@ -381,6 +382,7 @@ const State = struct {
     undecorated: bool,
     resizable: bool,
     resize_edge: ResizeEdge = .none,
+    caption_press_ms: ?u32 = null,
     pointer_enter_serial: u32 = 0,
     cursor_pos: [2]f64 = .{ 0, 0 },
     pending_axis: [2]f64 = .{ 0, 0 },
@@ -508,14 +510,41 @@ const State = struct {
         self.applyCursor();
     }
 
-    fn startWindowGesture(self: *State, button: input_types.MouseButton, serial: u32) bool {
+    fn startWindowGesture(self: *State, button: input_types.MouseButton, serial: u32, time: u32) bool {
         const seat = self.shared.seat orelse return false;
-        if (button != .left or self.resize_edge == .none) {
+        if (button == .left and self.resize_edge != .none) {
+            self.toplevel.resize(seat, serial, self.resize_edge);
+            _ = self.shared.display.flush();
+            return true;
+        }
+        const owner = self.owner orelse return false;
+        if (owner.hitRegionAt(self.cursor_pos) != .caption) {
             return false;
         }
-        self.toplevel.resize(seat, serial, self.resize_edge);
+        switch (button) {
+            .left => {
+                const previous = self.caption_press_ms;
+                self.caption_press_ms = time;
+                if (previous != null and time -% previous.? < DOUBLE_CLICK_MS) {
+                    self.caption_press_ms = null;
+                    self.toggleMaximized();
+                    return true;
+                }
+                self.toplevel.move(seat, serial);
+            },
+            .right => self.toplevel.showWindowMenu(seat, serial, @intFromFloat(self.cursor_pos[0]), @intFromFloat(self.cursor_pos[1])),
+            else => return false,
+        }
         _ = self.shared.display.flush();
         return true;
+    }
+
+    fn toggleMaximized(self: *State) void {
+        switch (self.display_mode) {
+            .maximized => self.desired_display_mode = .windowed,
+            .windowed, .fullscreen => self.desired_display_mode = .maximized,
+        }
+        self.reconcileDisplayMode();
     }
 
     fn reconcileDisplayMode(self: *State) void {
@@ -1100,7 +1129,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             };
             const mouse_button = translated orelse return;
             const pressed = button.state == .pressed;
-            if (pressed and state.startWindowGesture(mouse_button, button.serial)) {
+            if (pressed and state.startWindowGesture(mouse_button, button.serial, button.time)) {
                 return;
             }
             if (state.owner) |owner| {
