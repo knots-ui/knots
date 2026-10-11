@@ -158,6 +158,10 @@ pub const Backend = struct {
 
     pub fn minimize(_: *Self) void {}
 
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
+    }
+
     pub fn refreshCanvas(self: *Self) void {
         const ev = readCanvasSize(self.canvas, self.logical_size.width, self.logical_size.height) catch return;
         self.logical_size = ev.logical;

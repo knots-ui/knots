@@ -213,6 +213,7 @@ pub fn collectInput(self: *Window) !Input {
         .pos = mouse.pos,
         .pointer_inside = self.pointer_inside,
         .display_mode = self.backend.getDisplayMode(),
+        .native_controls_width = self.backend.nativeControlsWidth(),
         .mouse = mouse.buttons,
         .scroll = scroll,
         .chars = chars,

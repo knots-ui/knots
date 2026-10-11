@@ -172,6 +172,7 @@ pub const Input = struct {
     pos: [2]f64,
     pointer_inside: bool = true,
     display_mode: DisplayMode = .windowed,
+    native_controls_width: f32 = 0,
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
     chars: []const u21 = &.{},

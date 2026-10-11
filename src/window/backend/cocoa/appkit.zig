@@ -15,6 +15,11 @@ pub const NSWindowStyleMaskClosable: c_ulong = 1 << 1;
 pub const NSWindowStyleMaskMiniaturizable: c_ulong = 1 << 2;
 pub const NSWindowStyleMaskResizable: c_ulong = 1 << 3;
 pub const NSWindowStyleMaskFullScreen: c_ulong = 1 << 14;
+pub const NSWindowStyleMaskFullSizeContentView: c_ulong = 1 << 15;
+
+pub const NSWindowTitleHidden: c_long = 1;
+pub const NSWindowCloseButton: c_ulong = 0;
+pub const NSWindowZoomButton: c_ulong = 2;
 
 pub const NSTrackingMouseEnteredAndExited: c_ulong = 0x01;
 pub const NSTrackingActiveAlways: c_ulong = 0x80;

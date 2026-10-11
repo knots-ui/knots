@@ -20,6 +20,7 @@ pub const Backend = struct {
     should_close: bool = false,
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
+    undecorated: bool,
     fullscreen: bool = false,
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
@@ -233,6 +234,20 @@ pub const Backend = struct {
         self.ns_window.msgSend(void, "miniaturize:", .{@as(c.id, null)});
     }
 
+    pub fn nativeControlsWidth(self: *const Self) f32 {
+        if (!self.undecorated or self.fullscreen) {
+            return 0;
+        }
+        const close_button = self.ns_window.msgSend(objc.Object, "standardWindowButton:", .{ak.NSWindowCloseButton});
+        const zoom_button = self.ns_window.msgSend(objc.Object, "standardWindowButton:", .{ak.NSWindowZoomButton});
+        if (close_button.value == null or zoom_button.value == null) {
+            return 0;
+        }
+        const close_frame = close_button.msgSend(ak.NSRect, "frame", .{});
+        const zoom_frame = zoom_button.msgSend(ak.NSRect, "frame", .{});
+        return @floatCast(zoom_frame.origin.x + zoom_frame.size.width + close_frame.origin.x);
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;
@@ -313,8 +328,13 @@ pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
 
 fn initWindow(cfg: window.Config) !Backend {
     const NSWindowClass = objc.getClass("NSWindow").?;
-    const style: c_ulong = ak.NSWindowStyleMaskTitled | ak.NSWindowStyleMaskClosable |
-        ak.NSWindowStyleMaskMiniaturizable | (if (cfg.resizable) ak.NSWindowStyleMaskResizable else 0);
+    var style: c_ulong = ak.NSWindowStyleMaskTitled | ak.NSWindowStyleMaskClosable | ak.NSWindowStyleMaskMiniaturizable;
+    if (cfg.resizable) {
+        style |= ak.NSWindowStyleMaskResizable;
+    }
+    if (cfg.decorations == .none) {
+        style |= ak.NSWindowStyleMaskFullSizeContentView;
+    }
     const frame = ak.NSRect{
         .origin = .{ .x = 0, .y = 0 },
         .size = .{ .width = @floatFromInt(cfg.width), .height = @floatFromInt(cfg.height) },
@@ -327,6 +347,10 @@ fn initWindow(cfg: window.Config) !Backend {
         .{ frame, style, ak.NSBackingStoreBuffered, ak.boolParam(false) },
     );
     ns_window.msgSend(void, "setTitle:", .{ak.nsstring(cfg.title)});
+    if (cfg.decorations == .none) {
+        ns_window.msgSend(void, "setTitlebarAppearsTransparent:", .{ak.boolParam(true)});
+        ns_window.msgSend(void, "setTitleVisibility:", .{ak.NSWindowTitleHidden});
+    }
     if (cfg.min_size) |size| ns_window.msgSend(void, "setContentMinSize:", .{ak.NSSize{
         .width = @floatFromInt(size.width),
         .height = @floatFromInt(size.height),
@@ -371,6 +395,7 @@ fn initWindow(cfg: window.Config) !Backend {
         .ns_window = ns_window,
         .ns_view = view,
         .delegate = delegate,
+        .undecorated = cfg.decorations == .none,
     };
 }
 

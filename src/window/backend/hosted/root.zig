@@ -21,6 +21,7 @@ export fn knots_hosted_frame(handle: u32) void {
         return std.log.err("hosted: invalid frame input: {t}", .{err});
     self.metrics = frame.metrics;
     self.display_mode = frame.input.display_mode;
+    self.native_controls_width = frame.input.native_controls_width;
     owner.setInput(frame.input);
     if (frame.resized) owner.markResized();
     if (frame.closed) owner.markClosed();
@@ -43,6 +44,7 @@ pub const Backend = struct {
     open: bool = true,
     drops: []const []const u8 = &.{},
     display_mode: window.DisplayMode = .windowed,
+    native_controls_width: f32 = 0,
 
     const Self = @This();
 
@@ -116,6 +118,10 @@ pub const Backend = struct {
         guest.queue(.{ .window = .{ .minimize = self.handle } });
     }
 
+    pub fn nativeControlsWidth(self: *const Self) f32 {
+        return self.native_controls_width;
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;
@@ -151,6 +157,7 @@ fn open(cfg: window.Config) !Backend {
         .resizable = cfg.resizable,
         .min_size = cfg.min_size,
         .max_size = cfg.max_size,
+        .decorations = cfg.decorations,
     });
     if (@backingInt(opened.window) >= windows_max) return error.WindowUnavailable;
     return .{ .handle = opened.window, .metrics = opened.metrics };

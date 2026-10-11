@@ -110,6 +110,11 @@ pub fn minimizeWindow(self: *Frame) void {
     self.state().effects.minimize = true;
 }
 
+/// Width of the platform's own window buttons in an undecorated window, zero when the app draws them.
+pub fn nativeControlsWidth(self: *const Frame) f32 {
+    return self.input().input.native_controls_width;
+}
+
 pub fn writeClipboard(self: *Frame, value: []const u8) !void {
     const frame_state = self.state();
     frame_state.effects.clipboard_write = try frame_state.arena.dupe(u8, value);

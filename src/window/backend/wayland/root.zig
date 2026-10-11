@@ -24,6 +24,8 @@ const TEXT_URI_LIST: [*:0]const u8 = "text/uri-list";
 const TEXT_UTF8: [*:0]const u8 = "text/plain;charset=utf-8";
 const TEXT_PLAIN: [*:0]const u8 = "text/plain";
 const MAX_OFFER_BYTES: usize = 1024 * 1024;
+const RESIZE_BORDER: f64 = 6;
+const ResizeEdge = xdg.Toplevel.ResizeEdge;
 
 /// A read of a data offer's pipe, drained from the event loop so a slow or
 /// stuck source never blocks the UI thread.
@@ -376,6 +378,9 @@ const State = struct {
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
     cursor: ?*wl.Cursor = null,
+    undecorated: bool,
+    resizable: bool,
+    resize_edge: ResizeEdge = .none,
     pointer_enter_serial: u32 = 0,
     cursor_pos: [2]f64 = .{ 0, 0 },
     pending_axis: [2]f64 = .{ 0, 0 },
@@ -444,7 +449,7 @@ const State = struct {
             _ = self.shared.display.flush();
             return;
         }
-        const cursor = self.cursor orelse return;
+        const cursor = self.edgeCursor() orelse self.cursor orelse return;
         if (cursor.image_count == 0) return;
         const image = cursor.images[0];
         const buffer = image.getBuffer() catch return;
@@ -454,6 +459,63 @@ const State = struct {
         surface.commit();
         pointer.setCursor(self.pointer_enter_serial, surface, @intCast(image.hotspot_x), @intCast(image.hotspot_y));
         _ = self.shared.display.flush();
+    }
+
+    fn edgeCursor(self: *const State) ?*wl.Cursor {
+        const theme = self.shared.cursor_theme orelse return null;
+        const name: [*:0]const u8 = switch (self.resize_edge) {
+            .top => "top_side",
+            .bottom => "bottom_side",
+            .left => "left_side",
+            .right => "right_side",
+            .top_left => "top_left_corner",
+            .top_right => "top_right_corner",
+            .bottom_left => "bottom_left_corner",
+            .bottom_right => "bottom_right_corner",
+            else => return null,
+        };
+        return theme.getCursor(name);
+    }
+
+    fn resizeEdgeAt(self: *const State, pos: [2]f64) ResizeEdge {
+        if (!self.undecorated or !self.resizable or self.display_mode != .windowed) {
+            return .none;
+        }
+        const w: f64 = @floatFromInt(self.logical_size.width);
+        const h: f64 = @floatFromInt(self.logical_size.height);
+        var edges: c_int = 0;
+        if (pos[1] < RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.top);
+        }
+        if (pos[1] >= h - RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.bottom);
+        }
+        if (pos[0] < RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.left);
+        }
+        if (pos[0] >= w - RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.right);
+        }
+        return @fromBackingInt(@intCast(edges));
+    }
+
+    fn updateResizeEdge(self: *State) void {
+        const edge = self.resizeEdgeAt(self.cursor_pos);
+        if (edge == self.resize_edge) {
+            return;
+        }
+        self.resize_edge = edge;
+        self.applyCursor();
+    }
+
+    fn startWindowGesture(self: *State, button: input_types.MouseButton, serial: u32) bool {
+        const seat = self.shared.seat orelse return false;
+        if (button != .left or self.resize_edge == .none) {
+            return false;
+        }
+        self.toplevel.resize(seat, serial, self.resize_edge);
+        _ = self.shared.display.flush();
+        return true;
     }
 
     fn reconcileDisplayMode(self: *State) void {
@@ -651,6 +713,10 @@ pub const Backend = struct {
         _ = self.state.shared.display.flush();
     }
 
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;
@@ -770,6 +836,8 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
         .logical_size = .{ .width = cfg.width, .height = cfg.height },
         .configured_size = .{ .width = cfg.width, .height = cfg.height },
         .title_buf = title_buf,
+        .undecorated = cfg.decorations == .none,
+        .resizable = cfg.resizable,
     };
     errdefer if (state.decoration) |decoration| decoration.destroy();
     surface.setListener(*State, surfaceListener, state);
@@ -790,7 +858,10 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
     if (shared.decoration_manager) |manager| {
         if (manager.getToplevelDecoration(state.toplevel)) |decoration| {
             decoration.setListener(*State, decorationListener, state);
-            decoration.setMode(.server_side);
+            switch (cfg.decorations) {
+                .native => decoration.setMode(.server_side),
+                .none => decoration.setMode(.client_side),
+            }
             state.decoration = decoration;
         } else |_| {}
     }
@@ -986,11 +1057,13 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             state.pointer_enter_serial = enter.serial;
             state.cursor_pos = .{ enter.surface_x.toDouble(), enter.surface_y.toDouble() };
             if (state.owner) |owner| owner.setCursorPos(state.cursor_pos);
+            state.resize_edge = state.resizeEdgeAt(state.cursor_pos);
             state.applyCursor();
         },
         .leave => {
             const state = shared.pointer_state orelse return;
             shared.pointer_state = null;
+            state.resize_edge = .none;
             if (state.owner) |owner| {
                 owner.pointerLeft();
             }
@@ -999,6 +1072,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             const state = shared.pointer_state orelse return;
             state.cursor_pos = .{ motion.surface_x.toDouble(), motion.surface_y.toDouble() };
             if (state.owner) |owner| owner.setCursorPos(state.cursor_pos);
+            state.updateResizeEdge();
         },
         .button => |button| {
             const state = shared.pointer_state orelse return;
@@ -1012,6 +1086,9 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             };
             const mouse_button = translated orelse return;
             const pressed = button.state == .pressed;
+            if (pressed and state.startWindowGesture(mouse_button, button.serial)) {
+                return;
+            }
             if (state.owner) |owner| {
                 owner.setMouseButton(mouse_button, pressed, state.cursor_pos);
             }

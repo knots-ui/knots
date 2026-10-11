@@ -14,6 +14,12 @@ pub const Config = struct {
     min_size: ?input.Size = null,
     max_size: ?input.Size = null,
     canvas_selector: ?[:0]const u8 = null,
+    decorations: Decorations = .native,
+};
+
+pub const Decorations = enum {
+    native,
+    none,
 };
 
 pub const ResizeEvent = struct {

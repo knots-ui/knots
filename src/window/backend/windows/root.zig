@@ -12,6 +12,8 @@ const class_name = std.unicode.utf8ToUtf16LeStringLiteral("KnotsWindow");
 const system_theme_registry_key = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
 
 const WHEEL_PAGESCROLL: u32 = std.math.maxInt(u32);
+// Set before the owner is attached, since WM_NCCALCSIZE runs during creation.
+const extra_undecorated: win32.WINDOW_LONG_PTR_INDEX = @fromBackingInt(@intCast(0));
 const WheelAxis = enum { x, y };
 var class_registered: bool = false;
 
@@ -49,6 +51,16 @@ fn wheelMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
         @floatFromInt(pt.x),
         @floatFromInt(pt.y),
     });
+}
+
+fn isUndecorated(hwnd: win32.HWND) bool {
+    return win32.GetWindowLongPtrW(hwnd, extra_undecorated) != 0;
+}
+
+fn resizeBorder(hwnd: win32.HWND) i32 {
+    const dpi = win32.GetDpiForWindow(hwnd);
+    return win32.GetSystemMetricsForDpi(@intCast(@backingInt(win32.SM_CYSIZEFRAME)), dpi) +
+        win32.GetSystemMetricsForDpi(@intCast(@backingInt(win32.SM_CXPADDEDBORDER)), dpi);
 }
 
 fn trackLeave(hwnd: win32.HWND, nonclient: bool) void {
@@ -105,6 +117,8 @@ pub const Backend = struct {
     drop_slices: [64][]const u8 = undefined,
     min_size: ?input_types.Size,
     max_size: ?input_types.Size,
+    decorations: window.Decorations,
+    resizable: bool,
     tracking_client_leave: bool = false,
 
     const Self = @This();
@@ -298,6 +312,10 @@ pub const Backend = struct {
         _ = win32.ShowWindow(self.hwnd, win32.SW_MINIMIZE);
     }
 
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;
@@ -416,7 +434,7 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
             .style = .{ .HREDRAW = 1, .VREDRAW = 1 },
             .lpfnWndProc = wndProc,
             .cbClsExtra = 0,
-            .cbWndExtra = 0,
+            .cbWndExtra = @sizeOf(usize),
             .hInstance = hinstance,
             .hIcon = null,
             .hCursor = win32.LoadCursorW(null, win32.IDC_ARROW),
@@ -444,6 +462,10 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         .bottom = @intFromFloat(@round(@as(f32, @floatFromInt(cfg.height)) * scale)),
     };
     _ = win32.AdjustWindowRectExForDpi(&rect, style, 0, .{}, dpi);
+    // The client area takes over the caption, the side and bottom borders stay for resizing.
+    if (cfg.decorations == .none) {
+        rect.top = 0;
+    }
     const win_w = rect.right - rect.left;
     const win_h = rect.bottom - rect.top;
 
@@ -468,6 +490,17 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         null,
     ) orelse return error.CreateWindowFailed;
 
+    if (cfg.decorations == .none) {
+        _ = win32.SetWindowLongPtrW(hwnd, extra_undecorated, 1);
+        _ = win32.SetWindowPos(hwnd, null, 0, 0, 0, 0, .{
+            .NOMOVE = 1,
+            .NOSIZE = 1,
+            .NOZORDER = 1,
+            .NOACTIVATE = 1,
+            .DRAWFRAME = 1,
+        });
+    }
+
     _ = win32.ShowWindow(hwnd, win32.SW_SHOW);
     _ = win32.UpdateWindow(hwnd);
     win32.DragAcceptFiles(hwnd, 1);
@@ -478,6 +511,8 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         .hinstance = hinstance,
         .min_size = cfg.min_size,
         .max_size = cfg.max_size,
+        .decorations = cfg.decorations,
+        .resizable = cfg.resizable,
     };
     backend.refreshWheelSettings();
     backend.applyTitleBarTheme();
@@ -522,6 +557,25 @@ fn trackSize(hwnd: win32.HWND, size: input_types.Size, scale: f32) win32.POINT {
         .x = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.width)) * scale)) + non_client_width,
         .y = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.height)) * scale)) + non_client_height,
     };
+}
+
+fn hitTestClient(hwnd: win32.HWND, owner: *window.Window, lparam: win32.LPARAM) win32.LRESULT {
+    var pt = lparamPoint(lparam);
+    _ = win32.ScreenToClient(hwnd, &pt);
+    const border = resizeBorder(hwnd);
+    // The undecorated client area covers the top border, so it resizes from here.
+    if (owner.backend.decorations == .none and owner.backend.resizable and win32.IsZoomed(hwnd) == 0 and pt.y < border) {
+        var client: win32.RECT = undefined;
+        _ = win32.GetClientRect(hwnd, &client);
+        if (pt.x < border) {
+            return win32.HTTOPLEFT;
+        }
+        if (pt.x >= client.right - border) {
+            return win32.HTTOPRIGHT;
+        }
+        return win32.HTTOP;
+    }
+    return win32.HTCLIENT;
 }
 
 fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARAM) callconv(.winapi) win32.LRESULT {
@@ -586,6 +640,38 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
                 o.pointerLeft();
             }
             return 0;
+        },
+        win32.WM_NCCALCSIZE => {
+            if (wparam == 0 or !isUndecorated(hwnd)) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            const params: *win32.NCCALCSIZE_PARAMS = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            const top = params.rgrc[0].top;
+            const result = win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            params.rgrc[0].top = top;
+
+            var fullscreen = false;
+            if (ownerOf(hwnd)) |o| {
+                fullscreen = o.backend.is_fullscreen;
+            }
+
+            // A maximized window hangs its frame off the monitor edge.
+            if (!fullscreen and win32.IsZoomed(hwnd) != 0) {
+                params.rgrc[0].top += resizeBorder(hwnd);
+            }
+
+            return result;
+        },
+        win32.WM_NCHITTEST => {
+            const hit = win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            const o = ownerOf(hwnd) orelse return hit;
+
+            if (hit != win32.HTCLIENT or o.backend.is_fullscreen) {
+                return hit;
+            }
+
+            return hitTestClient(hwnd, o, lparam);
         },
         win32.WM_LBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);

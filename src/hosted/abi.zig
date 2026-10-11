@@ -111,6 +111,7 @@ pub const Open = struct {
     resizable: bool,
     min_size: ?input.Size,
     max_size: ?input.Size,
+    decorations: window.Decorations,
 };
 
 pub const Opened = struct {

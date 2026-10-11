@@ -119,6 +119,7 @@ fn open(self: *Windows, desc: abi.Open) !abi.Opened {
         .resizable = desc.resizable,
         .min_size = desc.min_size,
         .max_size = desc.max_size,
+        .decorations = desc.decorations,
     };
     try self.entries.ensureTotalCapacity(self.gpa, self.opened + 1);
     entry.* = .{
