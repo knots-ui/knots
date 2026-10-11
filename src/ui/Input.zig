@@ -2,6 +2,7 @@ const input_types = @import("input");
 const mouse_button_count = input_types.mouse_button_count;
 
 mouse_pos: [2]f64 = .{ 0, 0 },
+pointer_inside: bool = true,
 mouse_moved: bool = false,
 mouse_idle_ms: i64 = 0,
 now_ms: i64 = 0,
@@ -28,6 +29,7 @@ pub fn collect(self: *Input, raw: input_types.Input, now_ms: i64) void {
     self.focus_lost = self.focused and !raw.focused;
     self.focused = raw.focused;
     self.mouse_pos = raw.pos;
+    self.pointer_inside = raw.pointer_inside;
     self.mouse_moved = raw.pos[0] != self._prev_mouse_pos[0] or raw.pos[1] != self._prev_mouse_pos[1];
     self._prev_mouse_pos = raw.pos;
 
@@ -70,7 +72,7 @@ pub fn containsKey(self: *const Input, key: input_types.Key) bool {
 }
 
 pub fn mouseButton(self: *const Input, button: input_types.MouseButton) *const input_types.MouseButtonState {
-    return &self.mouse[@intFromEnum(button)];
+    return &self.mouse[@backingInt(button)];
 }
 
 pub fn keyPressed(self: *const Input, key: input_types.Key) bool {
@@ -89,6 +91,6 @@ pub fn keyReleased(self: *const Input, key: input_types.Key) bool {
 }
 
 pub fn keyDown(self: *const Input, key: input_types.Key) bool {
-    const value = @intFromEnum(key);
+    const value = @backingInt(key);
     return value >= 0 and value < input_types.key_count and self.key_down[@intCast(value)];
 }

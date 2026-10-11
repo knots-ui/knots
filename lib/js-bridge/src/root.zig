@@ -39,36 +39,36 @@ pub const Arg = extern struct {
     };
 
     pub fn @"undefined"() Arg {
-        return .{ .tag = @intFromEnum(Tag.undefined) };
+        return .{ .tag = @backingInt(Tag.undefined) };
     }
 
     pub fn @"null"() Arg {
-        return .{ .tag = @intFromEnum(Tag.null) };
+        return .{ .tag = @backingInt(Tag.null) };
     }
 
     pub fn boolean(v: bool) Arg {
-        return .{ .tag = @intFromEnum(Tag.boolean), .a = @intFromBool(v) };
+        return .{ .tag = @backingInt(Tag.boolean), .a = @intFromBool(v) };
     }
 
     pub fn @"i32"(v: i32) Arg {
-        return .{ .tag = @intFromEnum(Tag.i32), .a = @bitCast(@as(i64, v)) };
+        return .{ .tag = @backingInt(Tag.i32), .a = @bitCast(@as(i64, v)) };
     }
 
     pub fn @"u32"(v: u32) Arg {
-        return .{ .tag = @intFromEnum(Tag.u32), .a = v };
+        return .{ .tag = @backingInt(Tag.u32), .a = v };
     }
 
     pub fn @"f64"(v: f64) Arg {
-        return .{ .tag = @intFromEnum(Tag.f64), .a = @bitCast(v) };
+        return .{ .tag = @backingInt(Tag.f64), .a = @bitCast(v) };
     }
 
     pub fn value(v: Value) Arg {
-        return .{ .tag = @intFromEnum(Tag.handle), .a = v.handle };
+        return .{ .tag = @backingInt(Tag.handle), .a = v.handle };
     }
 
     pub fn string(v: []const u8) Arg {
         return .{
-            .tag = @intFromEnum(Tag.string),
+            .tag = @backingInt(Tag.string),
             .a = @intCast(@intFromPtr(v.ptr)),
             .b = @intCast(v.len),
         };
@@ -76,18 +76,18 @@ pub const Arg = extern struct {
 
     pub fn bytes(v: []const u8) Arg {
         return .{
-            .tag = @intFromEnum(Tag.bytes),
+            .tag = @backingInt(Tag.bytes),
             .a = @intCast(@intFromPtr(v.ptr)),
             .b = @intCast(v.len),
         };
     }
 
     pub fn @"u64"(v: u64) Arg {
-        return .{ .tag = @intFromEnum(Tag.u64), .a = v };
+        return .{ .tag = @backingInt(Tag.u64), .a = v };
     }
 
     pub fn @"usize"(v: usize) Arg {
-        return .{ .tag = @intFromEnum(Tag.usize), .a = @intCast(v) };
+        return .{ .tag = @backingInt(Tag.usize), .a = @intCast(v) };
     }
 };
 
@@ -148,7 +148,7 @@ pub const Value = struct {
     }
 
     pub fn typeOf(self: Value) Type {
-        return @enumFromInt(imports.js_bridge_typeof(self.handle));
+        return @fromBackingInt(@intCast(imports.js_bridge_typeof(self.handle)));
     }
 
     pub fn isNullish(self: Value) bool {

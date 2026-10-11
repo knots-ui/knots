@@ -20,7 +20,8 @@ pub const Backend = struct {
     should_close: bool = false,
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
-    display_mode: window.DisplayMode = .windowed,
+    undecorated: bool,
+    fullscreen: bool = false,
     desired_display_mode: window.DisplayMode = .windowed,
     display_mode_transition: bool = false,
     frame_source: ?ak.CFRunLoopSourceRef = null,
@@ -201,13 +202,50 @@ pub const Backend = struct {
     }
 
     pub fn reconcileDisplayMode(self: *Self) void {
-        if (self.display_mode_transition or self.display_mode == self.desired_display_mode) return;
-        self.display_mode_transition = true;
-        self.ns_window.msgSend(void, "toggleFullScreen:", .{@as(c.id, null)});
+        if (self.display_mode_transition) {
+            return;
+        }
+        const want_fullscreen = self.desired_display_mode == .fullscreen;
+        if (want_fullscreen != self.fullscreen) {
+            self.display_mode_transition = true;
+            self.ns_window.msgSend(void, "toggleFullScreen:", .{@as(c.id, null)});
+            return;
+        }
+        if (want_fullscreen) {
+            return;
+        }
+        const zoomed = self.ns_window.msgSend(bool, "isZoomed", .{});
+        if (zoomed != (self.desired_display_mode == .maximized)) {
+            self.ns_window.msgSend(void, "zoom:", .{@as(c.id, null)});
+        }
     }
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return self.display_mode;
+        if (self.fullscreen) {
+            return .fullscreen;
+        }
+        if (self.ns_window.msgSend(bool, "isZoomed", .{})) {
+            return .maximized;
+        }
+        return .windowed;
+    }
+
+    pub fn minimize(self: *Self) void {
+        self.ns_window.msgSend(void, "miniaturize:", .{@as(c.id, null)});
+    }
+
+    pub fn nativeControlsWidth(self: *const Self) f32 {
+        if (!self.undecorated or self.fullscreen) {
+            return 0;
+        }
+        const close_button = self.ns_window.msgSend(objc.Object, "standardWindowButton:", .{ak.NSWindowCloseButton});
+        const zoom_button = self.ns_window.msgSend(objc.Object, "standardWindowButton:", .{ak.NSWindowZoomButton});
+        if (close_button.value == null or zoom_button.value == null) {
+            return 0;
+        }
+        const close_frame = close_button.msgSend(ak.NSRect, "frame", .{});
+        const zoom_frame = zoom_button.msgSend(ak.NSRect, "frame", .{});
+        return @floatCast(zoom_frame.origin.x + zoom_frame.size.width + close_frame.origin.x);
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
@@ -290,8 +328,13 @@ pub fn init(_: std.Io, _: std.mem.Allocator, cfg: window.Config) !Backend {
 
 fn initWindow(cfg: window.Config) !Backend {
     const NSWindowClass = objc.getClass("NSWindow").?;
-    const style: c_ulong = ak.NSWindowStyleMaskTitled | ak.NSWindowStyleMaskClosable |
-        ak.NSWindowStyleMaskMiniaturizable | (if (cfg.resizable) ak.NSWindowStyleMaskResizable else 0);
+    var style: c_ulong = ak.NSWindowStyleMaskTitled | ak.NSWindowStyleMaskClosable | ak.NSWindowStyleMaskMiniaturizable;
+    if (cfg.resizable) {
+        style |= ak.NSWindowStyleMaskResizable;
+    }
+    if (cfg.decorations == .none) {
+        style |= ak.NSWindowStyleMaskFullSizeContentView;
+    }
     const frame = ak.NSRect{
         .origin = .{ .x = 0, .y = 0 },
         .size = .{ .width = @floatFromInt(cfg.width), .height = @floatFromInt(cfg.height) },
@@ -304,6 +347,10 @@ fn initWindow(cfg: window.Config) !Backend {
         .{ frame, style, ak.NSBackingStoreBuffered, ak.boolParam(false) },
     );
     ns_window.msgSend(void, "setTitle:", .{ak.nsstring(cfg.title)});
+    if (cfg.decorations == .none) {
+        ns_window.msgSend(void, "setTitlebarAppearsTransparent:", .{ak.boolParam(true)});
+        ns_window.msgSend(void, "setTitleVisibility:", .{ak.NSWindowTitleHidden});
+    }
     if (cfg.min_size) |size| ns_window.msgSend(void, "setContentMinSize:", .{ak.NSSize{
         .width = @floatFromInt(size.width),
         .height = @floatFromInt(size.height),
@@ -321,6 +368,18 @@ fn initWindow(cfg: window.Config) !Backend {
         .msgSend(objc.Object, "initWithFrame:", .{frame});
     ns_window.msgSend(void, "setContentView:", .{view});
 
+    const NSTrackingArea = objc.getClass("NSTrackingArea").?;
+    const tracking_area = NSTrackingArea
+        .msgSend(objc.Object, "alloc", .{})
+        .msgSend(objc.Object, "initWithRect:options:owner:userInfo:", .{
+        frame,
+        ak.NSTrackingMouseEnteredAndExited | ak.NSTrackingActiveAlways | ak.NSTrackingInVisibleRect,
+        view,
+        @as(c.id, null),
+    });
+    view.msgSend(void, "addTrackingArea:", .{tracking_area});
+    tracking_area.msgSend(void, "release", .{});
+
     const NSArray = objc.getClass("NSArray").?;
     const drag_types = NSArray.msgSend(objc.Object, "arrayWithObject:", .{objc.Object{ .value = ak.NSPasteboardTypeFileURL }});
     view.msgSend(void, "registerForDraggedTypes:", .{drag_types});
@@ -336,6 +395,7 @@ fn initWindow(cfg: window.Config) !Backend {
         .ns_window = ns_window,
         .ns_view = view,
         .delegate = delegate,
+        .undecorated = cfg.decorations == .none,
     };
 }
 

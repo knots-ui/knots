@@ -36,6 +36,11 @@ pub const HitRecord = struct {
     insertion_order: u32,
 };
 
+pub const HitRegionMark = struct {
+    id: Element.Id,
+    kind: input_types.HitRegion.Kind,
+};
+
 pub const HitTarget = enum {
     exact,
     within,
@@ -73,6 +78,7 @@ font: text.Font,
 state: State,
 input: Input,
 hit_records: std.ArrayList(HitRecord),
+hit_region_marks: std.ArrayList(HitRegionMark) = .empty,
 press_ancestors: std.ArrayList(Element.Id),
 hover_ancestors: std.ArrayList(Element.Id),
 focus_order: std.ArrayList(Element.Id),
@@ -143,6 +149,7 @@ pub fn deinit(self: *UI) void {
     self.font.deinit();
     self.state.deinit();
     self.hit_records.deinit(self.allocator);
+    self.hit_region_marks.deinit(self.allocator);
     self.press_ancestors.deinit(self.allocator);
     self.hover_ancestors.deinit(self.allocator);
     self.focus_order.deinit(self.allocator);
@@ -473,6 +480,25 @@ pub fn setDecoration(self: *UI, slot: Element.Slot, decoration: Decoration) void
 pub fn currentSlot(self: *UI) Element.Slot {
     const stack = self.layout_ctx.stack.items;
     return stack[stack.len - 1];
+}
+
+/// Tells the platform what an interactive element is in an undecorated window.
+///
+/// A caption moves the window, a maximize button gets Windows snap layouts.
+pub fn markHitRegion(self: *UI, id: Element.Id, kind: input_types.HitRegion.Kind) !void {
+    if (id == INVALID_ID or self.cull_depth > 0) {
+        return;
+    }
+    try self.hit_region_marks.append(self.allocator, .{ .id = id, .kind = kind });
+}
+
+pub fn hitRegionKind(self: *const UI, id: Element.Id) input_types.HitRegion.Kind {
+    for (self.hit_region_marks.items) |mark| {
+        if (mark.id == id) {
+            return mark.kind;
+        }
+    }
+    return .client;
 }
 
 pub fn requestCursor(self: *UI, shape: input_types.CursorShape) void {

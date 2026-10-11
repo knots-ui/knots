@@ -18,11 +18,10 @@ pub const Image = @import("Image.zig");
 pub const Graph = @import("Graph.zig");
 pub const Dialog = @import("Dialog.zig");
 pub const FloatingWindow = @import("FloatingWindow.zig");
+pub const TitleBar = @import("TitleBar.zig");
 pub const ContextMenu = @import("ContextMenu.zig").ContextMenu;
 pub const Collapsible = @import("Collapsible.zig");
 pub const GPUCanvas = @import("GPUCanvas.zig");
-
-// ── Component contract lint (see docs/style-engine.md §8)
 
 const std = @import("std");
 const layout = @import("layout");
@@ -57,6 +56,7 @@ const linted = .{
     Graph,
     Dialog,
     FloatingWindow,
+    TitleBar,
     ContextMenu(Dummy),
     Collapsible,
     GPUCanvas,

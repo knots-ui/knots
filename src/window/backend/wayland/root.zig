@@ -24,6 +24,9 @@ const TEXT_URI_LIST: [*:0]const u8 = "text/uri-list";
 const TEXT_UTF8: [*:0]const u8 = "text/plain;charset=utf-8";
 const TEXT_PLAIN: [*:0]const u8 = "text/plain";
 const MAX_OFFER_BYTES: usize = 1024 * 1024;
+const RESIZE_BORDER: f64 = 6;
+const DOUBLE_CLICK_MS: u32 = 400;
+const ResizeEdge = xdg.Toplevel.ResizeEdge;
 
 /// A read of a data offer's pipe, drained from the event loop so a slow or
 /// stuck source never blocks the UI thread.
@@ -376,6 +379,10 @@ const State = struct {
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
     cursor: ?*wl.Cursor = null,
+    undecorated: bool,
+    resizable: bool,
+    resize_edge: ResizeEdge = .none,
+    caption_press_ms: ?u32 = null,
     pointer_enter_serial: u32 = 0,
     cursor_pos: [2]f64 = .{ 0, 0 },
     pending_axis: [2]f64 = .{ 0, 0 },
@@ -444,7 +451,7 @@ const State = struct {
             _ = self.shared.display.flush();
             return;
         }
-        const cursor = self.cursor orelse return;
+        const cursor = self.edgeCursor() orelse self.cursor orelse return;
         if (cursor.image_count == 0) return;
         const image = cursor.images[0];
         const buffer = image.getBuffer() catch return;
@@ -456,11 +463,102 @@ const State = struct {
         _ = self.shared.display.flush();
     }
 
+    fn edgeCursor(self: *const State) ?*wl.Cursor {
+        const theme = self.shared.cursor_theme orelse return null;
+        const name: [*:0]const u8 = switch (self.resize_edge) {
+            .top => "top_side",
+            .bottom => "bottom_side",
+            .left => "left_side",
+            .right => "right_side",
+            .top_left => "top_left_corner",
+            .top_right => "top_right_corner",
+            .bottom_left => "bottom_left_corner",
+            .bottom_right => "bottom_right_corner",
+            else => return null,
+        };
+        return theme.getCursor(name);
+    }
+
+    fn resizeEdgeAt(self: *const State, pos: [2]f64) ResizeEdge {
+        if (!self.undecorated or !self.resizable or self.display_mode != .windowed) {
+            return .none;
+        }
+        const w: f64 = @floatFromInt(self.logical_size.width);
+        const h: f64 = @floatFromInt(self.logical_size.height);
+        var edges: c_int = 0;
+        if (pos[1] < RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.top);
+        }
+        if (pos[1] >= h - RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.bottom);
+        }
+        if (pos[0] < RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.left);
+        }
+        if (pos[0] >= w - RESIZE_BORDER) {
+            edges |= @backingInt(ResizeEdge.right);
+        }
+        return @fromBackingInt(@intCast(edges));
+    }
+
+    fn updateResizeEdge(self: *State) void {
+        const edge = self.resizeEdgeAt(self.cursor_pos);
+        if (edge == self.resize_edge) {
+            return;
+        }
+        self.resize_edge = edge;
+        self.applyCursor();
+    }
+
+    fn startWindowGesture(self: *State, button: input_types.MouseButton, serial: u32, time: u32) bool {
+        const seat = self.shared.seat orelse return false;
+        if (button == .left and self.resize_edge != .none) {
+            self.toplevel.resize(seat, serial, self.resize_edge);
+            _ = self.shared.display.flush();
+            return true;
+        }
+        const owner = self.owner orelse return false;
+        if (owner.hitRegionAt(self.cursor_pos) != .caption) {
+            return false;
+        }
+        switch (button) {
+            .left => {
+                const previous = self.caption_press_ms;
+                self.caption_press_ms = time;
+                if (previous != null and time -% previous.? < DOUBLE_CLICK_MS) {
+                    self.caption_press_ms = null;
+                    self.toggleMaximized();
+                    return true;
+                }
+                self.toplevel.move(seat, serial);
+            },
+            .right => self.toplevel.showWindowMenu(seat, serial, @intFromFloat(self.cursor_pos[0]), @intFromFloat(self.cursor_pos[1])),
+            else => return false,
+        }
+        _ = self.shared.display.flush();
+        return true;
+    }
+
+    fn toggleMaximized(self: *State) void {
+        switch (self.display_mode) {
+            .maximized => self.desired_display_mode = .windowed,
+            .windowed, .fullscreen => self.desired_display_mode = .maximized,
+        }
+        self.reconcileDisplayMode();
+    }
+
     fn reconcileDisplayMode(self: *State) void {
         if (self.display_mode_transition or self.display_mode == self.desired_display_mode) return;
-        switch (self.desired_display_mode) {
-            .windowed => self.toplevel.unsetFullscreen(),
-            .fullscreen => self.toplevel.setFullscreen(null),
+        switch (self.display_mode) {
+            .fullscreen => self.toplevel.unsetFullscreen(),
+            .maximized => switch (self.desired_display_mode) {
+                .fullscreen => self.toplevel.setFullscreen(null),
+                .windowed, .maximized => self.toplevel.unsetMaximized(),
+            },
+            .windowed => switch (self.desired_display_mode) {
+                .fullscreen => self.toplevel.setFullscreen(null),
+                .windowed, .maximized => self.toplevel.setMaximized(),
+            },
         }
         self.surface.commit();
         _ = self.shared.display.flush();
@@ -639,6 +737,15 @@ pub const Backend = struct {
         return self.state.display_mode;
     }
 
+    pub fn minimize(self: *Self) void {
+        self.state.toplevel.setMinimized();
+        _ = self.state.shared.display.flush();
+    }
+
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
+    }
+
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
         if (!owner.resized) return null;
         owner.resized = false;
@@ -758,13 +865,23 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
         .logical_size = .{ .width = cfg.width, .height = cfg.height },
         .configured_size = .{ .width = cfg.width, .height = cfg.height },
         .title_buf = title_buf,
+        .undecorated = cfg.decorations == .none,
+        .resizable = cfg.resizable,
     };
     errdefer if (state.decoration) |decoration| decoration.destroy();
     surface.setListener(*State, surfaceListener, state);
     xdg_surface.setListener(*State, xdgSurfaceListener, state);
     state.toplevel.setListener(*State, xdgToplevelListener, state);
     state.toplevel.setTitle(@ptrCast(&state.title_buf));
-    state.toplevel.setAppId("knots");
+    var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const app_id = cfg.app_id orelse executableName(shared.io, &exe_buf);
+    if (app_id.len >= 256) {
+        return error.AppIdTooLong;
+    }
+    var app_id_buf: [256:0]u8 = undefined;
+    @memcpy(app_id_buf[0..app_id.len], app_id);
+    app_id_buf[app_id.len] = 0;
+    state.toplevel.setAppId(@ptrCast(&app_id_buf));
 
     if (!cfg.resizable) {
         state.toplevel.setMinSize(@intCast(cfg.width), @intCast(cfg.height));
@@ -778,7 +895,10 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
     if (shared.decoration_manager) |manager| {
         if (manager.getToplevelDecoration(state.toplevel)) |decoration| {
             decoration.setListener(*State, decorationListener, state);
-            decoration.setMode(.server_side);
+            switch (cfg.decorations) {
+                .native => decoration.setMode(.server_side),
+                .none => decoration.setMode(.client_side),
+            }
             state.decoration = decoration;
         } else |_| {}
     }
@@ -798,6 +918,12 @@ fn initWindow(shared: *Shared, cfg: window.Config) !Backend {
     }
 
     return .{ .state = state };
+}
+
+/// Desktops match the app ID against a .desktop file, which is usually named after the executable.
+fn executableName(io: std.Io, buf: []u8) []const u8 {
+    const len = std.process.executablePath(io, buf) catch return "knots";
+    return std.fs.path.basename(buf[0..len]);
 }
 
 fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Shared) void {
@@ -889,6 +1015,9 @@ fn xdgToplevelListener(_: *xdg.Toplevel, event: xdg.Toplevel.Event, state: *Stat
                     mode = .fullscreen;
                     break;
                 }
+                if (configured_state == @backingInt(xdg.Toplevel.State.maximized)) {
+                    mode = .maximized;
+                }
             }
             const changed = state.display_mode != mode;
             if (!state.display_mode_transition) state.desired_display_mode = mode;
@@ -971,13 +1100,22 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             state.pointer_enter_serial = enter.serial;
             state.cursor_pos = .{ enter.surface_x.toDouble(), enter.surface_y.toDouble() };
             if (state.owner) |owner| owner.setCursorPos(state.cursor_pos);
+            state.resize_edge = state.resizeEdgeAt(state.cursor_pos);
             state.applyCursor();
         },
-        .leave => shared.pointer_state = null,
+        .leave => {
+            const state = shared.pointer_state orelse return;
+            shared.pointer_state = null;
+            state.resize_edge = .none;
+            if (state.owner) |owner| {
+                owner.pointerLeft();
+            }
+        },
         .motion => |motion| {
             const state = shared.pointer_state orelse return;
             state.cursor_pos = .{ motion.surface_x.toDouble(), motion.surface_y.toDouble() };
             if (state.owner) |owner| owner.setCursorPos(state.cursor_pos);
+            state.updateResizeEdge();
         },
         .button => |button| {
             const state = shared.pointer_state orelse return;
@@ -989,7 +1127,14 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
                 BTN_EXTRA => .forward,
                 else => null,
             };
-            if (translated) |mouse_button| if (state.owner) |owner| owner.setMouseButton(mouse_button, button.state == .pressed, state.cursor_pos);
+            const mouse_button = translated orelse return;
+            const pressed = button.state == .pressed;
+            if (pressed and state.startWindowGesture(mouse_button, button.serial, button.time)) {
+                return;
+            }
+            if (state.owner) |owner| {
+                owner.setMouseButton(mouse_button, pressed, state.cursor_pos);
+            }
         },
         .axis => |axis| {
             const state = shared.pointer_state orelse return;

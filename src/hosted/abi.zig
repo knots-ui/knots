@@ -84,7 +84,6 @@ pub const WindowCall = union(enum) {
     open: Open,
     set_title: struct { Window, []const u8 },
     set_display_mode: struct { Window, window.DisplayMode },
-    display_mode: Window,
     request_paste: Window,
     set_clipboard_text: struct { Window, []const u8 },
 
@@ -92,7 +91,6 @@ pub const WindowCall = union(enum) {
         return switch (tag) {
             .open => Opened,
             .set_display_mode, .set_clipboard_text => bool,
-            .display_mode => window.DisplayMode,
             .set_title, .request_paste => void,
         };
     }
@@ -103,6 +101,8 @@ pub const WindowCommand = union(enum) {
     request_frame: Window,
     set_cursor_visible: struct { Window, bool },
     set_cursor_shape: struct { Window, input.CursorShape },
+    minimize: Window,
+    set_hit_regions: struct { Window, []const input.HitRegion },
 };
 
 pub const Open = struct {
@@ -112,6 +112,8 @@ pub const Open = struct {
     resizable: bool,
     min_size: ?input.Size,
     max_size: ?input.Size,
+    decorations: window.Decorations,
+    app_id: ?[]const u8,
 };
 
 pub const Opened = struct {

@@ -12,6 +12,8 @@ const class_name = std.unicode.utf8ToUtf16LeStringLiteral("KnotsWindow");
 const system_theme_registry_key = std.unicode.utf8ToUtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
 
 const WHEEL_PAGESCROLL: u32 = std.math.maxInt(u32);
+// Set before the owner is attached, since WM_NCCALCSIZE runs during creation.
+const extra_undecorated: win32.WINDOW_LONG_PTR_INDEX = @fromBackingInt(@intCast(0));
 const WheelAxis = enum { x, y };
 var class_registered: bool = false;
 
@@ -42,13 +44,33 @@ fn lparamPoint(lparam: win32.LPARAM) win32.POINT {
     return .{ .x = @intCast(x), .y = @intCast(y) };
 }
 
-fn wheelMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
+fn screenMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
     var pt = lparamPoint(lparam);
     _ = win32.ScreenToClient(hwnd, &pt);
     return clientPxToLogical(hwnd, .{
         @floatFromInt(pt.x),
         @floatFromInt(pt.y),
     });
+}
+
+fn isUndecorated(hwnd: win32.HWND) bool {
+    return win32.GetWindowLongPtrW(hwnd, extra_undecorated) != 0;
+}
+
+fn resizeBorder(hwnd: win32.HWND) i32 {
+    const dpi = win32.GetDpiForWindow(hwnd);
+    return win32.GetSystemMetricsForDpi(@intCast(@backingInt(win32.SM_CYSIZEFRAME)), dpi) +
+        win32.GetSystemMetricsForDpi(@intCast(@backingInt(win32.SM_CXPADDEDBORDER)), dpi);
+}
+
+fn trackLeave(hwnd: win32.HWND, nonclient: bool) void {
+    var track: win32.TRACKMOUSEEVENT = .{
+        .cbSize = @sizeOf(win32.TRACKMOUSEEVENT),
+        .dwFlags = .{ .LEAVE = 1, .NONCLIENT = @intFromBool(nonclient) },
+        .hwndTrack = hwnd,
+        .dwHoverTime = 0,
+    };
+    _ = win32.TrackMouseEvent(&track);
 }
 
 fn systemPrefersDarkTheme() bool {
@@ -95,6 +117,10 @@ pub const Backend = struct {
     drop_slices: [64][]const u8 = undefined,
     min_size: ?input_types.Size,
     max_size: ?input_types.Size,
+    decorations: window.Decorations,
+    resizable: bool,
+    tracking_client_leave: bool = false,
+    tracking_nonclient_leave: bool = false,
 
     const Self = @This();
 
@@ -209,17 +235,17 @@ pub const Backend = struct {
     pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) bool {
         switch (mode) {
             .windowed => {
-                if (!self.is_fullscreen) return true;
-                const style_bits: u32 = @bitCast(self.saved_style);
-                _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWL_STYLE, @bitCast(@as(usize, style_bits)));
-                _ = win32.SetWindowPlacement(self.hwnd, &self.saved_placement);
-                _ = win32.SetWindowPos(self.hwnd, null, 0, 0, 0, 0, .{
-                    .NOMOVE = 1,
-                    .NOSIZE = 1,
-                    .NOZORDER = 1,
-                    .DRAWFRAME = 1,
-                });
-                self.is_fullscreen = false;
+                self.leaveFullscreen();
+                if (win32.IsZoomed(self.hwnd) != 0) {
+                    _ = win32.ShowWindow(self.hwnd, win32.SW_RESTORE);
+                }
+                return true;
+            },
+            .maximized => {
+                self.leaveFullscreen();
+                if (win32.IsZoomed(self.hwnd) == 0) {
+                    _ = win32.ShowWindow(self.hwnd, win32.SW_MAXIMIZE);
+                }
                 return true;
             },
             .fullscreen => {
@@ -257,8 +283,38 @@ pub const Backend = struct {
         }
     }
 
+    fn leaveFullscreen(self: *Self) void {
+        if (!self.is_fullscreen) {
+            return;
+        }
+        const style_bits: u32 = @bitCast(self.saved_style);
+        _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWL_STYLE, @bitCast(@as(usize, style_bits)));
+        _ = win32.SetWindowPlacement(self.hwnd, &self.saved_placement);
+        _ = win32.SetWindowPos(self.hwnd, null, 0, 0, 0, 0, .{
+            .NOMOVE = 1,
+            .NOSIZE = 1,
+            .NOZORDER = 1,
+            .DRAWFRAME = 1,
+        });
+        self.is_fullscreen = false;
+    }
+
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return if (self.is_fullscreen) .fullscreen else .windowed;
+        if (self.is_fullscreen) {
+            return .fullscreen;
+        }
+        if (win32.IsZoomed(self.hwnd) != 0) {
+            return .maximized;
+        }
+        return .windowed;
+    }
+
+    pub fn minimize(self: *Self) void {
+        _ = win32.ShowWindow(self.hwnd, win32.SW_MINIMIZE);
+    }
+
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
     }
 
     pub fn consumeResize(self: *Self, owner: *window.Window) ?window.ResizeEvent {
@@ -379,7 +435,7 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
             .style = .{ .HREDRAW = 1, .VREDRAW = 1 },
             .lpfnWndProc = wndProc,
             .cbClsExtra = 0,
-            .cbWndExtra = 0,
+            .cbWndExtra = @sizeOf(usize),
             .hInstance = hinstance,
             .hIcon = null,
             .hCursor = win32.LoadCursorW(null, win32.IDC_ARROW),
@@ -407,6 +463,10 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         .bottom = @intFromFloat(@round(@as(f32, @floatFromInt(cfg.height)) * scale)),
     };
     _ = win32.AdjustWindowRectExForDpi(&rect, style, 0, .{}, dpi);
+    // The client area takes over the caption, the side and bottom borders stay for resizing.
+    if (cfg.decorations == .none) {
+        rect.top = 0;
+    }
     const win_w = rect.right - rect.left;
     const win_h = rect.bottom - rect.top;
 
@@ -431,6 +491,17 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         null,
     ) orelse return error.CreateWindowFailed;
 
+    if (cfg.decorations == .none) {
+        _ = win32.SetWindowLongPtrW(hwnd, extra_undecorated, 1);
+        _ = win32.SetWindowPos(hwnd, null, 0, 0, 0, 0, .{
+            .NOMOVE = 1,
+            .NOSIZE = 1,
+            .NOZORDER = 1,
+            .NOACTIVATE = 1,
+            .DRAWFRAME = 1,
+        });
+    }
+
     _ = win32.ShowWindow(hwnd, win32.SW_SHOW);
     _ = win32.UpdateWindow(hwnd);
     win32.DragAcceptFiles(hwnd, 1);
@@ -441,6 +512,8 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         .hinstance = hinstance,
         .min_size = cfg.min_size,
         .max_size = cfg.max_size,
+        .decorations = cfg.decorations,
+        .resizable = cfg.resizable,
     };
     backend.refreshWheelSettings();
     backend.applyTitleBarTheme();
@@ -484,6 +557,30 @@ fn trackSize(hwnd: win32.HWND, size: input_types.Size, scale: f32) win32.POINT {
     return .{
         .x = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.width)) * scale)) + non_client_width,
         .y = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size.height)) * scale)) + non_client_height,
+    };
+}
+
+fn hitTestClient(hwnd: win32.HWND, owner: *window.Window, lparam: win32.LPARAM) win32.LRESULT {
+    var pt = lparamPoint(lparam);
+    _ = win32.ScreenToClient(hwnd, &pt);
+    const border = resizeBorder(hwnd);
+    // The undecorated client area covers the top border, so it resizes from here.
+    if (owner.backend.decorations == .none and owner.backend.resizable and win32.IsZoomed(hwnd) == 0 and pt.y < border) {
+        var client: win32.RECT = undefined;
+        _ = win32.GetClientRect(hwnd, &client);
+        if (pt.x < border) {
+            return win32.HTTOPLEFT;
+        }
+        if (pt.x >= client.right - border) {
+            return win32.HTTOPRIGHT;
+        }
+        return win32.HTTOP;
+    }
+    const pos = clientPxToLogical(hwnd, .{ @floatFromInt(pt.x), @floatFromInt(pt.y) });
+    return switch (owner.hitRegionAt(pos)) {
+        .client => win32.HTCLIENT,
+        .caption => win32.HTCAPTION,
+        .maximize => win32.HTMAXBUTTON,
     };
 }
 
@@ -533,18 +630,114 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             return 0;
         },
         win32.WM_MOUSEMOVE => {
-            if (ownerOf(hwnd)) |o| o.setCursorPos(mousePos(hwnd, lparam));
+            if (ownerOf(hwnd)) |o| {
+                if (!o.backend.tracking_client_leave) {
+                    trackLeave(hwnd, false);
+                    o.backend.tracking_client_leave = true;
+                }
+
+                o.setCursorPos(mousePos(hwnd, lparam));
+            }
+            return 0;
+        },
+        win32.WM_MOUSELEAVE => {
+            if (ownerOf(hwnd)) |o| {
+                o.backend.tracking_client_leave = false;
+                o.pointerLeft();
+            }
+            return 0;
+        },
+        win32.WM_NCMOUSELEAVE => {
+            if (ownerOf(hwnd)) |o| {
+                o.backend.tracking_nonclient_leave = false;
+                o.pointerLeft();
+            }
+            return 0;
+        },
+        win32.WM_NCCALCSIZE => {
+            if (wparam == 0 or !isUndecorated(hwnd)) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            const params: *win32.NCCALCSIZE_PARAMS = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            const top = params.rgrc[0].top;
+            const result = win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            params.rgrc[0].top = top;
+
+            var fullscreen = false;
+            if (ownerOf(hwnd)) |o| {
+                fullscreen = o.backend.is_fullscreen;
+            }
+
+            // A maximized window hangs its frame off the monitor edge.
+            if (!fullscreen and win32.IsZoomed(hwnd) != 0) {
+                params.rgrc[0].top += resizeBorder(hwnd);
+            }
+
+            return result;
+        },
+        win32.WM_NCHITTEST => {
+            const hit = win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            const o = ownerOf(hwnd) orelse return hit;
+
+            if (hit != win32.HTCLIENT or o.backend.is_fullscreen) {
+                return hit;
+            }
+
+            return hitTestClient(hwnd, o, lparam);
+        },
+        win32.WM_NCMOUSEMOVE => {
+            const o = ownerOf(hwnd) orelse return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            if (wparam != win32.HTMAXBUTTON) {
+                o.pointerLeft();
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            if (!o.backend.tracking_nonclient_leave) {
+                trackLeave(hwnd, true);
+                o.backend.tracking_nonclient_leave = true;
+            }
+            o.setCursorPos(screenMousePos(hwnd, lparam));
+            return 0;
+        },
+        win32.WM_NCLBUTTONDOWN, win32.WM_NCLBUTTONDBLCLK => {
+            if (wparam != win32.HTMAXBUTTON) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            _ = win32.SetCapture(hwnd);
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, true, screenMousePos(hwnd, lparam));
+            }
+
+            return 0;
+        },
+        win32.WM_NCLBUTTONUP => {
+            if (wparam != win32.HTMAXBUTTON) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, false, screenMousePos(hwnd, lparam));
+            }
+
             return 0;
         },
         win32.WM_LBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
-            if (ownerOf(hwnd)) |o| o.setMouseButton(.left, true, mousePos(hwnd, lparam));
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.left, true, mousePos(hwnd, lparam));
+            }
+
             return 0;
         },
         win32.WM_LBUTTONUP => {
             if (ownerOf(hwnd)) |o| {
                 o.setMouseButton(.left, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             } else {
                 _ = win32.ReleaseCapture();
             }
@@ -552,13 +745,19 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
         },
         win32.WM_RBUTTONDOWN => {
             _ = win32.SetCapture(hwnd);
-            if (ownerOf(hwnd)) |o| o.setMouseButton(.right, true, mousePos(hwnd, lparam));
+
+            if (ownerOf(hwnd)) |o| {
+                o.setMouseButton(.right, true, mousePos(hwnd, lparam));
+            }
+
             return 0;
         },
         win32.WM_RBUTTONUP => {
             if (ownerOf(hwnd)) |o| {
                 o.setMouseButton(.right, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             } else {
                 _ = win32.ReleaseCapture();
             }
@@ -576,7 +775,9 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             if (ownerOf(hwnd)) |o| {
                 const button: input_types.MouseButton = if (msg == win32.WM_MBUTTONUP) .middle else if (((wparam >> 16) & 0xFFFF) == 1) .back else .forward;
                 o.setMouseButton(button, false, mousePos(hwnd, lparam));
-                if (!o.anyMouseButtonDown()) _ = win32.ReleaseCapture();
+                if (!o.anyMouseButtonDown()) {
+                    _ = win32.ReleaseCapture();
+                }
             }
             return 0;
         },
@@ -590,7 +791,13 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             }
             return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        win32.WM_CONTEXTMENU => return 0,
+        win32.WM_CONTEXTMENU => {
+            if (lparam != -1) {
+                return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+
+            return 0;
+        },
         win32.WM_SETFOCUS => {
             if (ownerOf(hwnd)) |o| {
                 o.setFocused(true);
@@ -611,7 +818,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             const hi: u16 = @truncate((wparam >> 16) & 0xFFFF);
             const delta: i16 = @bitCast(hi);
             if (ownerOf(hwnd)) |o| {
-                o.setCursorPos(wheelMousePos(hwnd, lparam));
+                o.setCursorPos(screenMousePos(hwnd, lparam));
                 applyWheelLines(o, .y, wheelSteps(delta), o.backend.wheel_scroll_lines);
             }
             return 0;
@@ -620,7 +827,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             const hi: u16 = @truncate((wparam >> 16) & 0xFFFF);
             const delta: i16 = @bitCast(hi);
             if (ownerOf(hwnd)) |o| {
-                o.setCursorPos(wheelMousePos(hwnd, lparam));
+                o.setCursorPos(screenMousePos(hwnd, lparam));
                 applyWheelLines(o, .x, wheelSteps(delta), o.backend.wheel_scroll_chars);
             }
             return 0;

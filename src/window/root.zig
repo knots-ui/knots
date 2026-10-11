@@ -14,7 +14,17 @@ pub const Config = struct {
     min_size: ?input.Size = null,
     max_size: ?input.Size = null,
     canvas_selector: ?[:0]const u8 = null,
+    decorations: Decorations = .native,
+    /// Wayland app ID, which desktops match against a .desktop file. Defaults to the executable name.
+    app_id: ?[]const u8 = null,
 };
+
+pub const Decorations = enum {
+    native,
+    none,
+};
+
+pub const HitRegion = input.HitRegion;
 
 pub const ResizeEvent = struct {
     logical: input.Size,
@@ -27,7 +37,4 @@ pub const FrameHandler = struct {
     step: *const fn (ctx: *anyopaque) void,
 };
 
-pub const DisplayMode = enum {
-    windowed,
-    fullscreen,
-};
+pub const DisplayMode = input.DisplayMode;

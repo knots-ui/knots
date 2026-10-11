@@ -80,8 +80,8 @@ pub fn create(device: *Device, desc: Desc) !Texture {
         .subresource_range = .{ .aspect_mask = .{ .color = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
     }, null);
     errdefer device.vkd.destroyImageView(device.device, image_view, null);
-    device.setDebugName(.image, @intFromEnum(image), desc.label);
-    device.setDebugName(.image_view, @intFromEnum(image_view), desc.label);
+    device.setDebugName(.image, @backingInt(image), desc.label);
+    device.setDebugName(.image_view, @backingInt(image_view), desc.label);
 
     return .{
         .image = image,

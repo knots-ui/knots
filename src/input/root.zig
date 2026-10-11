@@ -161,9 +161,48 @@ pub const ScrollInput = struct {
     }
 };
 
+pub const DisplayMode = enum {
+    windowed,
+    maximized,
+    fullscreen,
+};
+
+pub const HitRegion = struct {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    kind: Kind,
+
+    pub const Kind = enum {
+        client,
+        caption,
+        maximize,
+    };
+
+    pub fn contains(self: HitRegion, pos: [2]f64) bool {
+        return pos[0] >= self.x and pos[0] < self.x + self.w and
+            pos[1] >= self.y and pos[1] < self.y + self.h;
+    }
+};
+
+pub fn hitRegionAt(regions: []const HitRegion, pos: [2]f64) HitRegion.Kind {
+    var i = regions.len;
+    while (i > 0) {
+        i -= 1;
+        if (regions[i].contains(pos)) {
+            return regions[i].kind;
+        }
+    }
+    return .client;
+}
+
 pub const Input = struct {
     focused: bool = true,
     pos: [2]f64,
+    pointer_inside: bool = true,
+    display_mode: DisplayMode = .windowed,
+    native_controls_width: f32 = 0,
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
     chars: []const u21 = &.{},
@@ -175,7 +214,7 @@ pub const Input = struct {
     super_held: bool = false,
 
     pub fn mouseButton(self: *const Input, button: MouseButton) *const MouseButtonState {
-        return &self.mouse[@intFromEnum(button)];
+        return &self.mouse[@backingInt(button)];
     }
 
     pub fn keyPressed(self: Input, key: Key) bool {
@@ -200,7 +239,7 @@ pub const Input = struct {
     }
 
     pub fn keyDown(self: Input, key: Key) bool {
-        const value = @intFromEnum(key);
+        const value = @backingInt(key);
         return value >= 0 and value < key_count and self.key_down[@intCast(value)];
     }
 };
@@ -221,7 +260,7 @@ pub const KeyEvent = struct {
     mods: Mods,
 };
 
-pub const key_count = @intFromEnum(Key.menu) + 1;
+pub const key_count = @backingInt(Key.menu) + 1;
 pub const no_keys_down: [key_count]bool = @splat(false);
 
 pub const Size = struct {
@@ -284,6 +323,19 @@ test "the platform clipboard chord is recognized" {
     try std.testing.expect(!clipboardModifierHeld(.{ .shift = true }));
 
     if (!is_macos) try std.testing.expect(!clipboardModifierHeld(.{ .ctrl = true, .alt = true }));
+}
+
+test "the topmost hit region decides" {
+    const std = @import("std");
+    const regions = [_]HitRegion{
+        .{ .x = 0, .y = 0, .w = 100, .h = 30, .kind = .caption },
+        .{ .x = 60, .y = 0, .w = 20, .h = 30, .kind = .client },
+        .{ .x = 80, .y = 0, .w = 20, .h = 30, .kind = .maximize },
+    };
+    try std.testing.expectEqual(HitRegion.Kind.caption, hitRegionAt(&regions, .{ 10, 10 }));
+    try std.testing.expectEqual(HitRegion.Kind.client, hitRegionAt(&regions, .{ 70, 10 }));
+    try std.testing.expectEqual(HitRegion.Kind.maximize, hitRegionAt(&regions, .{ 90, 10 }));
+    try std.testing.expectEqual(HitRegion.Kind.client, hitRegionAt(&regions, .{ 10, 40 }));
 }
 
 test "paste is requested on press and on repeat but not on release" {

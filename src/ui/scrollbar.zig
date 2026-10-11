@@ -309,7 +309,6 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .prim_type = 0.0,
             };
             try draw_list.pushInstances(&[_]types.Instance{thumb_inst}, .atlas, sg.parent_clip);
-
         }
 
         // Corner fill when both bars are present.

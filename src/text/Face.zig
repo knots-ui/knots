@@ -102,7 +102,7 @@ const WrapMap = std.HashMapUnmanaged(
 );
 
 fn readUnitsPerEm(true_type: *const TrueType) !u16 {
-    const table_offset = true_type.table_offsets[@intFromEnum(TrueType.TableId.head)];
+    const table_offset = true_type.table_offsets[@backingInt(TrueType.TableId.head)];
     if (table_offset > true_type.ttf_bytes.len) return error.InvalidFont;
     if (true_type.ttf_bytes.len - table_offset < 20) return error.InvalidFont;
 

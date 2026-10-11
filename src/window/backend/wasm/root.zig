@@ -120,6 +120,10 @@ pub const Backend = struct {
     }
 
     pub fn setDisplayMode(self: *Self, mode: window.DisplayMode) bool {
+        // A page cannot resize the browser window.
+        if (mode == .maximized) {
+            return false;
+        }
         self.desired_display_mode = mode;
         return self.reconcileDisplayMode();
     }
@@ -138,6 +142,7 @@ pub const Backend = struct {
         const result = switch (self.desired_display_mode) {
             .windowed => self.exitFullscreen(),
             .fullscreen => self.requestFullscreen(),
+            .maximized => false,
         };
         if (!result) return false;
         self.display_mode_transition = true;
@@ -145,7 +150,16 @@ pub const Backend = struct {
     }
 
     pub fn getDisplayMode(self: *const Self) window.DisplayMode {
-        return if (self.is_fullscreen) .fullscreen else .windowed;
+        if (self.is_fullscreen) {
+            return .fullscreen;
+        }
+        return .windowed;
+    }
+
+    pub fn minimize(_: *Self) void {}
+
+    pub fn nativeControlsWidth(_: *const Self) f32 {
+        return 0;
     }
 
     pub fn refreshCanvas(self: *Self) void {
@@ -214,6 +228,7 @@ const Capture = struct {
     mousedown: js.Callback,
     mouseup: js.Callback,
     mousemove: js.Callback,
+    mouseleave: js.Callback,
     wheel: js.Callback,
     resize: js.Callback,
     focus: js.Callback,
@@ -236,6 +251,8 @@ const Capture = struct {
             errdefer mouseup.deinit();
             var mousemove = try js.Callback.init(backend, onMouseMove);
             errdefer mousemove.deinit();
+            var mouseleave = try js.Callback.init(backend, onMouseLeave);
+            errdefer mouseleave.deinit();
             var wheel = try js.Callback.init(backend, onWheel);
             errdefer wheel.deinit();
             var resize = try js.Callback.init(backend, onResize);
@@ -267,6 +284,7 @@ const Capture = struct {
                 .mousedown = mousedown,
                 .mouseup = mouseup,
                 .mousemove = mousemove,
+                .mouseleave = mouseleave,
                 .wheel = wheel,
                 .resize = resize,
                 .focus = focus,
@@ -297,6 +315,7 @@ const Capture = struct {
         try addListener(backend.canvas, "mousedown", capture.mousedown, false);
         try addListener(backend.canvas, "mouseup", capture.mouseup, false);
         try addListener(backend.canvas, "mousemove", capture.mousemove, false);
+        try addListener(backend.canvas, "mouseleave", capture.mouseleave, false);
         try addWheelListener(backend.canvas, capture.wheel);
         try addListener(backend.canvas, "contextmenu", capture.contextmenu, false);
 
@@ -338,6 +357,7 @@ const Capture = struct {
         removeListener(backend.canvas, "mousedown", self.mousedown, false);
         removeListener(backend.canvas, "mouseup", self.mouseup, false);
         removeListener(backend.canvas, "mousemove", self.mousemove, false);
+        removeListener(backend.canvas, "mouseleave", self.mouseleave, false);
         removeListener(backend.canvas, "wheel", self.wheel, false);
         removeListener(backend.canvas, "contextmenu", self.contextmenu, false);
         endMouseCapture(backend);
@@ -349,6 +369,7 @@ const Capture = struct {
         self.mousedown.deinit();
         self.mouseup.deinit();
         self.mousemove.deinit();
+        self.mouseleave.deinit();
         self.wheel.deinit();
         self.resize.deinit();
         self.focus.deinit();
@@ -597,6 +618,12 @@ fn onMouseMove(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     defer event.release();
     const pos = eventPosition(backend, event) orelse return;
     owner.setCursorPos(pos);
+}
+
+fn onMouseLeave(context: ?*anyopaque, _: js.Value, _: u32) void {
+    const backend = backendFromContext(context) orelse return;
+    const owner = ownerFromBackend(backend) orelse return;
+    owner.pointerLeft();
 }
 
 fn onMouseDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {

@@ -31,6 +31,7 @@ gpu_spin: f32 = 0.32,
 pending_async: usize = 0,
 floating_window_open: bool = false,
 floating_window_second_open: bool = false,
+title_bar_dialog_open: bool = false,
 
 pub fn deinit(self: *@This()) void {
     if (self.gpu_resources) |*resources| resources.deinit();
