@@ -257,6 +257,32 @@ const Shared = struct {
         return @intCast(cp);
     }
 
+    fn unshiftedForKey(self: *const Shared, evdev_key: u32) ?u21 {
+        return self.charAtLevel(evdev_key, 0);
+    }
+
+    fn typedForKey(self: *const Shared, evdev_key: u32) ?u21 {
+        const state = self.xkb_state orelse return null;
+        const kc = evdev_key + 8;
+        return self.charAtLevel(evdev_key, xkb.xkb_state_key_get_level(state, kc, xkb.xkb_state_key_get_layout(state, kc)));
+    }
+
+    fn charAtLevel(self: *const Shared, evdev_key: u32, level: u32) ?u21 {
+        const state = self.xkb_state orelse return null;
+        const map = self.xkb_keymap orelse return null;
+        const kc = evdev_key + 8;
+
+        var syms: ?[*]const u32 = null;
+        if (xkb.xkb_keymap_key_get_syms_by_level(map, kc, xkb.xkb_state_key_get_layout(state, kc), level, &syms) != 1)
+            return null;
+
+        const cp = xkb.xkb_keysym_to_utf32((syms orelse return null)[0]);
+        if (cp < 0x20 or cp == 0x7F or cp > std.math.maxInt(u21))
+            return null;
+
+        return @intCast(cp);
+    }
+
     fn clearRepeat(self: *Shared) void {
         self.repeat_key = null;
         self.repeat_char = null;
@@ -293,7 +319,8 @@ const Shared = struct {
         const interval = @max(@as(i64, 1), @divTrunc(1000, @as(i64, self.repeat_rate)));
         var emitted: usize = 0;
         while (now >= self.repeat_next_ms and emitted < 8) : (emitted += 1) {
-            owner.pushKey(@backingInt(self.repeat_window_key), .repeat, self.currentMods());
+            const typed = if (self.repeat_key) |k| self.typedForKey(k) orelse 0 else 0;
+            owner.pushKeyText(@backingInt(self.repeat_window_key), .repeat, self.currentMods(), typed);
             if (self.repeat_char) |cp| owner.pushChar(cp);
             self.repeat_next_ms += interval;
         }
@@ -1194,13 +1221,13 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
         },
         .key => |key| {
             const owner = (state.keyboard_state orelse return).owner orelse return;
-            const translated = keymap.translateEvdev(key.key);
+            const translated = input_types.layoutKey(keymap.translateEvdev(key.key), state.unshiftedForKey(key.key));
             const mods = state.currentMods();
             state.last_keyboard_serial = key.serial;
             switch (key.state) {
                 .pressed => {
                     const cp = state.utf32ForKey(key.key);
-                    owner.pushKey(@backingInt(translated), .press, mods);
+                    owner.pushKeyText(@backingInt(translated), .press, mods, state.typedForKey(key.key) orelse 0);
                     if (cp) |ch| owner.pushChar(ch);
                     state.startRepeat(key.key, translated, cp);
                 },

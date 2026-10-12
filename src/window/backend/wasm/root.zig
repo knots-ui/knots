@@ -569,7 +569,35 @@ fn eventKeyCode(event: js.Value) ?i32 {
     defer host.release();
     const key = host.call("keyCode", &.{js.Arg.value(code)}) catch return null;
     defer key.release();
-    return key.tryI32() catch return null;
+
+    const physical = key.tryI32() catch return null;
+    if (physical < 0)
+        return physical;
+
+    const cp = host.call("layoutCodepoint", &.{js.Arg.value(event)}) catch return physical;
+    defer cp.release();
+
+    const ch = cp.tryU32() catch return physical;
+    const unshifted: ?u21 = if (ch == 0 or ch > std.math.maxInt(u21))
+        null
+    else
+        @intCast(ch);
+
+    return @backingInt(input_types.layoutKey(@fromBackingInt(physical), unshifted));
+}
+
+fn eventTypedCodepoint(event: js.Value) ?u21 {
+    const host = webHost() catch return null;
+    defer host.release();
+
+    const codepoint = host.call("typedCodepoint", &.{js.Arg.value(event)}) catch return null;
+    defer codepoint.release();
+
+    const value = codepoint.tryU32() catch return null;
+    if (value < 0x20 or value == 0x7F or value > std.math.maxInt(u21))
+        return null;
+
+    return @intCast(value);
 }
 
 fn eventTextCodepoint(event: js.Value) ?u32 {
@@ -702,7 +730,7 @@ fn onKeyDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {
                 backend.preparePaste();
                 return;
             }
-            owner.pushKey(key, key_action, mods);
+            owner.pushKeyText(key, key_action, mods, eventTypedCodepoint(event) orelse 0);
             const maybe_host: ?js.Value = webHost() catch null;
             if (maybe_host) |host| {
                 defer host.release();

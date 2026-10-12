@@ -185,9 +185,10 @@ fn keyDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const event = objc.Object.fromId(event_id);
     const kc = event.msgSend(u16, "keyCode", .{});
     const flags = event.msgSend(c_ulong, "modifierFlags", .{});
-    const key = keymap.translateKeyCode(kc);
+    const key = shortcutKey(event, kc);
     const mods = modsFromFlags(flags);
-    owner.pushKey(@backingInt(key), .press, mods);
+    const typed = eventChar(event, flags & (ak.NSEventModifierFlagShift | ak.NSEventModifierFlagOption)) orelse 0;
+    owner.pushKeyText(@backingInt(key), .press, mods, typed);
 
     const skip_chars = (flags & ak.NSEventModifierFlagCommand) != 0 or
         (flags & ak.NSEventModifierFlagControl) != 0;
@@ -209,8 +210,24 @@ fn keyUp(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const event = objc.Object.fromId(event_id);
     const kc = event.msgSend(u16, "keyCode", .{});
     const flags = event.msgSend(c_ulong, "modifierFlags", .{});
-    const key = keymap.translateKeyCode(kc);
+    const key = shortcutKey(event, kc);
     owner.pushKey(@backingInt(key), .release, modsFromFlags(flags));
+}
+
+fn shortcutKey(event: objc.Object, kc: u16) input_types.Key {
+    return input_types.layoutKey(keymap.translateKeyCode(kc), eventChar(event, 0));
+}
+
+fn eventChar(event: objc.Object, flags: c_ulong) ?u21 {
+    const chars = event.msgSend(objc.Object, "charactersByApplyingModifiers:", .{flags});
+    if (chars.value == null) return null;
+    const utf8: [*:0]const u8 = chars.msgSend([*:0]const u8, "UTF8String", .{});
+    const s = std.mem.sliceTo(utf8, 0);
+    const len = std.unicode.utf8ByteSequenceLength(if (s.len > 0) s[0] else 0) catch return null;
+    if (s.len != len) return null;
+    const cp = std.unicode.utf8Decode(s) catch return null;
+    if (cp < 0x20 or cp == 0x7F or (cp >= 0xF700 and cp <= 0xF8FF)) return null; // control, function keys
+    return cp;
 }
 
 fn flagsChanged(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {

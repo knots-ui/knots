@@ -16,6 +16,7 @@ const ResizeEvent = @import("root.zig").ResizeEvent;
 const DisplayMode = @import("root.zig").DisplayMode;
 const HitRegion = input.HitRegion;
 const FrameHandler = @import("root.zig").FrameHandler;
+const NativeHandle = @import("root.zig").NativeHandle;
 const MouseButton = input.MouseButton;
 const mouse_button_count = input.mouse_button_count;
 const MouseButtonState = input.MouseButtonState;
@@ -167,6 +168,11 @@ pub fn setDisplayMode(self: *Window, mode: DisplayMode) bool {
 
 pub fn getDisplayMode(self: *const Window) DisplayMode {
     return self.backend.getDisplayMode();
+}
+
+pub fn nativeHandle(self: *const Window) NativeHandle {
+    if (@hasDecl(impl.Backend, "nativeHandle")) return self.backend.nativeHandle();
+    return .none;
 }
 
 pub fn minimize(self: *Window) void {
@@ -326,13 +332,18 @@ pub fn pushChar(self: *Window, codepoint: u21) void {
 }
 
 pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {
+    self.pushKeyText(key, action, mods, 0);
+}
+
+/// Like `pushKey`, with the character the key types (see `KeyEvent.text`).
+pub fn pushKeyText(self: *Window, key: i32, action: KeyAction, mods: Mods, text: u21) void {
     self.mods = mods;
     const translated = std.enums.fromInt(Key, key) orelse return;
     const index = @backingInt(translated);
     if (index >= 0 and index < key_count) {
         self.key_down[@intCast(index)] = action != .release;
     }
-    self.key_events.append(self.allocator, .{ .key = translated, .action = action, .mods = mods }) catch |err| {
+    self.key_events.append(self.allocator, .{ .key = translated, .action = action, .mods = mods, .text = text }) catch |err| {
         self.input_error = err;
         self.markInputChanged();
         return;
