@@ -258,6 +258,7 @@ pub const KeyEvent = struct {
     key: Key,
     action: KeyAction,
     mods: Mods,
+    text: u21 = 0,
 };
 
 pub const key_count = @backingInt(Key.menu) + 1;
@@ -302,21 +303,63 @@ pub fn clipboardModifierHeld(mods: Mods) bool {
     return mods.ctrl and !mods.alt;
 }
 
-/// True when this frame contains a paste chord; repeat counts, so holding pastes.
+pub fn layoutKey(physical: Key, unshifted: ?u21) Key {
+    if (!isLayoutDependent(physical)) return physical;
+    return keyForChar(unshifted orelse return physical) orelse physical;
+}
+
+fn isLayoutDependent(k: Key) bool {
+    const v = @backingInt(k);
+    return (v >= 'A' and v <= 'Z') or switch (k) {
+        .apostrophe, .comma, .minus, .period, .slash, .semicolon, .equal, .left_bracket, .backslash, .right_bracket, .grave_accent => true,
+        else => false,
+    };
+}
+
+fn keyForChar(ch: u21) ?Key {
+    return switch (ch) {
+        'a'...'z' => @fromBackingInt(@as(i32, ch) - 32),
+        'A'...'Z', '\'', ',', '-', '.', '/', ';', '=', '[', '\\', ']', '`' => @fromBackingInt(@as(i32, ch)),
+        '+' => .equal,
+        else => null,
+    };
+}
+
 pub fn pasteRequested(events: []const KeyEvent) bool {
     for (events) |event| {
-        if (event.key != .v or event.action == .release) continue;
-        if (clipboardModifierHeld(event.mods)) return true;
+        if (event.key != .v or event.action == .release)
+            continue;
+
+        if (clipboardModifierHeld(event.mods))
+            return true;
     }
+
     return false;
 }
 
+const std = @import("std");
 const builtin = @import("builtin");
 const is_macos = builtin.os.tag == .macos;
 const is_browser = builtin.cpu.arch.isWasm();
 
+test "shortcut keys follow the layout for letters and punctuation" {
+    // Nordic: `+` sits on the US minus key, `-` on the US slash key.
+    try std.testing.expectEqual(Key.equal, layoutKey(.minus, '+'));
+    try std.testing.expectEqual(Key.minus, layoutKey(.slash, '-'));
+
+    // Dvorak: the US `i` key types `c`.
+    try std.testing.expectEqual(Key.c, layoutKey(.i, 'c'));
+
+    // No usable character: physical key.
+    try std.testing.expectEqual(Key.left_bracket, layoutKey(.left_bracket, 0xE5));
+    try std.testing.expectEqual(Key.semicolon, layoutKey(.semicolon, null));
+
+    // Digits and non-printing keys never move (AZERTY's `6` key types `-`).
+    try std.testing.expectEqual(Key.@"6", layoutKey(.@"6", '-'));
+    try std.testing.expectEqual(Key.enter, layoutKey(.enter, 'x'));
+}
+
 test "the platform clipboard chord is recognized" {
-    const std = @import("std");
     const platform_modifier: Mods = if (is_macos) .{ .super = true } else .{ .ctrl = true };
     try std.testing.expect(clipboardModifierHeld(platform_modifier));
     try std.testing.expect(!clipboardModifierHeld(.{}));
@@ -326,7 +369,6 @@ test "the platform clipboard chord is recognized" {
 }
 
 test "the topmost hit region decides" {
-    const std = @import("std");
     const regions = [_]HitRegion{
         .{ .x = 0, .y = 0, .w = 100, .h = 30, .kind = .caption },
         .{ .x = 60, .y = 0, .w = 20, .h = 30, .kind = .client },
@@ -339,7 +381,6 @@ test "the topmost hit region decides" {
 }
 
 test "paste is requested on press and on repeat but not on release" {
-    const std = @import("std");
     const modifier: Mods = if (is_macos) .{ .super = true } else .{ .ctrl = true };
 
     try std.testing.expect(pasteRequested(&.{

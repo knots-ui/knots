@@ -26,6 +26,23 @@ function resolveCanvasOption(canvas, selector) {
   throw new Error("Knots requires a canvas element, selector string, or resolver function");
 }
 
+let layoutMap = null;
+let layoutMapPending = false;
+
+function refreshLayoutMap() {
+  if (layoutMapPending || !navigator.keyboard?.getLayoutMap) return;
+  layoutMapPending = true;
+  navigator.keyboard.getLayoutMap().then(
+    (map) => {
+      layoutMap = map;
+      layoutMapPending = false;
+    },
+    () => {
+      layoutMapPending = false;
+    },
+  );
+}
+
 const keyCodes = new Map(
   Object.entries({
     Space: 32,
@@ -255,6 +272,19 @@ class KnotsBrowserHost {
 
   keyCode(code) {
     return keyCodes.get(code) ?? -1;
+  }
+
+  layoutCodepoint(event) {
+    refreshLayoutMap();
+    const ch = layoutMap?.get(event.code) ?? (event.shiftKey || event.altKey ? "" : event.key);
+    if (!ch || Array.from(ch).length !== 1) return 0;
+    return ch.codePointAt(0) ?? 0;
+  }
+
+  typedCodepoint(event) {
+    const chars = Array.from(event.key ?? "");
+    if (chars.length !== 1) return 0;
+    return chars[0].codePointAt(0) ?? 0;
   }
 
   textCodepoint(event) {

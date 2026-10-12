@@ -26,8 +26,38 @@ pub fn onKey(owner: *window.Window, wparam: win32.WPARAM, lparam: win32.LPARAM, 
     const lp: u64 = @bitCast(@as(i64, lparam));
     const repeat_bit: u1 = @intCast((lp >> 30) & 1);
     const action: input_types.KeyAction =
-        if (!pressed) .release else if (repeat_bit == 1) .repeat else .press;
-    owner.pushKey(@backingInt(key), action, modsFromKeyState());
+        if (!pressed)
+            .release
+        else if (repeat_bit == 1)
+            .repeat
+        else
+            .press;
+
+    const typed = if (pressed) typedChar(vk, @intCast((lp >> 16) & 0xFF)) orelse 0 else 0;
+    owner.pushKeyText(@backingInt(key), action, modsFromKeyState(), typed);
+}
+
+fn typedChar(vk: u32, scancode: u32) ?u21 {
+    var state: [256]u8 = undefined;
+    if (win32.GetKeyboardState(&state) == 0)
+        return null;
+
+    const altgr = state[@backingInt(win32.VK_RMENU)] & 0x80 != 0;
+    if (!altgr) {
+        for ([_]u32{ @backingInt(win32.VK_CONTROL), @backingInt(win32.VK_LCONTROL), @backingInt(win32.VK_RCONTROL), @backingInt(win32.VK_MENU), @backingInt(win32.VK_LMENU) }) |k| {
+            state[k] = 0;
+        }
+    }
+
+    var buf: [4:0]u16 = @splat(0);
+    if (win32.ToUnicode(vk, scancode, &state, &buf, 4, 0x4) != 1)
+        return null;
+
+    const w = buf[0];
+    if (w < 0x20 or w == 0x7F or (w >= 0xD800 and w <= 0xDFFF))
+        return null;
+
+    return w;
 }
 
 pub fn onChar(owner: *window.Window, high_surrogate: *u16, w: u16) void {

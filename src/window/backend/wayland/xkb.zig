@@ -43,3 +43,7 @@ pub extern fn xkb_state_update_mask(
 ) u32;
 pub extern fn xkb_state_key_get_utf32(state: *State, key: keycode_t) u32;
 pub extern fn xkb_state_mod_name_is_active(state: *State, name: [*:0]const u8, ty: u32) c_int;
+pub extern fn xkb_state_key_get_layout(state: *State, key: keycode_t) u32;
+pub extern fn xkb_state_key_get_level(state: *State, key: keycode_t, layout: u32) u32;
+pub extern fn xkb_keymap_key_get_syms_by_level(keymap: *Keymap, key: keycode_t, layout: u32, level: u32, syms_out: *?[*]const u32) c_int;
+pub extern fn xkb_keysym_to_utf32(keysym: u32) u32;
