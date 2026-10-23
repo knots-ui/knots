@@ -1,3 +1,4 @@
 zig-pkg
 .zig-cache
 zig-out
+.wrangler/

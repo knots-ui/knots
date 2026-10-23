@@ -1,0 +1,9 @@
+{
+  "name": "knots-playground",
+  "compatibility_date": "2025-10-01",
+  "routes": [{ "pattern": "playground.knotsui.com", "custom_domain": true }],
+  "build": {
+    "command": "zig build -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall && cp _headers zig-out/web/"
+  },
+  "assets": { "directory": "zig-out/web" }
+}
