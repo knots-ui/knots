@@ -18,31 +18,30 @@ const with_newlines =
     "\n" ++
     "Empty line above. The greedy wrapper breaks on spaces and hard newlines, " ++
     "and falls back to mid-word breaks for runs longer than the wrap width.";
-var notes: std.ArrayList(u8) = .empty;
-var allocator: ?std.mem.Allocator = null;
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    allocator = app.ui().allocator;
+notes: std.ArrayList(u8) = .empty,
+
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
     const root = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .column, .gap = 16 } };
-    _ = try root.open(app);
-    try fixedWidthSection(app);
-    try growWidthSection(app);
-    try newlinesSection(app);
-    try multiLineInputSection(app);
-    try root.close(app);
+    _ = try root.open(frame);
+    try fixedWidthSection(frame);
+    try growWidthSection(frame);
+    try newlinesSection(frame);
+    try multiLineInputSection(frame, &self.notes);
+    try root.close(frame);
 }
 
-fn caption(app: *ui.Frame, comptime label: []const u8, key: ui.Key) !void {
-    try app.e(Text{
+fn caption(frame: *ui.Frame, comptime label: []const u8, key: ui.Key) !void {
+    try frame.e(Text{
         .content = label,
         .key = key,
         .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
 }
 
-fn fixedWidthSection(app: *ui.Frame) !void {
-    try caption(app, "fixed(220) container, text wraps inside a narrow column", .src(@src()));
-    try app.e(.{
+fn fixedWidthSection(frame: *ui.Frame) !void {
+    try caption(frame, "fixed(220) container, text wraps inside a narrow column", .src(@src()));
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .style = &.{ .width = .fixed(220), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
@@ -55,9 +54,9 @@ fn fixedWidthSection(app: *ui.Frame) !void {
     });
 }
 
-fn growWidthSection(app: *ui.Frame) !void {
-    try caption(app, "grow() in a row, text reflows when the window resizes", .src(@src()));
-    try app.e(.{
+fn growWidthSection(frame: *ui.Frame) !void {
+    try caption(frame, "grow() in a row, text reflows when the window resizes", .src(@src()));
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 12 } },
         .{
             Rect{
@@ -71,7 +70,7 @@ fn growWidthSection(app: *ui.Frame) !void {
         },
     });
 
-    try app.e(.{
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 12 } },
         .{
             growParagraph,
@@ -83,8 +82,8 @@ fn growWidthSection(app: *ui.Frame) !void {
     });
 }
 
-fn growParagraph(app: *ui.Frame) !void {
-    try app.e(.{
+fn growParagraph(frame: *ui.Frame) !void {
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .style = &.{ .width = .grow(), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
@@ -97,9 +96,9 @@ fn growParagraph(app: *ui.Frame) !void {
     });
 }
 
-fn newlinesSection(app: *ui.Frame) !void {
-    try caption(app, "hard \\n breaks combined with soft wrap", .src(@src()));
-    try app.e(.{
+fn newlinesSection(frame: *ui.Frame) !void {
+    try caption(frame, "hard \\n breaks combined with soft wrap", .src(@src()));
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .style = &.{ .width = .fixed(320), .padding = .init(10, 10, 10, 10), .background = .muted, .radius = .sm },
@@ -112,19 +111,16 @@ fn newlinesSection(app: *ui.Frame) !void {
     });
 }
 
-fn multiLineInputSection(app: *ui.Frame) !void {
-    try caption(app, "TextArea: multi-line, enter inserts a newline, arrow up/down navigate lines; drag the bottom edge to resize height (persists)", .src(@src()));
-    try app.e(TextArea{
+fn multiLineInputSection(frame: *ui.Frame, notes: *std.ArrayList(u8)) !void {
+    try caption(frame, "TextArea: multi-line, enter inserts a newline, arrow up/down navigate lines; drag the bottom edge to resize height (persists)", .src(@src()));
+    try frame.e(TextArea{
         .key = .src(@src()),
-        .buf = &notes,
+        .buf = notes,
         .placeholder = "type a multi-line note... drag the bottom edge to grow it",
         .style = &.{ .width = .fixed(360), .height = .fixed(96) },
     });
 }
 
-pub fn deinit() void {
-    const active_allocator = allocator orelse return;
-    notes.deinit(active_allocator);
-    notes = .empty;
-    allocator = null;
+pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+    self.notes.deinit(allocator);
 }

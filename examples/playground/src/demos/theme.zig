@@ -30,75 +30,67 @@ const entries = blk: {
     };
 };
 
-var active_theme: u32 = 1;
+active: usize = 1,
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    const theme_index = &active_theme;
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
     const root = Rect{
         .key = .src(@src()),
         .style = &.{ .width = .grow(), .height = .fixed(800), .direction = .column, .gap = 12 },
     };
-    _ = try root.open(app);
-    inline for (0..entries.len) |index| {
-        try Slot(index).render(app, theme_index);
-    }
-    try root.close(app);
+    _ = try root.open(frame);
+    inline for (entries, 0..) |entry, index| try self.slot(frame, entry, index);
+    try root.close(frame);
 }
 
-fn Slot(comptime idx: u32) type {
-    return struct {
-        pub fn render(app: *ui.Frame, theme_index: *u32) !void {
-            const entry = entries[idx];
-            const is_active = theme_index.* == idx;
+fn slot(self: *@This(), frame: *ui.Frame, comptime entry: Entry, index: usize) !void {
+    const is_active = self.active == index;
 
-            const cell = Rect{
-                .key = .str("theme.cell:" ++ entry.name),
-                .style = &.{ .width = .grow(), .height = .grow(), .direction = .column },
-            };
-            _ = try cell.open(app);
-            const button = Button{
-                .key = .str("theme.swatch:" ++ entry.name),
-                .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(12, 12, 12, 12), .background = .{ .color = entry.theme.elevated }, .radius = .md, .border_width = if (is_active) .all(2) else .all(1), .border_color = if (is_active)
-                    .{ .color = entry.theme.primary }
-                else
-                    .{ .color = entry.theme.toned } },
-            };
-            const response = try button.openResponse(app);
-            try app.e(.{
-                Rect{
-                    .key = .str("theme.button.container:" ++ entry.name),
-                    .style = &.{ .@"align" = .center, .justify = .space_between, .direction = .column },
-                },
-                .{
-                    Text{
-                        .content = entry.name,
-                        .selectable = false,
-                        .key = .str("theme.label:" ++ entry.name),
-                        .style = &.{ .font_size = .md, .foreground = .{ .color = entry.theme.text } },
-                    },
-                    Rect{
-                        .key = .str("theme.row:" ++ entry.name),
-                        .style = &.{ .width = .grow(), .height = .fixed(20), .direction = .row, .gap = 4 },
-                    },
-                    .{
-                        chip(entry.theme.primary, "p", entry.name),
-                        chip(entry.theme.secondary, "s", entry.name),
-                        chip(entry.theme.success, "ok", entry.name),
-                        chip(entry.theme.warning, "wa", entry.name),
-                        chip(entry.theme.@"error", "er", entry.name),
-                        chip(entry.theme.muted, "mu", entry.name),
-                    },
-                },
-            });
-            try button.close(app);
-            try cell.close(app);
-            if (response.clicked) {
-                theme_index.* = idx;
-                app.ui().theme = entries[idx].theme;
-                app.requestRedraw();
-            }
-        }
+    const cell = Rect{
+        .key = .str("theme.cell:" ++ entry.name),
+        .style = &.{ .width = .grow(), .height = .grow(), .direction = .column },
     };
+    _ = try cell.open(frame);
+    const button = Button{
+        .key = .str("theme.swatch:" ++ entry.name),
+        .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(12, 12, 12, 12), .background = .{ .color = entry.theme.elevated }, .radius = .md, .border_width = if (is_active) .all(2) else .all(1), .border_color = if (is_active)
+            .{ .color = entry.theme.primary }
+        else
+            .{ .color = entry.theme.toned } },
+    };
+    const response = try button.openResponse(frame);
+    try frame.e(.{
+        Rect{
+            .key = .str("theme.button.container:" ++ entry.name),
+            .style = &.{ .width = .grow(), .height = .grow(), .justify = .center, .direction = .column, .gap = 6 },
+        },
+        .{
+            Text{
+                .content = entry.name,
+                .selectable = false,
+                .key = .str("theme.label:" ++ entry.name),
+                .style = &.{ .font_size = .md, .foreground = .{ .color = entry.theme.text } },
+            },
+            Rect{
+                .key = .str("theme.row:" ++ entry.name),
+                .style = &.{ .height = .fixed(20), .direction = .row, .gap = 4 },
+            },
+            .{
+                chip(entry.theme.primary, "p", entry.name),
+                chip(entry.theme.secondary, "s", entry.name),
+                chip(entry.theme.success, "ok", entry.name),
+                chip(entry.theme.warning, "wa", entry.name),
+                chip(entry.theme.@"error", "er", entry.name),
+                chip(entry.theme.muted, "mu", entry.name),
+            },
+        },
+    });
+    try button.close(frame);
+    try cell.close(frame);
+    if (response.clicked) {
+        self.active = index;
+        frame.ui().theme = entry.theme;
+        frame.requestRedraw();
+    }
 }
 
 /// Returned to the caller: comptime arguments keep the style literal static.

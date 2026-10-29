@@ -18,66 +18,62 @@ const Tooltip = ui.component.Tooltip;
 const Role = enum { admin, editor, viewer, guest };
 const delivery_values = [_]u32{ 0, 1, 2 };
 const delivery_labels = [_][]const u8{ "immediate", "daily digest", "weekly digest" };
-const FormState = struct {
-    color: ui.Color = ui.Color.hex("#4F8CFFFF") catch unreachable,
-    confirm_open: bool = false,
-    delivery_cadence: u32 = 1,
-    email: std.ArrayList(u8) = .empty,
-    notifications_enabled: bool = true,
-    password: std.ArrayList(u8) = .empty,
-    role: u32 = 0,
-    volume: f32 = 0.7,
-};
-var form_state: FormState = .{};
-var allocator: ?std.mem.Allocator = null;
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    allocator = app.ui().allocator;
-    const arena = app.arena();
+color: ui.Color = ui.Color.hex("#4F8CFFFF") catch unreachable,
+confirm_open: bool = false,
+delivery_cadence: u32 = 1,
+email: std.ArrayList(u8) = .empty,
+notifications_enabled: bool = true,
+password: std.ArrayList(u8) = .empty,
+role: u32 = 0,
+volume: f32 = 0.7,
+
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
+    const arena = frame.arena();
 
     const form = Rect{
         .key = .src(@src()),
         .style = &.{ .width = .fixed(420), .direction = .column, .gap = 12 },
     };
-    _ = try form.open(app);
-    try emailField(app);
-    try passwordField(app);
-    try roleField(app);
-    try notificationsField(app);
-    try deliveryField(app);
-    try volumeField(app);
-    try colorField(app);
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(4) } });
+    _ = try form.open(frame);
+    try self.emailField(frame);
+    try self.passwordField(frame);
+    try self.roleField(frame);
+    try self.notificationsField(frame);
+    try self.deliveryField(frame);
+    try self.volumeField(frame);
+    try self.colorField(frame);
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(4) } });
     const tooltip = Tooltip{
         .key = .src(@src()),
         .content = "Open the confirmation dialog.",
         .style = &.{ .@"align" = .center },
     };
-    _ = try tooltip.open(app);
-    if ((try app.interact(Button{
+    _ = try tooltip.open(frame);
+    if ((try frame.interact(Button{
         .key = .src(@src()),
         .label = "submit",
-        .style = &.{ .width = .fixed(120), .height = .fixed(34), .background = .{ .color = form_state.color } },
+        .style = &.{ .width = .fixed(120), .height = .fixed(34), .background = .{ .color = self.color } },
     })).clicked) {
-        form_state.confirm_open = true;
-        app.requestRedraw();
+        self.confirm_open = true;
+        frame.requestRedraw();
     }
-    try tooltip.close(app);
-    try app.e(Text{
-        .content = try std.fmt.allocPrint(arena, "current volume: {d:.0}%", .{form_state.volume * 100}),
+    try tooltip.close(frame);
+    try frame.e(Text{
+        .content = try std.fmt.allocPrint(arena, "current volume: {d:.0}%", .{self.volume * 100}),
         .key = .src(@src()),
         .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
-    try form.close(app);
+    try form.close(frame);
 
     const dialog = Dialog{
-        .is_open = &form_state.confirm_open,
+        .is_open = &self.confirm_open,
         .key = .src(@src()),
         .style = &.{ .width = .fixed(320), .gap = 16 },
     };
-    if (form_state.confirm_open) {
-        _ = try dialog.open(app);
-        try app.e(Text{
+    if (self.confirm_open) {
+        _ = try dialog.open(frame);
+        try frame.e(Text{
             .content = "Are you sure?",
             .key = .src(@src()),
             .style = &.{ .font_size = .lg },
@@ -86,127 +82,124 @@ pub fn render(_: *knots.App, app: *ui.Frame) !void {
             .key = .src(@src()),
             .style = &.{ .width = .grow(), .direction = .row, .gap = 8, .justify = .end },
         };
-        _ = try actions.open(app);
-        if ((try app.interact(Button{
+        _ = try actions.open(frame);
+        if ((try frame.interact(Button{
             .key = .src(@src()),
             .label = "Yes",
             .style = &.{ .width = .fixed(80), .height = .fixed(32), .tone = .success },
-        })).clicked) submit(app);
-        if ((try app.interact(Button{
+        })).clicked) self.submit(frame);
+        if ((try frame.interact(Button{
             .key = .src(@src()),
             .label = "Cancel",
             .style = &.{ .width = .fixed(80), .height = .fixed(32), .tone = .@"error" },
-        })).clicked) closeConfirm(app);
-        try actions.close(app);
-        _ = try dialog.closeResponse(app);
+        })).clicked) self.closeConfirm(frame);
+        try actions.close(frame);
+        _ = try dialog.closeResponse(frame);
     }
 }
 
-fn openLabeled(app: *ui.Frame, comptime label: []const u8) !Rect {
+fn openLabeled(frame: *ui.Frame, comptime label: []const u8) !Rect {
     // Returned to the caller: the style literal must be comptime so the pointer outlives this call.
     const field = Rect{ .key = .str("form.field:" ++ label), .style = comptime &.{ .width = .grow(), .direction = .column, .gap = 2 } };
-    _ = try field.open(app);
-    try app.e(Text{ .content = label, .key = .str("form.label:" ++ label), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
+    _ = try field.open(frame);
+    try frame.e(Text{ .content = label, .key = .str("form.label:" ++ label), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
     return field;
 }
 
-fn emailField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "email");
-    try app.e(TextInput{
+fn emailField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "email");
+    try frame.e(TextInput{
         .key = .src(@src()),
-        .buf = &form_state.email,
+        .buf = &self.email,
         .placeholder = "you@example.com",
     });
-    try field.close(app);
+    try field.close(frame);
 }
 
-fn passwordField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "password");
-    try app.e(TextInput{
+fn passwordField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "password");
+    try frame.e(TextInput{
         .key = .src(@src()),
-        .buf = &form_state.password,
+        .buf = &self.password,
         .placeholder = "...",
     });
-    try field.close(app);
+    try field.close(frame);
 }
 
-fn roleField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "role");
-    const response = try app.interact(SelectInput(Role){
+fn roleField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "role");
+    const response = try frame.interact(SelectInput(Role){
         .key = .src(@src()),
-        .initial_selected = form_state.role,
+        .initial_selected = self.role,
     });
-    if (response.selected) |selected| form_state.role = selected.index;
-    try field.close(app);
+    if (response.selected) |selected| self.role = selected.index;
+    try field.close(frame);
 }
 
-fn notificationsField(app: *ui.Frame) !void {
-    _ = try app.interact(Checkbox{
+fn notificationsField(self: *@This(), frame: *ui.Frame) !void {
+    _ = try frame.interact(Checkbox{
         .key = .src(@src()),
-        .checked = &form_state.notifications_enabled,
+        .checked = &self.notifications_enabled,
         .label = "send notifications",
     });
 }
 
-fn deliveryField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "delivery cadence");
-    _ = try app.interact(RadioGroup(u32){
+fn deliveryField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "delivery cadence");
+    _ = try frame.interact(RadioGroup(u32){
         .key = .src(@src()),
-        .selected = &form_state.delivery_cadence,
+        .selected = &self.delivery_cadence,
         .values = &delivery_values,
         .labels = &delivery_labels,
         .style = &.{ .direction = .row, .gap = 14 },
     });
-    try field.close(app);
+    try field.close(frame);
 }
 
-fn volumeField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "notification volume");
+fn volumeField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "notification volume");
     const slider = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(20), .padding = .init(8, 0, 8, 0) } };
-    _ = try slider.open(app);
-    _ = try app.interact(SliderInput{
+    _ = try slider.open(frame);
+    _ = try frame.interact(SliderInput{
         .key = .src(@src()),
-        .value = &form_state.volume,
+        .value = &self.volume,
         .steps = 0.02,
     });
-    try slider.close(app);
-    try field.close(app);
+    try slider.close(frame);
+    try field.close(frame);
 }
 
-fn colorField(app: *ui.Frame) !void {
-    const field = try openLabeled(app, "accent color");
-    _ = try app.interact(ColorPicker{
+fn colorField(self: *@This(), frame: *ui.Frame) !void {
+    const field = try openLabeled(frame, "accent color");
+    _ = try frame.interact(ColorPicker{
         .key = .src(@src()),
-        .value = &form_state.color,
+        .value = &self.color,
     });
-    try field.close(app);
+    try field.close(frame);
 }
 
-fn closeConfirm(app: *ui.Frame) void {
-    form_state.confirm_open = false;
-    app.requestRedraw();
+fn closeConfirm(self: *@This(), frame: *ui.Frame) void {
+    self.confirm_open = false;
+    frame.requestRedraw();
 }
 
-fn submit(app: *ui.Frame) void {
+fn submit(self: *@This(), frame: *ui.Frame) void {
     std.log.info(
         "form submit -> email='{s}' password='{s}' role={d} notifications={} cadence={d} volume={d:.2}",
         .{
-            form_state.email.items,
-            form_state.password.items,
-            form_state.role,
-            form_state.notifications_enabled,
-            form_state.delivery_cadence,
-            form_state.volume,
+            self.email.items,
+            self.password.items,
+            self.role,
+            self.notifications_enabled,
+            self.delivery_cadence,
+            self.volume,
         },
     );
-    form_state.confirm_open = false;
-    app.requestRedraw();
+    self.confirm_open = false;
+    frame.requestRedraw();
 }
 
-pub fn deinit() void {
-    const active_allocator = allocator orelse return;
-    form_state.email.deinit(active_allocator);
-    form_state.password.deinit(active_allocator);
-    form_state = .{};
-    allocator = null;
+pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+    self.email.deinit(allocator);
+    self.password.deinit(allocator);
 }

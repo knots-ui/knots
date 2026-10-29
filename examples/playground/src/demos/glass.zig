@@ -16,68 +16,68 @@ const Preset = enum { glass, frosted };
 const stage_width = 720;
 const stage_height = 460;
 
-var preset: u32 = 0;
-var material: ui.Material = .glass;
+preset: Preset = .glass,
+material: ui.Material = .glass,
 
 const white_tint: ui.Color.Input = .{ .color = ui.Color.rgba(255, 255, 255, 22) };
 const ink: ui.Color.Input = .{ .color = ui.Color.rgba(16, 20, 28, 255) };
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
     const row = Rect{ .key = .src(@src()), .style = &.{ .direction = .row, .gap = 20 } };
-    _ = try row.open(app);
-    try controls(app);
-    try stage(app);
-    try row.close(app);
+    _ = try row.open(frame);
+    try self.controls(frame);
+    try stage(frame, self.material);
+    try row.close(frame);
     // The background animates.
-    app.requestRedraw();
+    frame.requestRedraw();
 }
 
-fn controls(app: *ui.Frame) !void {
+fn controls(self: *@This(), frame: *ui.Frame) !void {
     const column = Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(220), .direction = .column, .gap = 10 } };
-    _ = try column.open(app);
-    const selection = try app.interact(SelectInput(Preset){ .key = .src(@src()), .initial_selected = preset });
+    _ = try column.open(frame);
+    const selection = try frame.interact(SelectInput(Preset){ .key = .src(@src()), .initial_selected = @backingInt(self.preset) });
     if (selection.selected) |selected| {
-        preset = selected.index;
-        material = switch (@as(Preset, @fromBackingInt(@intCast(preset)))) {
+        self.preset = selected.value;
+        self.material = switch (self.preset) {
             .glass => .glass,
             .frosted => .frosted,
         };
     }
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(4) } });
-    try slider(app, "blur", &material.blur, 40, .src(@src()));
-    try slider(app, "saturation", &material.saturation, 2, .src(@src()));
-    try slider(app, "refraction", &material.refraction, 40, .src(@src()));
-    try slider(app, "bezel", &material.bezel, 60, .src(@src()));
-    try slider(app, "dispersion", &material.dispersion, 1, .src(@src()));
-    try slider(app, "specular", &material.specular, 1, .src(@src()));
-    try app.e(Text{
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(4) } });
+    try slider(frame, "blur", &self.material.blur, 40, .src(@src()));
+    try slider(frame, "saturation", &self.material.saturation, 2, .src(@src()));
+    try slider(frame, "refraction", &self.material.refraction, 40, .src(@src()));
+    try slider(frame, "bezel", &self.material.bezel, 60, .src(@src()));
+    try slider(frame, "dispersion", &self.material.dispersion, 1, .src(@src()));
+    try slider(frame, "specular", &self.material.specular, 1, .src(@src()));
+    try frame.e(Text{
         .content = "Style.backdrop filters what is painted behind an element; background tints it.",
         .key = .src(@src()),
         .style = &.{ .font_size = .xs, .foreground = .dimmed, .wrap = true, .width = .grow() },
     });
-    try column.close(app);
+    try column.close(frame);
 }
 
-fn slider(app: *ui.Frame, label: []const u8, value: *f32, max: f32, key: Key) !void {
+fn slider(frame: *ui.Frame, label: []const u8, value: *f32, max: f32, key: Key) !void {
     const field = Rect{ .key = key, .style = &.{ .width = .grow(), .direction = .column, .gap = 4 } };
-    _ = try field.open(app);
-    try app.e(Text{
-        .content = try std.fmt.allocPrint(app.arena(), "{s}: {d:.2}", .{ label, value.* }),
+    _ = try field.open(frame);
+    try frame.e(Text{
+        .content = try std.fmt.allocPrint(frame.arena(), "{s}: {d:.2}", .{ label, value.* }),
         .key = key.indexed(1),
         .style = &.{ .font_size = .xs, .foreground = .dimmed },
     });
     const track = Rect{ .key = key.indexed(2), .style = &.{ .width = .grow(), .height = .fixed(20), .padding = .init(8, 0, 8, 0) } };
-    _ = try track.open(app);
-    _ = try app.interact(SliderInput{ .key = key.indexed(3), .value = value, .max = max });
-    try track.close(app);
-    try field.close(app);
+    _ = try track.open(frame);
+    _ = try frame.interact(SliderInput{ .key = key.indexed(3), .value = value, .max = max });
+    try track.close(frame);
+    try field.close(frame);
 }
 
-fn stage(app: *ui.Frame) !void {
-    const t = @as(f32, @floatFromInt(@mod(app.input().now_ms, 60_000))) / 1000.0;
+fn stage(frame: *ui.Frame, material: ui.Material) !void {
+    const t = @as(f32, @floatFromInt(@mod(frame.input().now_ms, 60_000))) / 1000.0;
 
     var commands: std.ArrayList(Canvas.DrawCmd) = .empty;
-    var painter = Canvas.Painter{ .cmds = &commands, .allocator = app.arena() };
+    var painter = Canvas.Painter{ .cmds = &commands, .allocator = frame.arena() };
     try drawBackground(&painter, t);
 
     const root = Rect{ .key = .src(@src()), .style = &.{
@@ -87,15 +87,15 @@ fn stage(app: *ui.Frame) !void {
         .radius = .lg,
         .overflow = .hidden,
     } };
-    _ = try root.open(app);
-    try app.e(Canvas{
+    _ = try root.open(frame);
+    try frame.e(Canvas{
         .commands = commands.items,
         .key = .src(@src()),
         .style = &.{ .width = .fixed(stage_width), .height = .fixed(stage_height) },
     });
 
     // A card using the material from the controls.
-    try app.e(.{
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{
             .width = .fixed(320),
             .position = .absolute,
@@ -119,9 +119,9 @@ fn stage(app: *ui.Frame) !void {
 
     // Frosted pills that turn to glass on hover, animated by the style transition.
     const pills = Rect{ .key = .src(@src()), .style = &.{ .position = .absolute, .offset = .{ 36, 370 }, .direction = .row, .gap = 12 } };
-    _ = try pills.open(app);
+    _ = try pills.open(frame);
     inline for (.{ "Library", "For you", "Search" }, 0..) |label, index| {
-        _ = try app.interact(Button{
+        _ = try frame.interact(Button{
             .key = Key.src(@src()).indexed(index),
             .label = label,
             .style = &.{
@@ -137,10 +137,10 @@ fn stage(app: *ui.Frame) !void {
             },
         });
     }
-    try pills.close(app);
+    try pills.close(frame);
 
     // A clear lens drifting over the scene.
-    try app.e(Rect{ .key = .src(@src()), .style = &.{
+    try frame.e(Rect{ .key = .src(@src()), .style = &.{
         .width = .fixed(150),
         .height = .fixed(150),
         .position = .absolute,
@@ -148,7 +148,7 @@ fn stage(app: *ui.Frame) !void {
         .radius = .{ .fixed = 75 },
         .backdrop = .{ .refraction = 26, .bezel = 50, .dispersion = 0.3, .specular = 0.8 },
     } });
-    try root.close(app);
+    try root.close(frame);
 }
 
 fn drawBackground(painter: *Canvas.Painter, t: f32) !void {

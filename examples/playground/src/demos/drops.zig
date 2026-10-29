@@ -7,44 +7,45 @@ const Text = ui.component.Text;
 const Button = ui.component.Button;
 const Spacer = ui.component.Spacer;
 const For = ui.control.For;
-var dropped_paths: std.ArrayList([]const u8) = .empty;
-var allocator: ?std.mem.Allocator = null;
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    const active_allocator = app.ui().allocator;
-    allocator = active_allocator;
-    const arena = app.arena();
+paths: std.ArrayList([]const u8) = .empty,
 
-    const new_paths = app.droppedPaths();
+pub fn render(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
+    const arena = frame.arena();
+
+    const new_paths = frame.droppedPaths();
     if (new_paths.len > 0) {
         for (new_paths) |path| {
-            const copy = try active_allocator.dupe(u8, path);
-            errdefer active_allocator.free(copy);
-            try dropped_paths.append(active_allocator, copy);
+            const copy = try app.allocator.dupe(u8, path);
+            errdefer app.allocator.free(copy);
+            try self.paths.append(app.allocator, copy);
         }
-        app.requestRedraw();
+        frame.requestRedraw();
     }
 
     const row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .gap = 8, .@"align" = .center } };
-    _ = try row.open(app);
-    if ((try app.interact(Button{
+    _ = try row.open(frame);
+    if ((try frame.interact(Button{
         .key = .src(@src()),
         .label = "clear",
         .style = &.{ .height = .fixed(28), .width = .fixed(80), .tone = .@"error" },
-    })).clicked) clear(app);
-    try app.e(.{
+    })).clicked) {
+        self.clear(app.allocator);
+        frame.requestRedraw();
+    }
+    try frame.e(.{
         Text{
-            .content = try std.fmt.allocPrint(arena, "{d} paths", .{dropped_paths.items.len}),
+            .content = try std.fmt.allocPrint(arena, "{d} paths", .{self.paths.items.len}),
             .key = .src(@src()),
             .style = &.{ .font_size = .sm, .foreground = .dimmed },
         },
     });
-    try row.close(app);
+    try row.close(frame);
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
-    if (dropped_paths.items.len == 0) {
-        try app.e(Text{
+    if (self.paths.items.len == 0) {
+        try frame.e(Text{
             .content = "no drops yet - try dragging a file onto the window.",
             .key = .src(@src()),
             .style = &.{ .font_size = .sm, .foreground = .dimmed },
@@ -52,22 +53,22 @@ pub fn render(_: *knots.App, app: *ui.Frame) !void {
         return;
     }
 
-    try app.e(.{
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .style = &.{ .width = .grow(), .padding = .init(8, 8, 8, 8), .background = .muted, .radius = .sm, .border_width = .all(1), .border_color = .toned, .direction = .column, .gap = 4 },
         },
         .{
             For([]const u8){
-                .items = dropped_paths.items,
+                .items = self.paths.items,
                 .each = renderItem,
             },
         },
     });
 }
 
-fn renderItem(app: *ui.Frame, path: []const u8, i: usize) !void {
-    try app.e(.{
+fn renderItem(frame: *ui.Frame, path: []const u8, i: usize) !void {
+    try frame.e(.{
         Rect{
             .key = ui.Key.src(@src()).indexed(i),
             .style = &.{ .width = .grow(), .height = .fixed(24), .padding = .init(0, 8, 0, 8), .@"align" = .center, .background = .elevated, .radius = .sm },
@@ -80,17 +81,12 @@ fn renderItem(app: *ui.Frame, path: []const u8, i: usize) !void {
     });
 }
 
-fn clear(app: *ui.Frame) void {
-    const active_allocator = allocator.?;
-    for (dropped_paths.items) |path| active_allocator.free(path);
-    dropped_paths.clearRetainingCapacity();
-    app.requestRedraw();
+fn clear(self: *@This(), allocator: std.mem.Allocator) void {
+    for (self.paths.items) |path| allocator.free(path);
+    self.paths.clearRetainingCapacity();
 }
 
-pub fn deinit() void {
-    const active_allocator = allocator orelse return;
-    for (dropped_paths.items) |path| active_allocator.free(path);
-    dropped_paths.deinit(active_allocator);
-    dropped_paths = .empty;
-    allocator = null;
+pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+    self.clear(allocator);
+    self.paths.deinit(allocator);
 }

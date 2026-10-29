@@ -63,6 +63,70 @@ test "row: one fixed, one grow" {
     try expectRect(ctx.pool.get(2), 100, 0, 300, 50); // grows to fill remaining width
 }
 
+test "row: centered grow child fills the space without an offset" {
+    var ctx = initCtx();
+    defer ctx.deinit();
+
+    _ = try ctx.open(0, .{ .width = .fixed(400), .height = .fixed(50), .direction = .row, .justify = .center });
+    defer ctx.close();
+    {
+        _ = try ctx.open(1, .{ .width = .fixed(100), .height = .grow() });
+        defer ctx.close();
+    }
+    {
+        _ = try ctx.open(2, .{ .width = .grow(), .height = .grow() });
+        defer ctx.close();
+    }
+
+    try runLayout(&ctx);
+
+    try expectRect(ctx.pool.get(1), 0, 0, 100, 50);
+    try expectRect(ctx.pool.get(2), 100, 0, 300, 50);
+}
+
+test "row: centering counts the gaps" {
+    var ctx = initCtx();
+    defer ctx.deinit();
+
+    _ = try ctx.open(0, .{ .width = .fixed(400), .height = .fixed(50), .direction = .row, .justify = .center, .gap = 20 });
+    defer ctx.close();
+    {
+        _ = try ctx.open(1, .{ .width = .fixed(100), .height = .grow() });
+        defer ctx.close();
+    }
+    {
+        _ = try ctx.open(2, .{ .width = .fixed(100), .height = .grow() });
+        defer ctx.close();
+    }
+
+    try runLayout(&ctx);
+
+    // 400 - 100 - 20 - 100 leaves 180, half of it on each side.
+    try expectRect(ctx.pool.get(1), 90, 0, 100, 50);
+    try expectRect(ctx.pool.get(2), 210, 0, 100, 50);
+}
+
+test "row: space_between puts the free space between the gaps" {
+    var ctx = initCtx();
+    defer ctx.deinit();
+
+    _ = try ctx.open(0, .{ .width = .fixed(400), .height = .fixed(50), .direction = .row, .justify = .space_between, .gap = 20 });
+    defer ctx.close();
+    {
+        _ = try ctx.open(1, .{ .width = .fixed(100), .height = .grow() });
+        defer ctx.close();
+    }
+    {
+        _ = try ctx.open(2, .{ .width = .fixed(100), .height = .grow() });
+        defer ctx.close();
+    }
+
+    try runLayout(&ctx);
+
+    try expectRect(ctx.pool.get(1), 0, 0, 100, 50);
+    try expectRect(ctx.pool.get(2), 300, 0, 100, 50);
+}
+
 test "row: two grow children split space equally" {
     var ctx = initCtx();
     defer ctx.deinit();

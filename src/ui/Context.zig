@@ -147,6 +147,13 @@ pub fn enqueueAccessibilityAction(self: *Context, request: Accessibility.ActionR
     try self.accessibility_pending.append(self.allocator, owned);
 }
 
+fn copyRequested(input: *const @import("Input.zig")) bool {
+    for (input.key_events) |event| {
+        if (event.key == .c and event.action != .release and input_types.clipboardModifierHeld(event.mods)) return true;
+    }
+    return false;
+}
+
 fn clearAccessibilityActions(self: *Context, actions: *std.ArrayList(Accessibility.ActionRequest)) void {
     for (actions.items) |request| if (request.value_text) |value| self.allocator.free(value);
     actions.clearRetainingCapacity();
@@ -159,6 +166,11 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     if (frame._state != &self.frame_state.?) return error.InvalidFrame;
     if (frame._generation != self.generation) return error.InvalidFrame;
     errdefer self.frame_state.?.active = false;
+    // Text inputs copy their own selection; a copy shortcut nothing handled
+    // copies the selected Text.
+    if (self.frame_state.?.effects.clipboard_write == null and
+        self.ui.state.selection_text.len > 0 and copyRequested(&self.ui.input))
+        try frame.writeClipboard(self.ui.state.selection_text);
     try endStateFrame(&self.ui);
     try resolve(&self.ui);
     const digest = if (self.cfg.accessibility) semanticDigest(semanticSnapshot(&self.ui)) else 0;
@@ -1470,6 +1482,24 @@ test "frame carries host input, effects, and retryable glyph data" {
     const second = try view.endFrame(&frame);
     try std.testing.expectEqual(glyph.id, second.packet.glyphAtlas().?.id);
     try std.testing.expectEqual(glyph.revision, second.packet.glyphAtlas().?.revision);
+}
+
+test "copy shortcut copies the selected text" {
+    var view = try Context.init(std.testing.allocator, .{});
+    defer view.deinit();
+
+    const copy = [_]input_types.KeyEvent{.{ .key = .c, .action = .press, .mods = .{ .ctrl = true, .super = true } }};
+    var frame = try view.beginFrame(.{
+        .now_ms = 0,
+        .delta_ns = 0,
+        .content_scale = 1,
+        .logical_extent = .{ .width = 100, .height = 50 },
+        .physical_extent = .{ .width = 100, .height = 50 },
+        .input = .{ .pos = .{ 0, 0 }, .key_events = &copy },
+    });
+    view.ui.state.selection_text = "selected";
+    const output = try view.endFrame(&frame);
+    try std.testing.expectEqualStrings("selected", output.clipboard_write.?);
 }
 
 fn chromeTestInput(pos: [2]f64, pointer_inside: bool) input_types.FrameInput {
