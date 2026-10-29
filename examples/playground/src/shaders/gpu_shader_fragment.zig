@@ -1,7 +1,7 @@
-const common = @import("shader_common");
+const spirv = @import("spirv");
 
-const Vec3f = common.Vec3f;
-const Vec4f = common.Vec4f;
+const Vec3f = spirv.Vec3f;
+const Vec4f = spirv.Vec4f;
 
 const Uniforms = extern struct {
     viewport: Vec4f,
@@ -10,11 +10,11 @@ const Uniforms = extern struct {
     clip_transform: Vec4f,
 };
 
-const uniforms = common.uniform(Uniforms, "uniforms", .{ .descriptor = .{ .set = 0, .binding = 0 } });
-const in_normal = common.input(Vec3f, "in_normal", .{ .location = 0 });
-const in_view_position = common.input(Vec3f, "in_view_position", .{ .location = 1 });
-const in_phase = common.input(f32, "in_phase", .{ .location = 2 });
-const frag_color = common.output(Vec4f, "frag_color", .{ .location = 0 });
+const uniforms = spirv.uniform(Uniforms, "uniforms", .{ .descriptor = .{ .set = 0, .binding = 0 } });
+const in_normal = spirv.input(Vec3f, "in_normal", .{ .location = 0 });
+const in_view_position = spirv.input(Vec3f, "in_view_position", .{ .location = 1 });
+const in_phase = spirv.input(f32, "in_phase", .{ .location = 2 });
+const frag_color = spirv.output(Vec4f, "frag_color", .{ .location = 0 });
 
 const tau: f32 = 6.28318530718;
 
@@ -38,7 +38,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
     const diffuse = @max(dot3(normal, light_direction), 0.0);
     const rim_base = 1.0 - @abs(dot3(normal, view_direction));
     const rim = rim_base * rim_base;
-    const depth_fade = common.clamp(1.38 - in_view_position.*[2] * 0.17, 0.28, 1.0);
+    const depth_fade = spirv.clamp(1.38 - in_view_position.*[2] * 0.17, 0.28, 1.0);
     const shimmer = 0.82 + 0.18 * @sin(uniforms.*.viewport[2] * 1.8 + in_phase.* * 37.0);
     const cyan = Vec3f{ 0.12, 0.82, 1.0 };
     const violet = Vec3f{ 0.48, 0.28, 1.0 };

@@ -1,9 +1,9 @@
 const gpu = @import("std").spirv;
 
-const Vec4f = @import("common.zig").Vec4f;
-const Vec2f = @import("common.zig").Vec2f;
-const input = @import("common.zig").input;
-const output = @import("common.zig").output;
+const Vec4f = @import("spirv").Vec4f;
+const Vec2f = @import("spirv").Vec2f;
+const input = @import("spirv").input;
+const output = @import("spirv").output;
 
 /// In source UV: region origin and extent, tap clamp, and tap distance.
 const in_source = input(Vec4f, "in_source", .{ .location = 0 });

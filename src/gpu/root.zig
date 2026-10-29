@@ -1,4 +1,4 @@
-pub const Backend = @import("config").backend;
+pub const backend = @import("config").backend;
 
 pub const Context = @import("Context.zig");
 pub const Pipeline = @import("render_types").Pipeline;

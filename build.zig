@@ -625,7 +625,15 @@ fn addShaderSource(b: *std.Build, module: *std.Build.Module, name: []const u8, p
     module.addAnonymousImport(name, .{ .root_source_file = b.path(path) });
 }
 
+pub fn addSpirV(knots: *std.Build.Dependency, optimize: std.builtin.OptimizeMode, path: std.Build.LazyPath) std.Build.LazyPath {
+    return compileSpirV(knots.builder, optimize, "shader", path);
+}
+
 fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build.Module, name: []const u8, path: std.Build.LazyPath) void {
+    mod.addAnonymousImport(name, .{ .root_source_file = compileSpirV(b, optimize, name, path) });
+}
+
+fn compileSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, name: []const u8, path: std.Build.LazyPath) std.Build.LazyPath {
     const vk_target = b.resolveTargetQuery(.{
         .cpu_arch = .spirv32,
         .os_tag = .vulkan,
@@ -638,17 +646,16 @@ fn embedSpirV(b: *std.Build, optimize: std.builtin.OptimizeMode, mod: *std.Build
             .target = vk_target,
             .optimize = optimize,
             .root_source_file = path,
-            .imports = &.{.{ .name = "shader_common", .module = b.createModule(.{
+            .imports = &.{.{ .name = "spirv", .module = b.createModule(.{
                 .target = vk_target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/gpu/backend/vulkan/shaders/common.zig"),
+                .root_source_file = b.path("src/spirv/root.zig"),
             }) }},
         }),
         .use_llvm = false,
     });
     buildTool(spv);
-
-    mod.addAnonymousImport(name, .{ .root_source_file = spv.getEmittedBin() });
+    return spv.getEmittedBin();
 }
 
 /// Outside `--watch`, incremental compiles skip the build cache and would rebuild these tools every time.

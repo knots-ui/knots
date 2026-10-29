@@ -2,7 +2,6 @@ const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
 const renderer = @import("renderer");
-const shader_config = @import("gpu_shader_config");
 
 const Self = @import("../root.zig");
 
@@ -17,9 +16,8 @@ const index_count = 60;
 
 const canvas_background = ui.Color.rgba(4, 7, 16, 255);
 
-const wgsl: []const u8 = if (shader_config.has_wgsl) @embedFile("gpu_shader_wgsl") else "";
-const vertex_spirv_bytes align(@alignOf(u32)) = if (shader_config.has_spirv) @embedFile("gpu_shader_vert_spv").* else [_]u8{};
-const fragment_spirv_bytes align(@alignOf(u32)) = if (shader_config.has_spirv) @embedFile("gpu_shader_frag_spv").* else [_]u8{};
+const vertex_spirv align(@alignOf(u32)) = @embedFile("gpu_shader_vertex").*;
+const fragment_spirv align(@alignOf(u32)) = @embedFile("gpu_shader_fragment").*;
 
 const MeshVertex = extern struct {
     position: [3]f32,
@@ -182,10 +180,10 @@ fn createResources(app: *knots.App, allocator: std.mem.Allocator) !Self.DemoStat
     const gpu = app.gpuContext();
     var pipeline = try gpu.createPipeline(.{
         .label = "playground_knot_laboratory",
-        .shader = if (shader_config.has_wgsl)
-            .{ .wgsl = wgsl }
-        else
-            .{ .spirv = .{ .vs = &vertex_spirv_bytes, .fs = &fragment_spirv_bytes } },
+        .shader = switch (renderer.gpu.backend) {
+            .webgpu => .{ .wgsl = @embedFile("gpu_shader_wgsl") },
+            .vulkan => .{ .spirv = .{ .vs = &vertex_spirv, .fs = &fragment_spirv } },
+        },
         .vertex_buffers = &.{
             .{
                 .stride = @sizeOf(MeshVertex),

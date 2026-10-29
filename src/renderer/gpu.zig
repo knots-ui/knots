@@ -4,6 +4,9 @@ const gpu_impl = @import("gpu_impl");
 const RenderContext = @import("Context.zig");
 const FrameUploads = @import("FrameUploads.zig");
 
+/// The GPU backend knots was built with: WebGPU takes WGSL shaders, Vulkan SPIR-V.
+pub const backend = common.backend;
+
 pub const Context = struct {
     inner: *RenderContext,
     draw_format: ?common.Texture.Format = null,

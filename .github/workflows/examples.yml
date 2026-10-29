@@ -48,6 +48,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev pkg-config
 
-      - name: examples/playground (webgpu)
+      - name: examples/playground
         working-directory: examples/playground
-        run: zig build ${{ matrix.target_flag }} -Dgpu_backend=webgpu --summary all
+        run: zig build ${{ matrix.target_flag }} --summary all

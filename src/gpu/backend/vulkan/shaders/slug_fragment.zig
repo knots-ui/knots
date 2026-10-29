@@ -1,23 +1,24 @@
 //! Zig port of the Slug analytic font rendering algorithm.
 //! Reference: https://github.com/EricLengyel/Slug/tree/main
 
-const common = @import("common.zig");
+const spirv = @import("spirv");
+const ui = @import("ui.zig");
 
-const Vec4f = common.Vec4f;
-const Vec3f = common.Vec3f;
-const Vec2f = common.Vec2f;
-const Vec4i = common.Vec4i;
-const Vec2i = common.Vec2i;
-const storageBuffer = common.storageBuffer;
-const uniformConstant = common.uniformConstant;
-const input = common.input;
-const output = common.output;
+const Vec4f = spirv.Vec4f;
+const Vec3f = spirv.Vec3f;
+const Vec2f = spirv.Vec2f;
+const Vec4i = spirv.Vec4i;
+const Vec2i = spirv.Vec2i;
+const storageBuffer = spirv.storageBuffer;
+const uniformConstant = spirv.uniformConstant;
+const input = spirv.input;
+const output = spirv.output;
 
 const LOG_BAND_TEXTURE_WIDTH: u5 = 12;
 
-const curve_texture = uniformConstant(common.Image2D(f32), "curve_texture", .{ .descriptor = .{ .set = 1, .binding = 0 } });
-const band_texture = uniformConstant(common.Image2D(u32), "band_texture", .{ .descriptor = .{ .set = 1, .binding = 1 } });
-const clip_nodes = storageBuffer(common.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
+const curve_texture = uniformConstant(spirv.Image2D(f32), "curve_texture", .{ .descriptor = .{ .set = 1, .binding = 0 } });
+const band_texture = uniformConstant(spirv.Image2D(u32), "band_texture", .{ .descriptor = .{ .set = 1, .binding = 1 } });
+const clip_nodes = storageBuffer(ui.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
 
 const in_color = input(Vec4f, "in_color", .{ .location = 0 });
 const in_texcoord = input(Vec2f, "in_texcoord", .{ .location = 1 });
@@ -110,19 +111,19 @@ fn calcBandLoc(glyph_loc: Vec2i, offset: u32) Vec2i {
 fn calcCoverage(xcov: f32, ycov: f32, xwgt: f32, ywgt: f32) f32 {
     const combined = @abs(xcov * xwgt + ycov * ywgt) / @max(xwgt + ywgt, 1.0 / 65536.0);
     const alt = @min(@abs(xcov), @abs(ycov));
-    return common.clamp(@max(combined, alt), 0.0, 1.0);
+    return spirv.clamp(@max(combined, alt), 0.0, 1.0);
 }
 
-fn texelFetchBand(loc: Vec2i) common.Vec4u {
-    return common.texelFetch2Du(band_texture, loc);
+fn texelFetchBand(loc: Vec2i) spirv.Vec4u {
+    return spirv.texelFetch2Du(band_texture, loc);
 }
 
 fn texelFetchCurve(loc: Vec2i) Vec4f {
-    return common.texelFetch2Df(curve_texture, loc);
+    return spirv.texelFetch2Df(curve_texture, loc);
 }
 
 fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
-    const ems_per_pixel = common.fwidth2f(render_coord);
+    const ems_per_pixel = spirv.fwidth2f(render_coord);
     const pixels_per_em = @as(Vec2f, @splat(1.0)) / ems_per_pixel;
 
     const band_max = Vec2i{ glyph_data[2], glyph_data[3] & 0x00FF };
@@ -157,12 +158,12 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
         if (code != 0) {
             const r = solveHorizPoly(p12, p3) * @as(Vec2f, @splat(pixels_per_em[0]));
             if ((code & 1) != 0) {
-                xcov += common.clamp(r[0] + 0.5, 0.0, 1.0);
-                xwgt = @max(xwgt, common.clamp(1.0 - @abs(r[0]) * 2.0, 0.0, 1.0));
+                xcov += spirv.clamp(r[0] + 0.5, 0.0, 1.0);
+                xwgt = @max(xwgt, spirv.clamp(1.0 - @abs(r[0]) * 2.0, 0.0, 1.0));
             }
             if (code > 1) {
-                xcov -= common.clamp(r[1] + 0.5, 0.0, 1.0);
-                xwgt = @max(xwgt, common.clamp(1.0 - @abs(r[1]) * 2.0, 0.0, 1.0));
+                xcov -= spirv.clamp(r[1] + 0.5, 0.0, 1.0);
+                xwgt = @max(xwgt, spirv.clamp(1.0 - @abs(r[1]) * 2.0, 0.0, 1.0));
             }
         }
     }
@@ -188,12 +189,12 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
         if (code != 0) {
             const r = solveVertPoly(p12, p3) * @as(Vec2f, @splat(pixels_per_em[1]));
             if ((code & 1) != 0) {
-                ycov -= common.clamp(r[0] + 0.5, 0.0, 1.0);
-                ywgt = @max(ywgt, common.clamp(1.0 - @abs(r[0]) * 2.0, 0.0, 1.0));
+                ycov -= spirv.clamp(r[0] + 0.5, 0.0, 1.0);
+                ywgt = @max(ywgt, spirv.clamp(1.0 - @abs(r[0]) * 2.0, 0.0, 1.0));
             }
             if (code > 1) {
-                ycov += common.clamp(r[1] + 0.5, 0.0, 1.0);
-                ywgt = @max(ywgt, common.clamp(1.0 - @abs(r[1]) * 2.0, 0.0, 1.0));
+                ycov += spirv.clamp(r[1] + 0.5, 0.0, 1.0);
+                ywgt = @max(ywgt, spirv.clamp(1.0 - @abs(r[1]) * 2.0, 0.0, 1.0));
             }
         }
     }
@@ -204,10 +205,10 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
 fn fragment(comptime encode_srgb: bool) void {
     const color = in_color.*;
     const coverage = slugRender(in_texcoord.*, in_banding.*, in_glyph.*);
-    const alpha = color[3] * coverage * common.clipAlpha(clip_nodes, in_world_pos.*, in_clip_node.*);
+    const alpha = color[3] * coverage * ui.clipAlpha(clip_nodes, in_world_pos.*, in_clip_node.*);
     const col = Vec4f{ color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha };
     if (comptime encode_srgb) {
-        const srgb = common.linearToSrgb(Vec3f{ col[0], col[1], col[2] });
+        const srgb = ui.linearToSrgb(Vec3f{ col[0], col[1], col[2] });
         frag_color.* = .{ srgb[0], srgb[1], srgb[2], col[3] };
     } else frag_color.* = col;
 }

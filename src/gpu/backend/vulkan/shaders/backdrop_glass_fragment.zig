@@ -1,15 +1,16 @@
-const common = @import("common.zig");
+const spirv = @import("spirv");
+const ui = @import("ui.zig");
 
-const Vec4f = common.Vec4f;
-const Vec2f = common.Vec2f;
-const uniformConstant = common.uniformConstant;
-const storageBuffer = common.storageBuffer;
-const input = common.input;
-const output = common.output;
+const Vec4f = spirv.Vec4f;
+const Vec2f = spirv.Vec2f;
+const uniformConstant = spirv.uniformConstant;
+const storageBuffer = spirv.storageBuffer;
+const input = spirv.input;
+const output = spirv.output;
 
-const source = uniformConstant(common.Image2D(f32), "source", .{ .descriptor = .{ .set = 1, .binding = 0 } });
-const source_sampler = uniformConstant(common.Sampler, "source_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
-const clip_nodes = storageBuffer(common.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
+const source = uniformConstant(spirv.Image2D(f32), "source", .{ .descriptor = .{ .set = 1, .binding = 0 } });
+const source_sampler = uniformConstant(spirv.Sampler, "source_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
+const clip_nodes = storageBuffer(ui.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
 
 const in_local = input(Vec2f, "in_local", .{ .location = 0 });
 const in_half_size = input(Vec2f, "in_half_size", .{ .location = 1 });
@@ -28,7 +29,7 @@ const ior: f32 = 1.5;
 /// outer edge. `x` runs 0 at the edge to 1 where the bezel meets the flat top;
 /// the surface there is Apple's convex squircle, h(x) = (1 - (1 - x)^4)^(1/4).
 fn refractionProfile(x: f32) f32 {
-    const u = 1.0 - common.clamp(x, 0.0, 1.0);
+    const u = 1.0 - spirv.clamp(x, 0.0, 1.0);
     const run = u * u * u;
     const rise = @exp(@log(@max(1.0 - u * u * u * u, 1e-6)) * 0.75);
     const inv = 1.0 / @sqrt(run * run + rise * rise);
@@ -41,11 +42,11 @@ fn refractionProfile(x: f32) f32 {
 }
 
 fn sd(p: Vec2f) f32 {
-    return common.sdRoundedBox(p, in_half_size.*, in_corner_radius.*);
+    return ui.sdRoundedBox(p, in_half_size.*, in_corner_radius.*);
 }
 
 fn tap(uv: Vec2f) Vec4f {
-    return common.sampleImplicitLod2Df(source, source_sampler, uv);
+    return spirv.sampleImplicitLod2Df(source, source_sampler, uv);
 }
 
 fn scale2(v: Vec2f, s: f32) Vec2f {
@@ -58,7 +59,7 @@ export fn fs_glass() callconv(.{ .spirv_fragment = .{} }) void {
     const params = in_params.*;
     const optics = in_optics.*;
     const d = sd(local);
-    const coverage = 1.0 - common.smoothstep(-0.5, 0.5, d);
+    const coverage = 1.0 - spirv.smoothstep(-0.5, 0.5, d);
 
     // Outward edge normal from the distance field's gradient.
     const gradient = Vec2f{
@@ -88,11 +89,11 @@ export fn fs_glass() callconv(.{ .spirv_fragment = .{} }) void {
     };
 
     // Rim highlight, strongest on edges facing the top-left light.
-    const rim = 1.0 - common.clamp(x, 0.0, 1.0);
+    const rim = 1.0 - spirv.clamp(x, 0.0, 1.0);
     const facing = @abs(normal[0] * -0.70710678 + normal[1] * -0.70710678);
-    const highlight = common.clamp(optics[3] * rim * rim * rim * (0.3 + 0.7 * facing), 0.0, 1.0);
+    const highlight = spirv.clamp(optics[3] * rim * rim * rim * (0.3 + 0.7 * facing), 0.0, 1.0);
     color += (@as(Vec4f, @splat(1.0)) - color) * @as(Vec4f, @splat(highlight));
 
-    color[3] = coverage * common.clipAlpha(clip_nodes, in_world_pos.*, params[1]);
+    color[3] = coverage * ui.clipAlpha(clip_nodes, in_world_pos.*, params[1]);
     frag_color.* = color;
 }

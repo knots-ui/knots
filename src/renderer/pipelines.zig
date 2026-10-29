@@ -105,7 +105,7 @@ fn primitivesDescForTarget(kind: PrimitivesKind, target_format: ?gpu.Texture.For
     };
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
-    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.backend) {
         .webgpu => .{ .wgsl = shaders.primitives_wgsl },
         .vulkan => .{ .spirv = .{
             .vs = switch (kind) {
@@ -139,7 +139,7 @@ pub fn linearTargetSlugDesc() gpu.Pipeline.Desc {
 fn slugDescForTarget(target_format: ?gpu.Texture.Format, encode_srgb: bool) gpu.Pipeline.Desc {
     const fs_entry: []const u8 = if (encode_srgb) "fs_main_srgb_encode" else "fs_main";
 
-    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.backend) {
         .webgpu => .{ .wgsl = shaders.text_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.slug_vert_spv, .fs = shaders.slug_frag_spv, .fs_entry = fs_entry } },
     };
@@ -216,7 +216,7 @@ pub fn blurDesc(step: BlurStep, target_format: ?gpu.Texture.Format) gpu.Pipeline
         .down => "fs_blur_down",
         .up => "fs_blur_up",
     };
-    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.backend) {
         .webgpu => .{ .wgsl = shaders.backdrop_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.backdrop_blur_vert_spv, .fs = shaders.backdrop_blur_frag_spv, .fs_entry = fs_entry } },
     };
@@ -233,7 +233,7 @@ pub fn blurDesc(step: BlurStep, target_format: ?gpu.Texture.Format) gpu.Pipeline
 
 /// Draws filtered backdrop into the scene target, which stores display encoding.
 pub fn glassDesc(target_format: ?gpu.Texture.Format) gpu.Pipeline.Desc {
-    const shader: gpu.Pipeline.ShaderSource = switch (gpu.Backend) {
+    const shader: gpu.Pipeline.ShaderSource = switch (gpu.backend) {
         .webgpu => .{ .wgsl = shaders.backdrop_wgsl },
         .vulkan => .{ .spirv = .{ .vs = shaders.backdrop_glass_vert_spv, .fs = shaders.backdrop_glass_frag_spv, .fs_entry = "fs_glass" } },
     };

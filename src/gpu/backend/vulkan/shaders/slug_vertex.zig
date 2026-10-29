@@ -1,11 +1,11 @@
 //! Zig port of the Slug analytic font rendering algorithm.
 //! Reference: https://github.com/EricLengyel/Slug/tree/main
 
-const Vec4f = @import("common.zig").Vec4f;
-const Vec2f = @import("common.zig").Vec2f;
-const uniform = @import("common.zig").uniform;
-const input = @import("common.zig").input;
-const output = @import("common.zig").output;
+const Vec4f = @import("spirv").Vec4f;
+const Vec2f = @import("spirv").Vec2f;
+const uniform = @import("spirv").uniform;
+const input = @import("spirv").input;
+const output = @import("spirv").output;
 
 const Uniforms = extern struct {
     mvp_row0: Vec4f,
