@@ -53,6 +53,7 @@ Select a backend with the `gpu_backend` dependency option. Read
 | wayland | Linux windowing | System `libwayland` |
 | TrueType | Text | - |
 | js_bridge (`lib/js-bridge`) | Browser host | - |
+| celer | `zig build dev` web server (dev only) | - |
 
 ## Install
 
@@ -106,6 +107,34 @@ fn frame(_: *knots.View, context: *ui.Frame) !void {
 renderer status. To get your own state, put `knots.App` in a field of your
 struct and use `@fieldParentPtr("app", view.app)`. Keep the `App` at one
 address until `start` returns.
+
+## Rebuilding on save
+
+Add a `dev` step to your `build.zig`:
+
+```zig
+const dev = b.step("dev", "Rebuild and restart the app on every save");
+Knots.addDevWatcher(b, knots, dev, exe, .{});
+```
+
+Then run:
+
+```sh
+zig build dev                               # native app
+zig build dev -Dtarget=wasm32-freestanding  # browser app, at http://localhost:8000
+```
+
+Each time you save a file, the app rebuilds. A native app restarts, and a
+browser page reloads. If the build fails, the error shows in the terminal and
+the old app keeps running.
+
+The app is the same one `zig build` installs. You do not need to change your
+code for `dev`.
+
+On macOS, each rebuild compiles the whole app, because Zig 0.17 cannot compile
+macOS apps incrementally yet. Other targets compile only what changed.
+
+See the [playground](examples/playground).
 
 ## Embedding in an existing renderer
 

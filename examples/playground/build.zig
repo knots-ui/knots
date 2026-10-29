@@ -28,6 +28,9 @@ pub fn build(b: *std.Build) void {
     };
 
     b.step("run", "Run the standalone browser playground").dependOn(&run.step);
+
+    const dev = b.step("dev", "Rebuild and restart the app on every save");
+    Knots.addDevWatcher(b, knots, dev, exe, .{});
 }
 
 fn webServer(b: *std.Build, web_threads: bool, directory: []const u8) *std.Build.Step.Run {

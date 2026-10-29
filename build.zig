@@ -534,6 +534,56 @@ pub fn configureWebExecutable(b: *std.Build, knots: *std.Build.Dependency, root_
     });
 }
 
+pub const DevWatcherOptions = struct {
+    /// The step that installs the app, as `zig build <step>` runs it.
+    step: []const u8 = "install",
+    /// Where `step` installs a browser app.
+    web: WebInstallOptions = .{},
+    port: u16 = 8000,
+};
+
+/// Makes `step` build like `zig build`, then rebuild on every save and restart
+/// `exe`, or reload the page when `exe` is a browser app. The app is the one
+/// `options.step` installs, with nothing added for dev.
+pub fn addDevWatcher(b: *std.Build, knots: *std.Build.Dependency, step: *std.Build.Step, exe: *std.Build.Step.Compile, options: DevWatcherOptions) void {
+    const knots_builder = knots.builder;
+    const tool = b.addExecutable(.{
+        .name = "knots-dev",
+        .root_module = b.createModule(.{
+            .root_source_file = knots_builder.path("src/dev/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{.{
+                .name = "celer",
+                .module = knots_builder.dependency("celer", .{ .target = b.graph.host, .optimize = .ReleaseFast }).module("celer"),
+            }},
+        }),
+    });
+
+    const run = b.addRunArtifact(tool);
+    run.addPrefixedFileArg("--zig=", .zig_exe);
+    run.addPrefixedFileArg("--build-file=", b.path("build.zig"));
+    run.addPrefixedDirectoryArg("--prefix=", b.graph.path(.install_prefix, ""));
+    run.addArg(b.fmt("--step={s}", .{options.step}));
+    if (exe.root_module.resolved_target.?.result.cpu.arch.isWasm()) {
+        run.addArg(b.fmt("--artifact={s}/{s}", .{ options.web.dir, options.web.wasm_name }));
+        run.addArg(b.fmt("--serve={s}", .{options.web.dir}));
+        run.addArg(b.fmt("--port={d}", .{options.port}));
+    } else run.addArg(b.fmt("--artifact=bin/{s}", .{exe.out_filename}));
+    // The Zig compiler does not support incremental compilation for macOS
+    // yet: as of 0.17, its Mach-O linker panics ("TODO(MachO2): load archive")
+    // on aarch64 and x86_64 alike.
+    if (exe.root_module.resolved_target.?.result.ofmt != .macho)
+        run.addArg("--watch-arg=-fincremental");
+    for (b.user_input_options.keys(), b.user_input_options.values()) |key, value| switch (value) {
+        .flag => run.addArg(b.fmt("--build-arg=-D{s}", .{key})),
+        .scalar => |scalar| run.addArg(b.fmt("--build-arg=-D{s}={s}", .{ key, scalar })),
+        else => std.debug.panic("knots: `zig build dev` passes on -D{s}, which is not a flag or a scalar", .{key}),
+    };
+
+    step.dependOn(&run.step);
+}
+
 pub fn defaultGpuBackend(target: std.Target) GPUBackend {
     if (target.cpu.arch.isWasm()) return .webgpu;
     return switch (target.os.tag) {
