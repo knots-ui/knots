@@ -28,15 +28,6 @@ pub fn build(b: *std.Build) void {
     };
 
     b.step("run", "Run the standalone browser playground").dependOn(&run.step);
-
-    const dev = Knots.HMR.init(b, .{
-        .target = target,
-        .gpu_backend = gpu_backend,
-        .threads = true,
-        .web = .{ .index_html = b.path("src/shell_wasm.html") },
-    });
-    const dev_exe = buildExecutable(b, dev.target, dev.optimize, gpu_backend, dev.knots, "playground-dev");
-    dev.addRunner(dev_exe, b.step("dev", "Run the playground with HMR"));
 }
 
 fn webServer(b: *std.Build, web_threads: bool, directory: []const u8) *std.Build.Step.Run {

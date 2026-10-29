@@ -1581,36 +1581,3 @@ test "every finalization allocation failure releases the frame and permits retry
     try std.testing.expect(completed);
     try std.testing.expect(failure_offset > 0);
 }
-
-test "widget state snapshot survives executor replacement" {
-    const input: input_types.FrameInput = .{
-        .input = .{ .pos = .{ -1, -1 } },
-        .now_ms = 0,
-        .delta_ns = 0,
-        .logical_extent = .{ .width = 100, .height = 100 },
-        .physical_extent = .{ .width = 100, .height = 100 },
-        .content_scale = 1,
-    };
-    const widget_id: u64 = 42;
-
-    var source = try Context.init(std.testing.allocator, .{});
-    defer source.deinit();
-    var source_frame = try source.beginFrame(input);
-    defer source_frame.deinit();
-    const scroll = try source_frame.ui().state.getOrCreate(.scroll, source_frame.ui().allocator, widget_id);
-    scroll.offset = .{ 12, 34 };
-    _ = try source.endFrame(&source_frame);
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const saved = try source.ui.state.save(arena.allocator());
-
-    var replacement = try Context.init(std.testing.allocator, .{});
-    defer replacement.deinit();
-    try replacement.ui.state.load(&saved);
-    var replacement_frame = try replacement.beginFrame(input);
-    defer replacement_frame.deinit();
-    const restored = replacement_frame.ui().state.get(.scroll, widget_id).?;
-    try std.testing.expectEqual(@as(f32, 12), restored.offset[0]);
-    try std.testing.expectEqual(@as(f32, 34), restored.offset[1]);
-    _ = try replacement.endFrame(&replacement_frame);
-}

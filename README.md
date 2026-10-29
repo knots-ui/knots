@@ -53,7 +53,6 @@ Select a backend with the `gpu_backend` dependency option. Read
 | wayland | Linux windowing | System `libwayland` |
 | TrueType | Text | - |
 | js_bridge (`lib/js-bridge`) | Browser host | - |
-| celer, watch, wasmtime | Hot reloading (dev only) | wasmtime shared |
 
 ## Install
 
@@ -107,22 +106,6 @@ fn frame(_: *knots.View, context: *ui.Frame) !void {
 renderer status. To get your own state, put `knots.App` in a field of your
 struct and use `@fieldParentPtr("app", view.app)`. Keep the `App` at one
 address until `start` returns.
-
-## Hot reloading
-
-`zig build dev` rebuilds your app to WebAssembly on every save and swaps it in
-while it runs. Widget state carries over; build errors and crashes show over
-the app.
-
-```zig
-const dev = Knots.HMR.init(b, .{ .target = target });
-const exe = buildApp(b, dev.knots, dev.target);
-dev.addRunner(exe, b.step("dev", "Run with HMR"));
-```
-
-Native apps run in a dev host that keeps their windows open. Browser apps
-reload the page. See [Hot reloading](https://knotsui.com/docs/hot-reloading.html)
-and the [playground](examples/playground).
 
 ## Embedding in an existing renderer
 

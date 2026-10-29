@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
-      - run: zig fmt --check build.zig HMR.zig web_build.zig src lib examples tests
+      - run: zig fmt --check build.zig web_build.zig src lib examples tests
 
   native:
     name: ${{ matrix.name }}
@@ -64,14 +64,6 @@ jobs:
 
       - name: lib/js-bridge
         working-directory: lib/js-bridge
-        run: zig build test ${{ matrix.target_flag }} --summary all
-
-      - name: lib/wasmtime
-        working-directory: lib/wasmtime
-        run: zig build test ${{ matrix.target_flag }} --summary all
-
-      - name: lib/watch
-        working-directory: lib/watch
         run: zig build test ${{ matrix.target_flag }} --summary all
 
   wasi:
