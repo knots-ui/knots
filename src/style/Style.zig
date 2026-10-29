@@ -337,6 +337,13 @@ fn composite(bg: [4]f32, fg: [4]f32, amount: f32) [4]f32 {
     };
 }
 
+/// Blends with premultiplied alpha, so a fade from `transparent` (black at
+/// alpha 0) keeps the other color's hue instead of passing through a dark tint.
 fn lerp4(a: [4]f32, b: [4]f32, t: f32) [4]f32 {
-    return math.lerp(@as(math.Vec4, a), @as(math.Vec4, b), t);
+    const alpha = math.lerp(a[3], b[3], t);
+    if (alpha == 0) return .{ 0, 0, 0, 0 };
+    var out: [4]f32 = undefined;
+    for (0..3) |i| out[i] = math.lerp(a[i] * a[3], b[i] * b[3], t) / alpha;
+    out[3] = alpha;
+    return out;
 }

@@ -1,13 +1,13 @@
-const common = @import("common.zig");
+const spirv = @import("spirv");
 
-const Vec4f = common.Vec4f;
-const Vec2f = common.Vec2f;
-const uniformConstant = common.uniformConstant;
-const input = common.input;
-const output = common.output;
+const Vec4f = spirv.Vec4f;
+const Vec2f = spirv.Vec2f;
+const uniformConstant = spirv.uniformConstant;
+const input = spirv.input;
+const output = spirv.output;
 
-const source = uniformConstant(common.Image2D(f32), "source", .{ .descriptor = .{ .set = 1, .binding = 0 } });
-const source_sampler = uniformConstant(common.Sampler, "source_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
+const source = uniformConstant(spirv.Image2D(f32), "source", .{ .descriptor = .{ .set = 1, .binding = 0 } });
+const source_sampler = uniformConstant(spirv.Sampler, "source_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
 
 const in_uv = input(Vec2f, "in_uv", .{ .location = 0 });
 const in_half_pixel = input(Vec2f, "in_half_pixel", .{ .location = 1 });
@@ -18,10 +18,10 @@ const frag_color = output(Vec4f, "frag_color", .{ .location = 0 });
 fn tap(uv: Vec2f) Vec4f {
     const bounds = in_bounds.*;
     const clamped = Vec2f{
-        common.clamp(uv[0], bounds[0], bounds[2]),
-        common.clamp(uv[1], bounds[1], bounds[3]),
+        spirv.clamp(uv[0], bounds[0], bounds[2]),
+        spirv.clamp(uv[1], bounds[1], bounds[3]),
     };
-    return common.sampleImplicitLod2Df(source, source_sampler, clamped);
+    return spirv.sampleImplicitLod2Df(source, source_sampler, clamped);
 }
 
 fn scale(v: Vec4f, s: f32) Vec4f {

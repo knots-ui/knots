@@ -6,34 +6,34 @@ const Rect = ui.component.Rect;
 const Spacer = ui.component.Spacer;
 const Text = ui.component.Text;
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
+pub fn render(_: *@This(), _: *knots.App, frame: *ui.Frame) !void {
     @setEvalBranchQuota(3000);
-    try section(app, "Sizing", .src(@src()));
-    try sizing(app);
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
-    try section(app, "Nesting", .src(@src()));
-    try nesting(app);
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
-    try section(app, "Alignment", .src(@src()));
-    try alignment(app);
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
-    try section(app, "Justify", .src(@src()));
-    try justify(app);
+    try section(frame, "Sizing", .src(@src()));
+    try sizing(frame);
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
+    try section(frame, "Nesting", .src(@src()));
+    try nesting(frame);
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
+    try section(frame, "Alignment", .src(@src()));
+    try alignment(frame);
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
+    try section(frame, "Justify", .src(@src()));
+    try justify(frame);
 }
 
-fn section(app: *ui.Frame, title: []const u8, key: ui.Key) !void {
-    try app.e(Text{ .content = title, .key = key.indexed(1), .style = &.{ .font_size = .md } });
-    try app.e(Spacer{ .key = key.indexed(2), .style = &.{ .height = .fixed(8) } });
+fn section(frame: *ui.Frame, title: []const u8, key: ui.Key) !void {
+    try frame.e(Text{ .content = title, .key = key.indexed(1), .style = &.{ .font_size = .md } });
+    try frame.e(Spacer{ .key = key.indexed(2), .style = &.{ .height = .fixed(8) } });
 }
 
-fn caption(app: *ui.Frame, content: []const u8, key: ui.Key) !void {
-    try app.e(Text{ .content = content, .key = key.indexed(1), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
-    try app.e(Spacer{ .key = key.indexed(2), .style = &.{ .height = .fixed(4) } });
+fn caption(frame: *ui.Frame, content: []const u8, key: ui.Key) !void {
+    try frame.e(Text{ .content = content, .key = key.indexed(1), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
+    try frame.e(Spacer{ .key = key.indexed(2), .style = &.{ .height = .fixed(4) } });
 }
 
-fn sizing(app: *ui.Frame) !void {
-    try caption(app, "grow | fixed(80) | grow", .src(@src()));
-    try app.e(.{
+fn sizing(frame: *ui.Frame) !void {
+    try caption(frame, "grow | fixed(80) | grow", .src(@src()));
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(28), .direction = .row, .gap = 6 } },
         .{
             Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(28), .background = .info, .radius = .sm } },
@@ -42,9 +42,9 @@ fn sizing(app: *ui.Frame) !void {
         },
     });
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
-    try caption(app, "percent(0.25) | percent(0.50) | percent(0.25)", .src(@src()));
-    try app.e(.{
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
+    try caption(frame, "percent(0.25) | percent(0.50) | percent(0.25)", .src(@src()));
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(28), .direction = .row, .gap = 6 } },
         .{
             Rect{ .key = .src(@src()), .style = &.{ .width = .percent(0.25), .height = .fixed(28), .background = .secondary, .radius = .sm } },
@@ -53,9 +53,9 @@ fn sizing(app: *ui.Frame) !void {
         },
     });
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
-    try caption(app, "fixed(60) | grow | fixed(120) | grow", .src(@src()));
-    try app.e(.{
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
+    try caption(frame, "fixed(60) | grow | fixed(120) | grow", .src(@src()));
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(28), .direction = .row, .gap = 6 } },
         .{
             Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(60), .height = .fixed(28), .background = .warning, .radius = .sm } },
@@ -65,9 +65,9 @@ fn sizing(app: *ui.Frame) !void {
         },
     });
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
-    try caption(app, "fit content - children dictate width", .src(@src()));
-    try app.e(.{
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
+    try caption(frame, "fit content - children dictate width", .src(@src()));
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .fit(), .gap = 6, .padding = .init(6, 6, 6, 6), .background = .muted, .radius = .sm } },
         .{
             Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(40), .height = .fixed(20), .background = .accented, .radius = .sm } },
@@ -77,8 +77,8 @@ fn sizing(app: *ui.Frame) !void {
     });
 }
 
-fn nesting(app: *ui.Frame) !void {
-    try app.e(.{
+fn nesting(frame: *ui.Frame) !void {
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .padding = .init(12, 12, 12, 12), .background = .muted, .radius = .xl, .border_width = .all(2), .border_color = .@"error" } },
         .{.{
             Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .padding = .init(12, 12, 12, 12), .background = .muted, .radius = .lg, .border_width = .all(2), .border_color = .success } },
@@ -93,8 +93,8 @@ fn nesting(app: *ui.Frame) !void {
     });
 }
 
-fn alignment(app: *ui.Frame) !void {
-    try app.e(.{
+fn alignment(frame: *ui.Frame) !void {
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .height = .fixed(140), .direction = .row, .gap = 8 } },
         .{
             .{
@@ -125,17 +125,17 @@ fn alignment(app: *ui.Frame) !void {
     });
 }
 
-fn justify(app: *ui.Frame) !void {
-    try justifyRow(app, .start, .@"error", "start", .src(@src()));
-    try justifyRow(app, .center, .success, "center", .src(@src()));
-    try justifyRow(app, .end, .primary, "end", .src(@src()));
-    try justifyRow(app, .space_between, .info, "space_between", .src(@src()));
-    try justifyRow(app, .space_around, .warning, "space_around", .src(@src()));
+fn justify(frame: *ui.Frame) !void {
+    try justifyRow(frame, .start, .@"error", "start", .src(@src()));
+    try justifyRow(frame, .center, .success, "center", .src(@src()));
+    try justifyRow(frame, .end, .primary, "end", .src(@src()));
+    try justifyRow(frame, .space_between, .info, "space_between", .src(@src()));
+    try justifyRow(frame, .space_around, .warning, "space_around", .src(@src()));
 }
 
-fn justifyRow(app: *ui.Frame, comptime distribution: ui.layout.Element.Justify, comptime color: ui.Color.Input, comptime label: []const u8, key: ui.Key) !void {
-    try caption(app, label, key.indexed(1));
-    try app.e(.{
+fn justifyRow(frame: *ui.Frame, comptime distribution: ui.layout.Element.Justify, comptime color: ui.Color.Input, comptime label: []const u8, key: ui.Key) !void {
+    try caption(frame, label, key.indexed(1));
+    try frame.e(.{
         Rect{ .key = key.indexed(2), .style = &.{ .width = .fixed(360), .height = .fixed(36), .padding = .init(4, 4, 4, 4), .direction = .row, .gap = if (distribution == .space_between or distribution == .space_around) 0 else 6, .justify = distribution, .background = .muted, .radius = .sm } },
         .{
             Rect{ .key = key.indexed(3), .style = &.{ .width = .fixed(28), .height = .fixed(28), .background = color, .radius = .sm } },
@@ -143,5 +143,5 @@ fn justifyRow(app: *ui.Frame, comptime distribution: ui.layout.Element.Justify, 
             Rect{ .key = key.indexed(5), .style = &.{ .width = .fixed(28), .height = .fixed(28), .background = color, .radius = .sm } },
         },
     });
-    try app.e(Spacer{ .key = key.indexed(6), .style = &.{ .height = .fixed(8) } });
+    try frame.e(Spacer{ .key = key.indexed(6), .style = &.{ .height = .fixed(8) } });
 }

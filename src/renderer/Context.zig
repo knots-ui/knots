@@ -54,7 +54,7 @@ pub fn createForDevice(allocator: std.mem.Allocator, device: *gpu_impl.Device, d
     self.text_pipeline = try self.createPipeline(pipelines.slugDesc(srgb_surface));
     errdefer self.text_pipeline.deinit();
 
-    const use_linear_target = gpu.Backend == .webgpu and !srgb_surface;
+    const use_linear_target = gpu.backend == .webgpu and !srgb_surface;
     self.linear_pipeline = if (use_linear_target)
         try self.createPipeline(pipelines.linearTargetPrimitivesDesc(.vertex))
     else

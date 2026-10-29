@@ -6,8 +6,8 @@ const Rect = ui.component.Rect;
 const Text = ui.component.Text;
 const Spacer = ui.component.Spacer;
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    try app.e(.{
+pub fn render(_: *@This(), _: *knots.App, frame: *ui.Frame) !void {
+    try frame.e(.{
         Rect{ .key = .src(@src()), .style = &.{ .direction = .layer } },
         .{
             Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(96), .height = .fixed(96), .background = .info, .radius = .{ .fixed = 48 } } },
@@ -16,7 +16,7 @@ pub fn render(_: *knots.App, app: *ui.Frame) !void {
         },
     });
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(20) } });
 
-    try app.e(Text{ .content = "useful for badges, overlays, and z-stacked icons.", .key = .src(@src()), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
+    try frame.e(Text{ .content = "useful for badges, overlays, and z-stacked icons.", .key = .src(@src()), .style = &.{ .font_size = .xs, .foreground = .dimmed } });
 }

@@ -17,7 +17,6 @@ const ReturnType = @import("util.zig").ReturnType;
 
 const Viewport = @import("Viewport.zig");
 const View = @import("View.zig");
-const dev = if (platform.dev) @import("dev.zig") else struct {};
 
 const App = @This();
 
@@ -145,7 +144,6 @@ pub fn start(self: *App, frame_cb: RenderFn) !void {
 
     self.running = true;
     self.startViewport(self.main_viewport, frame_cb);
-    if (platform.dev) dev.attach(self);
 
     self.main_viewport.window.pollEvents(self.io);
 
@@ -400,8 +398,6 @@ fn renderFrame(
         &view,
         &frame,
     );
-
-    if (platform.dev and viewport == self.main_viewport) try dev.render(&frame);
 
     if (!viewport.window.isOpen()) {
         try viewport.ui_ctx.abortFrame(&frame);

@@ -12,13 +12,6 @@ pub const bridge_export_symbol_names = [_][]const u8{
     "knots_last_error_copy",
 };
 
-pub const dev_export_symbol_names = [_][]const u8{
-    "knots_buffer",
-    "knots_dev_save",
-    "knots_dev_load",
-    "knots_dev_problem",
-};
-
 const thread_export_symbol_names = [_][]const u8{
     "knots_worker_run",
     "knots_worker_complete",
@@ -45,6 +38,12 @@ pub fn configureExecutable(b: *std.Build, root_module: *std.Build.Module, execut
     executable.shared_memory = threads;
     executable.initial_memory = memory_initial;
     executable.max_memory = memory_max;
+
+    // Zig's own wasm backend rebuilds a debug app in a fraction of a second
+    // under `zig build --watch -fincremental`; LLVM takes seconds.
+    const optimize = executable.root_module.optimize orelse .debug;
+    if (executable.use_llvm == null and optimize == .debug and executable.root_module.resolved_target.?.result.os.tag == .freestanding)
+        executable.use_llvm = false;
 
     // wasm32-wasi otherwise gets a 16 MiB stack, larger than the initial memory.
     if (executable.stack_size == null)

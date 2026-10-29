@@ -8,18 +8,19 @@ const Spacer = ui.component.Spacer;
 const ContextMenu = ui.component.ContextMenu;
 
 const Menu = ContextMenu(ContextActions);
-var last_action: []const u8 = "none";
-var last_target: []const u8 = "none";
+const Selection = struct { action: []const u8 = "none", target: []const u8 = "none" };
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
-    const arena = app.arena();
+selection: Selection = .{},
 
-    try app.e(.{
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
+    const arena = frame.arena();
+
+    try frame.e(.{
         Text{
             .content = try std.fmt.allocPrint(
                 arena,
                 "last action: {s} on {s}",
-                .{ last_action, last_target },
+                .{ self.selection.action, self.selection.target },
             ),
             .key = .src(@src()),
         },
@@ -41,25 +42,27 @@ pub fn render(_: *knots.App, app: *ui.Frame) !void {
         },
     };
 
-    _ = try grid.open(app);
-    try card(app, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
-    try card(app, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
-    try card(app, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
-    try card(app, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
-    try grid.close(app);
+    _ = try grid.open(frame);
+    try card(frame, &self.selection, "top-left", "Top left target", "menu.tl", .{ .row = 0, .col = 0 });
+    try card(frame, &self.selection, "top-right", "Top right target", "menu.tr", .{ .row = 0, .col = 1 });
+    try card(frame, &self.selection, "bottom-left", "Bottom left target", "menu.bl", .{ .row = 1, .col = 0 });
+    try card(frame, &self.selection, "bottom-right", "Bottom right target", "menu.br", .{ .row = 1, .col = 1 });
+    try grid.close(frame);
 }
 
 fn card(
-    app: *ui.Frame,
+    frame: *ui.Frame,
+    selection: *Selection,
     comptime target: []const u8,
     comptime title: []const u8,
     comptime key_prefix: []const u8,
     placement: Rect.GridPlacement,
 ) !void {
-    return app.e(.{
+    return frame.e(.{
         Menu{
             .key = .str(key_prefix ++ ".wrap"),
             .menu = ContextActions{
+                .selection = selection,
                 .target = target,
                 .inspect_key = .str(key_prefix ++ ".inspect"),
                 .duplicate_key = .str(key_prefix ++ ".duplicate"),
@@ -92,21 +95,23 @@ fn card(
 }
 
 const ContextActions = struct {
+    selection: *Selection,
     target: []const u8,
     inspect_key: ui.Key,
     duplicate_key: ui.Key,
     archive_key: ui.Key,
 
-    pub fn render(self: *const ContextActions, app: *ui.Frame) anyerror!void {
-        try app.e(.{
-            ActionRow{ .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
-            ActionRow{ .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
-            ActionRow{ .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
+    pub fn render(self: *const ContextActions, frame: *ui.Frame) anyerror!void {
+        try frame.e(.{
+            ActionRow{ .selection = self.selection, .target = self.target, .action = "inspect", .label = "Inspect", .key = self.inspect_key },
+            ActionRow{ .selection = self.selection, .target = self.target, .action = "duplicate", .label = "Duplicate", .key = self.duplicate_key },
+            ActionRow{ .selection = self.selection, .target = self.target, .action = "archive", .label = "Archive", .key = self.archive_key },
         });
     }
 };
 
 const ActionRow = struct {
+    selection: *Selection,
     target: []const u8,
     action: []const u8,
     label: []const u8,
@@ -123,11 +128,11 @@ const ActionRow = struct {
         .hover = &.{ .background = .muted },
     };
 
-    pub fn open(self: *const ActionRow, app: *ui.Frame) !u64 {
+    pub fn open(self: *const ActionRow, frame: *ui.Frame) !u64 {
         const id = self.key.hash();
-        _ = try app.ui().openStyled(self.key, .{ .base = &row_style, .user = &.{} }, app.ui().states(id, .{}), .{ .interactive = true });
+        _ = try frame.ui().openStyled(self.key, .{ .base = &row_style, .user = &.{} }, frame.ui().states(id, .{}), .{ .interactive = true });
 
-        try app.e(Text{
+        try frame.e(Text{
             .content = self.label,
             .selectable = false,
             .key = self.key.indexed(1),
@@ -136,14 +141,13 @@ const ActionRow = struct {
         return id;
     }
 
-    pub fn close(self: *const ActionRow, app: *ui.Frame) !void {
+    pub fn close(self: *const ActionRow, frame: *ui.Frame) !void {
         const id = self.key.hash();
-        app.ui().close();
+        frame.ui().close();
 
-        if (app.ui().leftClicked(id, .within)) {
-            last_action = self.action;
-            last_target = self.target;
-            app.requestRedraw();
+        if (frame.ui().leftClicked(id, .within)) {
+            self.selection.* = .{ .action = self.action, .target = self.target };
+            frame.requestRedraw();
         }
     }
 };

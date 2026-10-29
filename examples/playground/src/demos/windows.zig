@@ -1,7 +1,7 @@
 const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
-const Self = @import("../root.zig");
+const Playground = @import("../Playground.zig");
 
 const Rect = ui.component.Rect;
 const Text = ui.component.Text;
@@ -13,9 +13,12 @@ const Spacer = ui.component.Spacer;
 
 const PanelBounds = @FieldType(ui.State.Measured, "box");
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
-    try app.e(.{
+floating_open: bool = false,
+second_floating_open: bool = false,
+dialog_open: bool = false,
+
+pub fn render(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
+    try frame.e(.{
         Text{
             .content = "Open component-level floating windows or secondary native windows from the current app.",
             .key = .src(@src()),
@@ -27,85 +30,82 @@ pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
         .key = .src(@src()),
         .style = &.{ .width = .grow(), .direction = .column, .gap = 8, .overflow = .scroll, .padding = .init(8, 8, 8, 8) },
     };
-    _ = try actions.open(app);
-    const floating = try app.interact(Button{
+    _ = try actions.open(frame);
+    const floating = try frame.interact(Button{
         .key = .str("windows.open_floating_window"),
         .label = "open floating window",
         .style = &.{ .height = .fixed(32), .width = .fixed(176), .tone = .secondary },
     });
     if (floating.clicked) {
-        self.demo_state.floating_window_open = true;
-        app.requestRedraw();
+        self.floating_open = true;
+        frame.requestRedraw();
     }
-    const native = try app.interact(Button{
+    const native = try frame.interact(Button{
         .key = .src(@src()),
         .label = "open native window",
         .disabled = !knots.platform.secondary_windows,
         .style = &.{ .height = .fixed(32), .width = .fixed(176), .disabled = &.{ .background = .muted, .foreground = .text } },
     });
-    if (native.clicked) try openNativeWindow(self);
-    const undecorated = try app.interact(Button{
+    if (native.clicked) try openNativeWindow(app);
+    const undecorated = try frame.interact(Button{
         .key = .src(@src()),
         .label = "open custom title bar",
         .disabled = !knots.platform.secondary_windows,
         .style = &.{ .height = .fixed(32), .width = .fixed(176), .disabled = &.{ .background = .muted, .foreground = .text } },
     });
-    if (undecorated.clicked) {
-        try openUndecoratedWindow(self);
-    }
-    try actions.close(app);
-    try renderFloatingWindows(desktop, app);
+    if (undecorated.clicked) try openUndecoratedWindow(app);
+    try actions.close(frame);
+    try self.renderFloatingWindows(frame);
 }
 
-fn renderFloatingWindows(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
-    const measured = try app.ui().state.getOrCreate(.measured, app.ui().allocator, Self.demo_panel_key.hash());
+fn renderFloatingWindows(self: *@This(), frame: *ui.Frame) !void {
+    const measured = try frame.ui().state.getOrCreate(.measured, frame.ui().allocator, Playground.demo_panel_key.hash());
     const bounds: ?PanelBounds = if (measured.width > 0 and measured.height > 0) measured.box else null;
     const first = FloatingWindow{
-        .is_open = &self.demo_state.floating_window_open,
+        .is_open = &self.floating_open,
         .title = "Floating window",
         .key = .str("windows.floating_window"),
         .initial_size = .{ 420, 260 },
         .bounds = bounds,
         .parts = .{ .content = &.{ .gap = 12 } },
     };
-    if ((try first.openResponse(app)).id != ui.UI.INVALID_ID) {
-        try app.e(Text{
+    if ((try first.openResponse(frame)).id != ui.UI.INVALID_ID) {
+        try frame.e(Text{
             .content = "Floating windows are UI components inside this viewport. Drag the title bar, resize from the lower-right corner, maximize, close, or click another window to raise it.",
             .key = .str("windows.floating_window.description"),
             .style = &.{ .width = .grow(), .wrap = true },
         });
-        const second = try app.interact(Button{
+        const second = try frame.interact(Button{
             .key = .str("windows.floating_window.open_second"),
             .label = "open another window",
             .style = &.{ .height = .fixed(32), .width = .fixed(184) },
         });
         if (second.clicked) {
-            self.demo_state.floating_window_second_open = true;
-            app.requestRedraw();
+            self.second_floating_open = true;
+            frame.requestRedraw();
         }
-        _ = try first.closeResponse(app);
+        _ = try first.closeResponse(frame);
     }
 
     const second = FloatingWindow{
-        .is_open = &self.demo_state.floating_window_second_open,
+        .is_open = &self.second_floating_open,
         .title = "Second floating window",
         .key = .str("windows.floating_window.second"),
         .initial_size = .{ 360, 220 },
         .bounds = bounds,
     };
-    if ((try second.openResponse(app)).id != ui.UI.INVALID_ID) {
-        try app.e(Text{
+    if ((try second.openResponse(frame)).id != ui.UI.INVALID_ID) {
+        try frame.e(Text{
             .content = "This second component window uses the same viewport and UI state; clicking it raises it above the first.",
             .key = .str("windows.floating_window.second.description"),
             .style = &.{ .width = .grow(), .wrap = true },
         });
-        _ = try second.closeResponse(app);
+        _ = try second.closeResponse(frame);
     }
 }
 
-fn openNativeWindow(self: *Self) !void {
-    _ = try self.app.openWindow(self.app.main_viewport.id, .{
+fn openNativeWindow(app: *knots.App) !void {
+    _ = try app.openWindow(app.main_viewport.id, .{
         .window = .{
             .width = 520,
             .height = 320,
@@ -115,7 +115,6 @@ fn openNativeWindow(self: *Self) !void {
 }
 
 fn nativeWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
-    const self = Self.of(view.app);
     const size = frame.input().logical_extent;
     const size_label = try std.fmt.allocPrint(frame.arena(), "Current size: {d} x {d}", .{ size.width, size.height });
 
@@ -146,7 +145,7 @@ fn nativeWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
         .key = .str("windows.native_window.open"),
         .label = "open another window",
         .style = &.{ .height = .fixed(32), .width = .fixed(176) },
-    })).clicked) try openNativeWindow(self);
+    })).clicked) try openNativeWindow(view.app);
     if ((try frame.interact(Button{
         .key = .str("windows.native_window.close"),
         .label = "close this window",
@@ -155,8 +154,8 @@ fn nativeWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
     try root.close(frame);
 }
 
-fn openUndecoratedWindow(self: *Self) !void {
-    _ = try self.app.openWindow(self.app.main_viewport.id, .{
+fn openUndecoratedWindow(app: *knots.App) !void {
+    _ = try app.openWindow(app.main_viewport.id, .{
         .window = .{
             .width = 560,
             .height = 360,
@@ -167,7 +166,7 @@ fn openUndecoratedWindow(self: *Self) !void {
 }
 
 fn undecoratedWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
-    const self = Self.of(view.app);
+    const self = &Playground.of(view.app).demos.windows;
     const size = frame.input().logical_extent;
 
     const root = Rect{
@@ -199,10 +198,10 @@ fn undecoratedWindowFrame(view: *knots.View, frame: *ui.Frame) !void {
         .key = .str("windows.undecorated.open_dialog"),
         .label = "open dialog",
         .style = &.{ .height = .fixed(32), .width = .fixed(176) },
-    })).clicked) self.demo_state.title_bar_dialog_open = true;
+    })).clicked) self.dialog_open = true;
     try content.close(frame);
 
-    const dialog = Dialog{ .is_open = &self.demo_state.title_bar_dialog_open, .key = .str("windows.undecorated.dialog") };
+    const dialog = Dialog{ .is_open = &self.dialog_open, .key = .str("windows.undecorated.dialog") };
     if (try dialog.open(frame) != ui.UI.INVALID_ID) {
         try frame.e(Text{
             .content = "A modal dialog. Press Escape or click outside to close it.",

@@ -121,8 +121,11 @@ test "visual lerp interpolates surface and foreground" {
     const a: style.Visual = .{ .surface = .{}, .foreground = .{ 0, 0, 0, 0 } };
     const b: style.Visual = .{ .surface = .{ .color = .{ 1, 1, 1, 1 } }, .foreground = .{ 1, 0, 0, 1 } };
     const mid = a.lerp(b, 0.5);
-    try expectEqual([4]f32{ 0.5, 0.5, 0.5, 0.5 }, mid.surface.color);
-    try expectEqual([4]f32{ 0.5, 0, 0, 0.5 }, mid.foreground);
+    // Fading in from transparent keeps the target color and only changes alpha.
+    try expectEqual([4]f32{ 1, 1, 1, 0.5 }, mid.surface.color);
+    try expectEqual([4]f32{ 1, 0, 0, 0.5 }, mid.foreground);
+    const gray: style.Visual = .{ .surface = .{ .color = .{ 0.5, 0.5, 0.5, 1 } }, .foreground = .{ 0, 0, 0, 1 } };
+    try expectEqual([4]f32{ 0.75, 0.75, 0.75, 1 }, gray.lerp(b, 0.5).surface.color);
 }
 
 test "material presets, validity and interpolation" {

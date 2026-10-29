@@ -12,33 +12,32 @@ const Effect = enum { gradient, clock, bars, polygon };
 
 const canvas_width = 720;
 const canvas_height = 480;
-var canvas_effect: u32 = 0;
+effect: Effect = .gradient,
 
-pub fn render(_: *knots.App, app: *ui.Frame) !void {
+pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
     const controls = Rect{ .key = .src(@src()), .style = &.{ .width = .fixed(220) } };
-    _ = try controls.open(app);
-    const selection = try app.interact(SelectInput(Effect){
+    _ = try controls.open(frame);
+    const selection = try frame.interact(SelectInput(Effect){
         .key = .src(@src()),
-        .initial_selected = canvas_effect,
+        .initial_selected = @backingInt(self.effect),
     });
-    if (selection.selected) |selected| canvas_effect = selected.index;
-    try controls.close(app);
+    if (selection.selected) |selected| self.effect = selected.value;
+    try controls.close(frame);
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
     var commands: std.ArrayList(Canvas.DrawCmd) = .empty;
     var painter = Canvas.Painter{
         .cmds = &commands,
-        .allocator = app.arena(),
+        .allocator = frame.arena(),
     };
-    const effect: Effect = @fromBackingInt(@intCast(canvas_effect));
-    switch (effect) {
-        .gradient => try drawGradient(app, &painter),
-        .clock => try drawClock(app, &painter),
+    switch (self.effect) {
+        .gradient => try drawGradient(frame, &painter),
+        .clock => try drawClock(frame, &painter),
         .bars => try drawBars(&painter),
         .polygon => try drawPolygon(&painter),
     }
-    try app.e(.{
+    try frame.e(.{
         Rect{
             .key = .src(@src()),
             .style = &.{ .width = .grow(), .height = .grow(), .background = .elevated, .radius = .sm, .overflow = .scroll },
@@ -51,10 +50,10 @@ pub fn render(_: *knots.App, app: *ui.Frame) !void {
     });
 }
 
-fn drawGradient(app: *ui.Frame, painter: *Canvas.Painter) !void {
+fn drawGradient(frame: *ui.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
-    const t = @as(f32, @floatFromInt(@mod(app.input().now_ms, 10000))) / 10000.0;
+    const t = @as(f32, @floatFromInt(@mod(frame.input().now_ms, 10000))) / 10000.0;
     const n = 12;
 
     var i: usize = 0;
@@ -87,10 +86,10 @@ fn drawGradient(app: *ui.Frame, painter: *Canvas.Painter) !void {
         }
     }
 
-    app.requestRedraw();
+    frame.requestRedraw();
 }
 
-fn drawClock(app: *ui.Frame, painter: *Canvas.Painter) !void {
+fn drawClock(frame: *ui.Frame, painter: *Canvas.Painter) !void {
     const w: f32 = canvas_width;
     const h: f32 = canvas_height;
     const cx = w / 2;
@@ -113,7 +112,7 @@ fn drawClock(app: *ui.Frame, painter: *Canvas.Painter) !void {
         });
     }
 
-    const ms = app.input().now_ms;
+    const ms = frame.input().now_ms;
     const seconds_f = @as(f32, @floatFromInt(@mod(ms, 60_000))) / 1000.0;
     const minutes_f = @as(f32, @floatFromInt(@mod(ms, 3_600_000))) / 60_000.0;
     const hours_f = @as(f32, @floatFromInt(@mod(ms, 43_200_000))) / 3_600_000.0;
@@ -143,7 +142,7 @@ fn drawClock(app: *ui.Frame, painter: *Canvas.Painter) !void {
 
     try painter.fillCircle(.{ .cx = cx, .cy = cy, .radius = 4, .color = .{ 0.83, 0.46, 0.18, 1.0 } });
 
-    app.requestRedraw();
+    frame.requestRedraw();
 }
 
 fn drawBars(painter: *Canvas.Painter) !void {

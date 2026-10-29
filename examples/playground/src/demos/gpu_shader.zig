@@ -2,9 +2,6 @@ const std = @import("std");
 const knots = @import("knots");
 const ui = @import("knots-ui");
 const renderer = @import("renderer");
-const shader_config = @import("gpu_shader_config");
-
-const Self = @import("../root.zig");
 
 const GPUCanvas = ui.component.GPUCanvas;
 const Rect = ui.component.Rect;
@@ -15,11 +12,31 @@ const Text = ui.component.Text;
 const max_particles = 8192;
 const index_count = 60;
 
+const vertex_spirv align(@alignOf(u32)) = @embedFile("gpu_shader_vertex").*;
+const fragment_spirv align(@alignOf(u32)) = @embedFile("gpu_shader_fragment").*;
+
 const canvas_background = ui.Color.rgba(4, 7, 16, 255);
 
-const wgsl: []const u8 = if (shader_config.has_wgsl) @embedFile("gpu_shader_wgsl") else "";
-const vertex_spirv_bytes align(@alignOf(u32)) = if (shader_config.has_spirv) @embedFile("gpu_shader_vert_spv").* else [_]u8{};
-const fragment_spirv_bytes align(@alignOf(u32)) = if (shader_config.has_spirv) @embedFile("gpu_shader_frag_spv").* else [_]u8{};
+const Resources = struct {
+    pipeline: renderer.gpu.Pipeline,
+    vertex_buffer: renderer.gpu.Buffer,
+    index_buffer: renderer.gpu.Buffer,
+    instance_buffer: renderer.gpu.Buffer,
+};
+
+resources: ?Resources = null,
+time: f32 = 0,
+orbit: f32 = 0,
+camera: [2]f32 = .{ 0.35, -0.2 },
+drag_position: [2]f32 = .{ 0, 0 },
+dragging: bool = false,
+density: f32 = 4096,
+strand_width: f32 = 0.14,
+facet_size: f32 = 1.0,
+twist: f32 = 3.0,
+zoom: f32 = 1.0,
+perspective: f32 = 48,
+spin: f32 = 0.32,
 
 const MeshVertex = extern struct {
     position: [3]f32,
@@ -76,86 +93,82 @@ comptime {
     std.debug.assert(@offsetOf(Uniforms, "clip_transform") == 48);
 }
 
-pub fn render(desktop: *knots.App, app: *ui.Frame) !void {
-    const self = Self.of(desktop);
-    const state = &self.demo_state;
-    if (state.gpu_resources == null) {
-        state.gpu_resources = try createResources(desktop, self.allocator);
-    }
+pub fn render(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
+    if (self.resources == null) self.resources = try createResources(app);
 
-    const delta_seconds = @as(f32, @floatFromInt(app.input().delta_ns)) * 0.000000001;
-    state.gpu_time += delta_seconds;
-    if (!state.gpu_dragging) state.gpu_orbit += delta_seconds * state.gpu_spin;
+    const delta_seconds = @as(f32, @floatFromInt(frame.input().delta_ns)) * 0.000000001;
+    self.time += delta_seconds;
+    if (!self.dragging) self.orbit += delta_seconds * self.spin;
 
-    try app.e(Text{
+    try frame.e(Text{
         .content = "A live T(3,4) torus knot built from thousands of indexed, instanced icosahedra. Drag the canvas to orbit it and reshape the sculpture in real time.",
         .key = .src(@src()),
         .style = &.{ .font_size = .sm, .foreground = .dimmed, .wrap = true, .width = .grow() },
     });
-    try app.e(Text{
+    try frame.e(Text{
         .content = "INDEXED INSTANCING  ·  PERSISTENT BUFFERS  ·  LIVE UNIFORMS",
         .key = .src(@src()),
         .style = &.{ .font_size = .xs, .foreground = .accented, .width = .grow() },
     });
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(12) } });
 
     const first_row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .gap = 14 } };
-    _ = try first_row.open(app);
-    try slider(app, "Density", &state.gpu_density, 1024, max_particles, 256);
-    try slider(app, "Strand width", &state.gpu_strand_width, 0.02, 0.32, 0);
-    try slider(app, "Facet size", &state.gpu_facet_size, 0.4, 1.8, 0);
-    try slider(app, "Twist", &state.gpu_twist, 0, 12, 0.25);
-    try first_row.close(app);
+    _ = try first_row.open(frame);
+    try slider(frame, "Density", &self.density, 1024, max_particles, 256);
+    try slider(frame, "Strand width", &self.strand_width, 0.02, 0.32, 0);
+    try slider(frame, "Facet size", &self.facet_size, 0.4, 1.8, 0);
+    try slider(frame, "Twist", &self.twist, 0, 12, 0.25);
+    try first_row.close(frame);
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(10) } });
     const second_row = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .row, .gap = 14 } };
-    _ = try second_row.open(app);
-    try slider(app, "Zoom", &state.gpu_zoom, 0.65, 1.65, 0);
-    try slider(app, "Perspective", &state.gpu_perspective, 30, 75, 1);
-    try slider(app, "Spin", &state.gpu_spin, 0, 1.2, 0);
-    try second_row.close(app);
+    _ = try second_row.open(frame);
+    try slider(frame, "Zoom", &self.zoom, 0.65, 1.65, 0);
+    try slider(frame, "Perspective", &self.perspective, 30, 75, 1);
+    try slider(frame, "Spin", &self.spin, 0, 1.2, 0);
+    try second_row.close(frame);
 
-    try app.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(14) } });
+    try frame.e(Spacer{ .key = .src(@src()), .style = &.{ .height = .fixed(14) } });
     const canvas_panel = Rect{
         .key = .src(@src()),
         .style = &.{ .width = .grow(), .height = .grow(), .padding = .init(1, 1, 1, 1), .overflow = .hidden, .background = .{ .color = canvas_background }, .border_color = .toned, .border_width = .all(1), .radius = .sm },
     };
-    _ = try canvas_panel.open(app);
+    _ = try canvas_panel.open(frame);
     const canvas = GPUCanvas{
         .interactive = true,
         .paint = renderer.gpu.paintCallback(self, drawKnot),
         .key = .src(@src()),
         .style = &.{ .width = .grow(), .height = .grow() },
     };
-    const canvas_id = try canvas.open(app);
-    const raw_mouse = app.ui().input.mouse_pos;
+    const canvas_id = try canvas.open(frame);
+    const raw_mouse = frame.ui().input.mouse_pos;
     const mouse = [2]f32{ @floatCast(raw_mouse[0]), @floatCast(raw_mouse[1]) };
-    const left = app.ui().input.mouseButton(.left);
-    if (app.ui().leftPressed(canvas_id, .exact)) {
-        state.gpu_dragging = true;
-        state.gpu_drag_position = mouse;
+    const left = frame.ui().input.mouseButton(.left);
+    if (frame.ui().leftPressed(canvas_id, .exact)) {
+        self.dragging = true;
+        self.drag_position = mouse;
     }
-    if (state.gpu_dragging) {
+    if (self.dragging) {
         if (left.down) {
-            state.gpu_camera[0] += (mouse[0] - state.gpu_drag_position[0]) * 0.008;
-            state.gpu_camera[1] = std.math.clamp(
-                state.gpu_camera[1] + (mouse[1] - state.gpu_drag_position[1]) * 0.008,
+            self.camera[0] += (mouse[0] - self.drag_position[0]) * 0.008;
+            self.camera[1] = std.math.clamp(
+                self.camera[1] + (mouse[1] - self.drag_position[1]) * 0.008,
                 -1.2,
                 1.2,
             );
-            state.gpu_drag_position = mouse;
+            self.drag_position = mouse;
         } else {
-            state.gpu_dragging = false;
+            self.dragging = false;
         }
     }
-    try canvas.close(app);
-    try canvas_panel.close(app);
+    try canvas.close(frame);
+    try canvas_panel.close(frame);
 
-    app.requestRedraw();
+    frame.requestRedraw();
 }
 
-fn control(app: *ui.Frame, comptime label: []const u8, value: anytype) !void {
-    try app.e(.{
+fn control(frame: *ui.Frame, comptime label: []const u8, value: anytype) !void {
+    try frame.e(.{
         Rect{
             .key = .str("gpu-control:" ++ label),
             .style = &.{ .width = .grow(), .direction = .column, .gap = 6 },
@@ -167,8 +180,8 @@ fn control(app: *ui.Frame, comptime label: []const u8, value: anytype) !void {
     });
 }
 
-fn slider(app: *ui.Frame, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
-    try control(app, label, SliderInput{
+fn slider(frame: *ui.Frame, comptime label: []const u8, value: *f32, min: f32, max: f32, steps: f32) !void {
+    try control(frame, label, SliderInput{
         .value = value,
         .min = min,
         .max = max,
@@ -178,14 +191,14 @@ fn slider(app: *ui.Frame, comptime label: []const u8, value: *f32, min: f32, max
     });
 }
 
-fn createResources(app: *knots.App, allocator: std.mem.Allocator) !Self.DemoState.GpuResources {
+fn createResources(app: *knots.App) !Resources {
     const gpu = app.gpuContext();
     var pipeline = try gpu.createPipeline(.{
         .label = "playground_knot_laboratory",
-        .shader = if (shader_config.has_wgsl)
-            .{ .wgsl = wgsl }
-        else
-            .{ .spirv = .{ .vs = &vertex_spirv_bytes, .fs = &fragment_spirv_bytes } },
+        .shader = switch (renderer.gpu.backend) {
+            .webgpu => .{ .wgsl = @embedFile("gpu_shader_wgsl") },
+            .vulkan => .{ .spirv = .{ .vs = &vertex_spirv, .fs = &fragment_spirv } },
+        },
         .vertex_buffers = &.{
             .{
                 .stride = @sizeOf(MeshVertex),
@@ -235,8 +248,8 @@ fn createResources(app: *knots.App, allocator: std.mem.Allocator) !Self.DemoStat
     });
     errdefer index_buffer.deinit();
 
-    const particles = try allocator.alloc(Particle, max_particles);
-    defer allocator.free(particles);
+    const particles = try app.allocator.alloc(Particle, max_particles);
+    defer app.allocator.free(particles);
     for (particles, 0..) |*particle, i| {
         const fi: f32 = @floatFromInt(i);
         const golden_phase = fi * 0.61803398875;
@@ -274,27 +287,26 @@ fn unitHash(seed: u32) f32 {
 }
 
 fn drawKnot(user_data: ?*anyopaque, context: *renderer.gpu.DrawContext) !void {
-    const self: *Self = @ptrCast(@alignCast(user_data.?));
-    const state = &self.demo_state;
-    const resources = &state.gpu_resources.?;
-    const density = std.math.clamp(state.gpu_density, 1024, max_particles);
+    const self: *@This() = @ptrCast(@alignCast(user_data.?));
+    const resources = &self.resources.?;
+    const density = std.math.clamp(self.density, 1024, max_particles);
     const density_compensation = @sqrt(4096.0 / density);
     const uniforms = Uniforms{
         .viewport = .{
             context.logical_bounds.width,
             context.logical_bounds.height,
-            state.gpu_time,
-            state.gpu_twist,
+            self.time,
+            self.twist,
         },
         .camera = .{
-            state.gpu_camera[0] + state.gpu_orbit,
-            state.gpu_camera[1],
-            state.gpu_zoom,
-            @tan(state.gpu_perspective * std.math.pi / 360.0),
+            self.camera[0] + self.orbit,
+            self.camera[1],
+            self.zoom,
+            @tan(self.perspective * std.math.pi / 360.0),
         },
         .geometry = .{
-            state.gpu_strand_width,
-            state.gpu_facet_size,
+            self.strand_width,
+            self.facet_size,
             std.math.clamp(density_compensation, 0.75, 1.5),
             std.math.clamp(density_compensation, 0.65, 1.5),
         },
@@ -320,4 +332,13 @@ fn drawKnot(user_data: ?*anyopaque, context: *renderer.gpu.DrawContext) !void {
     try context.pass.setIndexBuffer(resources.index_buffer.view());
     const particle_count: u32 = @intFromFloat(density);
     context.pass.drawIndexed(index_count, particle_count, 0, 0, 0);
+}
+
+pub fn deinit(self: *@This(), _: std.mem.Allocator) void {
+    if (self.resources) |*resources| {
+        resources.instance_buffer.deinit();
+        resources.index_buffer.deinit();
+        resources.vertex_buffer.deinit();
+        resources.pipeline.deinit();
+    }
 }

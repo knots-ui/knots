@@ -1,10 +1,6 @@
 import { createBridgeImports } from "./js-bridge.js";
 import { createWasiImports } from "./knots-wasi.js";
 
-// `zig build dev` serves this module as `knots.js?knots-hmr` (see
-// src/hmr/http_server.zig). The page then runs the dev server's latest build.
-const hmrDev = new URL(import.meta.url).searchParams.has("knots-hmr");
-
 const WASM_MEMORY_INITIAL_PAGES = 256;
 const WASM_MEMORY_MAX_PAGES = 32768;
 const textDecoder = new TextDecoder("utf-8");
@@ -607,113 +603,7 @@ function normalizeSymbols(symbols) {
   };
 }
 
-export async function startKnots(options) {
-  if (!hmrDev || options.wasmExports) return startApp(options);
-  return startDev(options);
-}
-
-// Runs the dev server's latest build, and reloads the page on the next one
-// with the widget state, such as scroll offsets. After a crash, the page
-// restarts once, and says why until the next build. See src/dev.zig.
-async function startDev(options) {
-  const manifest = await fetchManifest();
-  if (!manifest.app) throw new Error("The dev server has no working build yet");
-  const previous = takeDevSession();
-  const crash = previous?.app === manifest.app ? previous.crash : undefined;
-  let crashed = false;
-  const onCrash = (message) => {
-    if (crashed) return;
-    crashed = true;
-    if (crash === undefined) reloadWith({ app: manifest.app, crash: message });
-    else console.warn("Knots app crashed again. Waiting for the next build.");
-  };
-  addEventListener("error", (event) => {
-    if (event.error instanceof WebAssembly.RuntimeError) onCrash(errorMessage(event.error));
-  });
-  const app = await startApp({
-    ...options,
-    wasmUrl: `/hmr/artifacts/${manifest.app}.wasm`,
-    onError: (error) => {
-      options.onError?.(error);
-      onCrash(errorMessage(error));
-    },
-  });
-  const dev = app.instance.exports;
-  if (previous?.state) {
-    writeDevBuffer(dev, Uint8Array.from(atob(previous.state), (char) => char.charCodeAt(0)));
-    dev.knots_dev_load();
-  }
-  const showProblem = (buildError) => {
-    const [problem, details] =
-      crash !== undefined ? [DEV_CRASHED, crash] : buildError ? [DEV_BUILD_FAILED, buildError] : [DEV_NONE, ""];
-    writeDevBuffer(dev, new TextEncoder().encode(details));
-    dev.knots_dev_problem(problem);
-  };
-  showProblem(manifest.build_error);
-
-  new EventSource("/hmr/events").addEventListener("change", async () => {
-    const next = await fetchManifest().catch(() => null);
-    if (!next || crashed) return;
-    if (next.app && next.app !== manifest.app) reloadWith({ app: next.app, state: saveWidgetState(dev) });
-    else showProblem(next.build_error);
-  });
-  return app;
-}
-
-// What the app shows over itself: `Problem` in src/hosted/abi.zig.
-const DEV_NONE = 0;
-const DEV_BUILD_FAILED = 1;
-const DEV_CRASHED = 2;
-const DEV_SESSION_KEY = "knots-hmr";
-
-async function fetchManifest() {
-  const response = await fetch("/hmr/manifest.json", { cache: "no-store" });
-  if (!response.ok) throw new Error(`The dev server's manifest failed to load: ${response.status}`);
-  return response.json();
-}
-
-function writeDevBuffer(dev, bytes) {
-  const length = wasmUsizeArg(bytes.length, Number(dev.js_bridge_pointer_size()), "length");
-  new Uint8Array(dev.memory.buffer, Number(dev.knots_buffer(length)), bytes.length).set(bytes);
-}
-
-// The widget state as base64, or undefined.
-function saveWidgetState(dev) {
-  try {
-    const length = Number(dev.knots_dev_save());
-    if (length === 0) return undefined;
-    const pointer = Number(dev.knots_buffer(wasmUsizeArg(length, Number(dev.js_bridge_pointer_size()), "length")));
-    const bytes = new Uint8Array(dev.memory.buffer, pointer, length);
-    let binary = "";
-    for (let offset = 0; offset < length; offset += 0x8000)
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-    return btoa(binary);
-  } catch (error) {
-    console.warn(`Knots widget state was not saved: ${errorMessage(error)}`);
-    return undefined;
-  }
-}
-
-function reloadWith(session) {
-  try {
-    sessionStorage.setItem(DEV_SESSION_KEY, JSON.stringify(session));
-  } catch (error) {
-    console.warn(`Knots dev session storage failed: ${errorMessage(error)}`);
-  }
-  location.reload();
-}
-
-function takeDevSession() {
-  try {
-    const value = sessionStorage.getItem(DEV_SESSION_KEY);
-    sessionStorage.removeItem(DEV_SESSION_KEY);
-    return value === null ? null : JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-async function startApp({
+export async function startKnots({
   wasmUrl,
   startSymbol,
   symbols,

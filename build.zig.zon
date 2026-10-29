@@ -37,13 +37,10 @@
         },
         .js_bridge = .{ .path = "lib/js-bridge" },
         .accesskit = .{ .path = "lib/accesskit", .lazy = true },
-        .wasmtime = .{ .path = "lib/wasmtime", .lazy = true },
-        .watch = .{ .path = "lib/watch" },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "HMR.zig",
         "web_build.zig",
         "src",
         "lib",

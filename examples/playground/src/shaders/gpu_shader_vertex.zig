@@ -1,7 +1,7 @@
-const common = @import("shader_common");
+const spirv = @import("spirv");
 
-const Vec3f = common.Vec3f;
-const Vec4f = common.Vec4f;
+const Vec3f = spirv.Vec3f;
+const Vec4f = spirv.Vec4f;
 
 const Uniforms = extern struct {
     viewport: Vec4f,
@@ -10,13 +10,13 @@ const Uniforms = extern struct {
     clip_transform: Vec4f,
 };
 
-const uniforms = common.uniform(Uniforms, "uniforms", .{ .descriptor = .{ .set = 0, .binding = 0 } });
-const in_position = common.input(Vec3f, "in_position", .{ .location = 0 });
-const in_normal = common.input(Vec3f, "in_normal", .{ .location = 1 });
-const in_particle = common.input(Vec4f, "in_particle", .{ .location = 2 });
-const out_normal = common.output(Vec3f, "out_normal", .{ .location = 0 });
-const out_view_position = common.output(Vec3f, "out_view_position", .{ .location = 1 });
-const out_phase = common.output(f32, "out_phase", .{ .location = 2 });
+const uniforms = spirv.uniform(Uniforms, "uniforms", .{ .descriptor = .{ .set = 0, .binding = 0 } });
+const in_position = spirv.input(Vec3f, "in_position", .{ .location = 0 });
+const in_normal = spirv.input(Vec3f, "in_normal", .{ .location = 1 });
+const in_particle = spirv.input(Vec4f, "in_particle", .{ .location = 2 });
+const out_normal = spirv.output(Vec3f, "out_normal", .{ .location = 0 });
+const out_view_position = spirv.output(Vec3f, "out_view_position", .{ .location = 1 });
+const out_phase = spirv.output(f32, "out_phase", .{ .location = 2 });
 extern var position: Vec4f addrspace(.output);
 
 const tau: f32 = 6.28318530718;

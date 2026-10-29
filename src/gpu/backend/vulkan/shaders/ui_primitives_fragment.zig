@@ -1,16 +1,17 @@
-const common = @import("common.zig");
+const spirv = @import("spirv");
+const ui = @import("ui.zig");
 
-const Vec4f = common.Vec4f;
-const Vec3f = common.Vec3f;
-const Vec2f = common.Vec2f;
-const uniformConstant = common.uniformConstant;
-const storageBuffer = common.storageBuffer;
-const input = common.input;
-const output = common.output;
+const Vec4f = spirv.Vec4f;
+const Vec3f = spirv.Vec3f;
+const Vec2f = spirv.Vec2f;
+const uniformConstant = spirv.uniformConstant;
+const storageBuffer = spirv.storageBuffer;
+const input = spirv.input;
+const output = spirv.output;
 
-const atlas = uniformConstant(common.Image2D(f32), "atlas", .{ .descriptor = .{ .set = 1, .binding = 0 } });
-const atlas_sampler = uniformConstant(common.Sampler, "atlas_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
-const clip_nodes = storageBuffer(common.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
+const atlas = uniformConstant(spirv.Image2D(f32), "atlas", .{ .descriptor = .{ .set = 1, .binding = 0 } });
+const atlas_sampler = uniformConstant(spirv.Sampler, "atlas_sampler", .{ .descriptor = .{ .set = 1, .binding = 1 } });
+const clip_nodes = storageBuffer(ui.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
 
 const in_color = input(Vec4f, "in_color", .{ .location = 0 });
 const in_uv = input(Vec2f, "in_uv", .{ .location = 1 });
@@ -39,11 +40,11 @@ fn mix4(a: Vec4f, b: Vec4f, t: f32) Vec4f {
 
 fn fragment(comptime encode_srgb: bool) void {
     const color = in_color.*;
-    const sampled = common.sampleImplicitLod2Df(atlas, atlas_sampler, in_uv.*);
+    const sampled = spirv.sampleImplicitLod2Df(atlas, atlas_sampler, in_uv.*);
 
     const col = if (in_prim_type.* < 0.5) blk: {
-        const d = common.sdRoundedBox(in_uv.*, in_half_size.*, in_corner_radius.*);
-        const fill_alpha = 1.0 - common.smoothstep(-0.5, 0.5, d);
+        const d = ui.sdRoundedBox(in_uv.*, in_half_size.*, in_corner_radius.*);
+        const fill_alpha = 1.0 - spirv.smoothstep(-0.5, 0.5, d);
 
         const width = @max(in_border_width.*, @as(Vec4f, @splat(0.0)));
         const max_width = @max(@max(width[0], width[1]), @max(width[2], width[3]));
@@ -57,8 +58,8 @@ fn fragment(comptime encode_srgb: bool) void {
                 (width[3] - width[1]) * 0.5,
                 (width[0] - width[2]) * 0.5,
             };
-            const inner_d = common.sdRoundedBox(in_uv.* - inner_center, inner_half_size, innerRadii(in_corner_radius.*, width));
-            const inner_alpha = 1.0 - common.smoothstep(-0.5, 0.5, inner_d);
+            const inner_d = ui.sdRoundedBox(in_uv.* - inner_center, inner_half_size, innerRadii(in_corner_radius.*, width));
+            const inner_alpha = 1.0 - spirv.smoothstep(-0.5, 0.5, inner_d);
             border_alpha = fill_alpha * (1.0 - inner_alpha);
         }
 
@@ -74,9 +75,9 @@ fn fragment(comptime encode_srgb: bool) void {
     else
         .{ sampled[0] * color[0], sampled[1] * color[1], sampled[2] * color[2], color[3] };
 
-    const alpha = col[3] * common.clipAlpha(clip_nodes, in_world_pos.*, in_clip_node.*);
+    const alpha = col[3] * ui.clipAlpha(clip_nodes, in_world_pos.*, in_clip_node.*);
     if (comptime encode_srgb) {
-        const srgb = common.linearToSrgb(Vec3f{ col[0], col[1], col[2] });
+        const srgb = ui.linearToSrgb(Vec3f{ col[0], col[1], col[2] });
         frag_color.* = .{ srgb[0], srgb[1], srgb[2], alpha };
     } else frag_color.* = .{ col[0], col[1], col[2], alpha };
 }

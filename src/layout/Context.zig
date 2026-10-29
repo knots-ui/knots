@@ -109,7 +109,6 @@ const AxisInfo = struct {
 
 const Measurement = struct {
     used: f32,
-    fixed_used: f32,
     grow_count: f32,
     static_count: u32,
 };
@@ -410,13 +409,10 @@ fn computeLayoutNode(self: *Context, root_slot: Element.Slot, x: f32, y: f32, sc
     const static_count = countStaticChildren(self, el);
     resolvePercentChildren(self, el, axis, static_count);
     const m = self.measureChildren(el, axis);
-    const gap = gapTotal(el, m.static_count);
-    const avail = axis.available();
-    const justify_free = @max(0, avail - (m.fixed_used - gap));
-    const remaining_free = @max(0, avail - m.used);
+    const remaining_free = @max(0, axis.available() - m.used);
 
     self.distributeGrow(el, axis, remaining_free, m.grow_count);
-    try self.positionChildren(el, axis, m.fixed_used, justify_free, scroll, scrollbar_thickness);
+    try self.positionChildren(el, axis, scroll, scrollbar_thickness);
 }
 
 fn computeLayerLayout(self: *Context, el: *Element, scroll: ScrollLookup, scrollbar_thickness: f32) LayoutError!void {
@@ -617,7 +613,6 @@ fn resolvePercentChildren(self: *Context, el: *const Element, axis: AxisInfo, st
 
 fn measureChildren(self: *Context, el: *const Element, axis: AxisInfo) Measurement {
     var used: f32 = 0;
-    var fixed_used: f32 = 0;
     var grow_count: f32 = 0;
     var static_count: u32 = 0;
 
@@ -626,7 +621,6 @@ fn measureChildren(self: *Context, el: *const Element, axis: AxisInfo) Measureme
         const child = self.pool.get(child_slot);
         if (child.position != .absolute) {
             const main = axis.childMainSize(child);
-            fixed_used += main;
             if (axis.childMainKind(child) == .grow) grow_count += 1 else used += main;
             static_count += 1;
         }
@@ -635,9 +629,8 @@ fn measureChildren(self: *Context, el: *const Element, axis: AxisInfo) Measureme
 
     const gap = gapTotal(el, static_count);
     used += gap;
-    fixed_used += gap;
 
-    return .{ .used = used, .fixed_used = fixed_used, .grow_count = grow_count, .static_count = static_count };
+    return .{ .used = used, .grow_count = grow_count, .static_count = static_count };
 }
 
 fn distributeGrow(self: *Context, el: *const Element, axis: AxisInfo, initial_free: f32, initial_grow_count: f32) void {
@@ -682,7 +675,7 @@ fn distributeGrow(self: *Context, el: *const Element, axis: AxisInfo, initial_fr
     }
 }
 
-fn positionChildren(self: *Context, el: *Element, axis: AxisInfo, fixed_used: f32, justify_free: f32, scroll: ScrollLookup, scrollbar_thickness: f32) LayoutError!void {
+fn positionChildren(self: *Context, el: *Element, axis: AxisInfo, scroll: ScrollLookup, scrollbar_thickness: f32) LayoutError!void {
     var static_count: u32 = 0;
     var children_main: f32 = 0;
     var children_cross: f32 = 0;
@@ -699,9 +692,12 @@ fn positionChildren(self: *Context, el: *Element, axis: AxisInfo, fixed_used: f3
         }
     }
 
+    // Grow children have their final size by now, so they take up the free space.
+    const gaps = gapTotal(el, static_count);
+    const justify_free = @max(0, axis.available() - children_main - gaps);
     var cursor: f32 = switch (el.justify) {
         .start, .space_between, .space_around => axis.pad_main_start,
-        .end => axis.main_size - axis.pad_main_end - fixed_used,
+        .end => axis.pad_main_start + justify_free,
         .center => axis.pad_main_start + justify_free / 2,
     };
 
@@ -717,7 +713,7 @@ fn positionChildren(self: *Context, el: *Element, axis: AxisInfo, fixed_used: f3
             el.gap,
     };
 
-    const content_main = children_main + gapTotal(el, static_count) + axis.pad_main_start + axis.pad_main_end;
+    const content_main = children_main + gaps + axis.pad_main_start + axis.pad_main_end;
     const content_cross = children_cross + axis.pad_cross_start + axis.pad_cross_end;
     const content_w = if (axis.is_row) content_main else content_cross;
     const content_h = if (axis.is_row) content_cross else content_main;
