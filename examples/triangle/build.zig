@@ -1,19 +1,19 @@
 const std = @import("std");
-const Knots = @import("knots");
+const knots = @import("knots");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const knots = b.dependency("knots", .{ .target = target, .optimize = optimize });
+    const knots_dep = b.dependency("knots", .{ .target = target, .optimize = optimize });
 
     const mod = b.addModule("triangle", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/root.zig"),
         .imports = &.{
-            .{ .name = "knots", .module = knots.module("knots") },
-            .{ .name = "knots-ui", .module = knots.module("ui") },
+            .{ .name = "knots", .module = knots_dep.module("knots") },
+            .{ .name = "knots-ui", .module = knots_dep.module("ui") },
         },
     });
 
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .root_source_file = b.path("src/main.zig"),
             .imports = &.{
-                .{ .name = "knots", .module = knots.module("knots") },
+                .{ .name = "knots", .module = knots_dep.module("knots") },
                 .{ .name = "triangle", .module = mod },
             },
         }),

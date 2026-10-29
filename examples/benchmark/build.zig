@@ -38,7 +38,7 @@ pub fn build(b: *std.Build) void {
     tracy_c.defineCMacro("TRACY_ENABLE", null);
     const tracy_mod = tracy_c.createModule();
 
-    const knots = b.dependency("knots", .{
+    const knots_dep = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
         .gpu_backend = b.option(@import("knots").GPUBackend, "gpu_backend", "GPU backend to compile into knots."),
@@ -51,8 +51,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .root_source_file = b.path("src/main.zig"),
             .imports = &.{
-                .{ .name = "knots", .module = knots.module("knots") },
-                .{ .name = "knots-ui", .module = knots.module("ui") },
+                .{ .name = "knots", .module = knots_dep.module("knots") },
+                .{ .name = "knots-ui", .module = knots_dep.module("ui") },
                 .{ .name = "tracy", .module = tracy_mod },
             },
         }),

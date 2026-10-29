@@ -66,10 +66,10 @@ zig fetch --save git+https://github.com/knots-ui/knots.git
 Add the `knots` and `ui` modules to your executable:
 
 ```zig
-const knots = b.dependency("knots", .{ .target = target, .optimize = optimize });
+const knots_dep = b.dependency("knots", .{ .target = target, .optimize = optimize });
 
-exe.root_module.addImport("knots", knots.module("knots"));
-exe.root_module.addImport("ui", knots.module("ui"));
+exe.root_module.addImport("knots", knots_dep.module("knots"));
+exe.root_module.addImport("ui", knots_dep.module("ui"));
 ```
 
 Build the UI in a frame callback:
@@ -114,7 +114,7 @@ Add a `dev` step to your `build.zig`:
 
 ```zig
 const dev = b.step("dev", "Rebuild and restart the app on every save");
-Knots.addDevWatcher(b, knots, dev, exe, .{});
+knots.addDevWatcher(b, knots_dep, dev, exe, .{});
 ```
 
 Then run:
@@ -142,10 +142,10 @@ Import `ui`, `input`, and `render`. Add `renderer` when you use the bundled GPU
 backend:
 
 ```zig
-app_module.addImport("ui", knots_dependency.module("ui"));
-app_module.addImport("input", knots_dependency.module("input"));
-app_module.addImport("render", knots_dependency.module("render"));
-app_module.addImport("renderer", knots_dependency.module("renderer"));
+app_module.addImport("ui", knots_dep.module("ui"));
+app_module.addImport("input", knots_dep.module("input"));
+app_module.addImport("render", knots_dep.module("render"));
+app_module.addImport("renderer", knots_dep.module("renderer"));
 ```
 
 ```zig
@@ -204,12 +204,12 @@ to acknowledge glyph uploads.
 ## Browser WASM
 
 The browser build uses the same `App` and frame callback. Install the web host
-with `Knots.installWeb`:
+with `knots.installWeb`:
 
 ```zig
-const Knots = @import("knots");
+const knots = @import("knots");
 
-const knots = b.dependency("knots", .{
+const knots_dep = b.dependency("knots", .{
     .target = target,
     .optimize = optimize,
     .web_threads = true,
@@ -220,13 +220,13 @@ const exe_mod = b.createModule(.{
     .target = target,
     .optimize = optimize,
     .imports = &.{
-        .{ .name = "knots", .module = knots.module("knots") },
-        .{ .name = "ui", .module = knots.module("ui") },
+        .{ .name = "knots", .module = knots_dep.module("knots") },
+        .{ .name = "ui", .module = knots_dep.module("ui") },
     },
 });
 const exe = b.addExecutable(.{ .name = "app", .root_module = exe_mod });
 exe.entry = .disabled;
-Knots.installWeb(b, knots, exe_mod, exe, .{});
+knots.installWeb(b, knots_dep, exe_mod, exe, .{});
 ```
 
 Build with:
