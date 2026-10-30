@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     const platform: Platform = if (target.result.cpu.arch.isWasm()) .browser else .native;
     const web_threads_option = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
     const web_threads = web_threads_option and platform == .browser;
-    if (platform == .browser) web_build.configureWasmTarget(&target, web_threads);
+    if (platform == .browser) web_build.configureWasmTarget(&target, web_threads, optimize);
 
     const accesskit_dep = if (platform == .native)
         b.dependency("accesskit", .{ .target = target, .optimize = optimize })

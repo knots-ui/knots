@@ -18,6 +18,7 @@ pub const class_def = @import("font/class_def.zig");
 pub const Kern = @import("font/Kern.zig");
 pub const Colr = @import("font/Colr.zig");
 pub const participation = @import("font/participation.zig");
+pub const shape = @import("shape/root.zig");
 
 test {
     _ = band;
@@ -31,4 +32,5 @@ test {
     _ = sfnt;
     _ = coverage;
     _ = Layout;
+    _ = shape;
 }
