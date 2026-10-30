@@ -274,7 +274,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/math/root.zig"),
     });
 
-    const text_mod = b.createModule(.{
+    const text_mod = b.addModule("text", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/text/root.zig"),

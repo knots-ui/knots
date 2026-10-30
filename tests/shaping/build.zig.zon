@@ -1,0 +1,15 @@
+.{
+    .name = .knots_shaping,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .knots = .{ .path = "../.." },
+        // The oracle the shaper is compared against.
+        .harfbuzz = .{
+            .url = "https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.6.0.tar.gz",
+            .hash = "N-V-__8AALA2MwYsRwu2ztOutL_7hfr730IcTZrfrcDKkS6V",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0xc76f3e92a9c5677b,
+}

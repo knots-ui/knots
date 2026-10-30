@@ -1,0 +1,12 @@
+# suite:line[:config] | reason
+# A `*` line matches every case of the suite. Entries naming a config must fail, others may pass.
+basic:884 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:885 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:888 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:889 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:895 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:896 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:897 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:898 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:899 | no GPOS, so HarfBuzz applies fallback mark positioning
+basic:900 | no GPOS, so HarfBuzz applies fallback mark positioning

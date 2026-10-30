@@ -1,0 +1,13 @@
+# name | url | sha256 | license
+# The sha256 is of the downloaded file. A `#path` suffix extracts that entry from a zip archive.
+fira-code | https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip#ttf/FiraCode-Regular.ttf | 0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79 | OFL-1.1
+jetbrains-mono | https://raw.githubusercontent.com/JetBrains/JetBrainsMono/v2.304/fonts/ttf/JetBrainsMono-Regular.ttf | a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f | OFL-1.1
+cascadia-code | https://raw.githubusercontent.com/google/fonts/5e8a3ba899557829a76cfdac30fa512bda91d7ca/ofl/cascadiacode/CascadiaCode%5Bwght%5D.ttf | 30f2e14a5c389b346b1fce110c4ddcf0dc5ce8265faf5eca2ab7323f49dba590 | OFL-1.1
+iosevka | https://github.com/be5invis/Iosevka/releases/download/v33.2.3/PkgTTF-Unhinted-Iosevka-33.2.3.zip#Iosevka-Regular.ttf | e7877de336758cc32111a894b4aa7101c02f0f23a1af6be6a7cd29e2f86cdfc8 | OFL-1.1
+monaspace-neon | https://github.com/githubnext/monaspace/releases/download/v1.101/monaspace-v1.101.zip#monaspace-v1.101/fonts/otf/MonaspaceNeon-Regular.otf | 7ff2317c7bdaed8e81dcbe1314e6ab12ad9641b7ddf921e996a227ff4ec7752f | OFL-1.1
+noto-sans | https://raw.githubusercontent.com/notofonts/notofonts.github.io/b966e2e80feb783346a7d3b7c14c8d6e7e1a757b/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf | 478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823 | OFL-1.1
+noto-sans-mono | https://raw.githubusercontent.com/notofonts/notofonts.github.io/b966e2e80feb783346a7d3b7c14c8d6e7e1a757b/fonts/NotoSansMono/hinted/ttf/NotoSansMono-Regular.ttf | 65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d | OFL-1.1
+noto-sans-sc | https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf | faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 | OFL-1.1
+noto-color-emoji | https://raw.githubusercontent.com/google/fonts/5e8a3ba899557829a76cfdac30fa512bda91d7ca/ofl/notocoloremoji/NotoColorEmoji-Regular.ttf | 4d82a18d8d95f60ba883ce242bbadbf84a576e987745dd7ba38d71c67cff2d73 | OFL-1.1
+default | file:src/ui/fonts/default.ttf | c4100dcaf22df52cec71e043cd3cf0628208b55f093ce5d97ef30a614ec7cf93 | bundled
+ucd | https://www.unicode.org/Public/18.0.0/ucd/UCD.zip#/ | 7b3e555514060b92290d154f53655c5eb0fa62b16eb04c03434ff72d1a66a0d8 | Unicode-3.0
