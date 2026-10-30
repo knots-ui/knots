@@ -5,7 +5,9 @@ const State = ui_mod.State;
 const Style = ui_mod.Style;
 const Key = ui_mod.Key;
 const Element = @import("layout").Element;
-const util = @import("util.zig");
+const TextLayout = @import("text").TextLayout;
+const Decoration = @import("../decoration.zig").Decoration;
+const std = @import("std");
 
 content: []const u8,
 selectable: bool = true,
@@ -13,6 +15,12 @@ key: Key,
 /// Font, size, foreground and wrap are inherited from the parent when unset.
 style: *const Style = &.{},
 parts: Parts = .{},
+/// Font, size and features over byte ranges, see `Decoration.Text`.
+runs: []const @import("text").TextSystem.StyleRun = &.{},
+colors: []const Decoration.ColorSpan = &.{},
+underlines: []const Decoration.Underline = &.{},
+features: []const @import("text").shape.Plan.Feature = &.{},
+tab_size: u8 = @import("text").TextSystem.tab_size_default,
 
 pub const Parts = struct {
     selection: *const Style = &.{},
@@ -29,6 +37,24 @@ const BODY_INDEX: usize = 1; // text decoration
 const SELECTION_INDEX: usize = 2; // selection style scope
 const SPANS_BASE: usize = 16; // selection line overlays start here, one per line
 
+fn decoration(self: *const Text, ui: *UI, resolved: *const Style.Resolved) !Decoration {
+    var result: Decoration = .{ .text = .{
+        .content = self.content,
+        .size = resolved.content.font_size,
+        .color = resolved.content.foreground,
+        .font = resolved.content.font,
+        .wrap = resolved.wrap,
+        .runs = self.runs,
+        .colors = self.colors,
+        .underlines = self.underlines,
+        .features = self.features,
+        .tab_size = self.tab_size,
+        .key = self.key.indexed(BODY_INDEX).hash(),
+    } };
+    try ui.measureText(&result.text);
+    return result;
+}
+
 fn resolve(self: *const Text, ui: *UI) Style.Resolved {
     return ui.resolveStyle(self.key.hash(), .{ .base = &base.root, .user = self.style }, .{}, null);
 }
@@ -37,8 +63,8 @@ pub fn open(self: *const Text, frame: *Frame) !Element.Id {
     const ui = frame.ui();
     const resolved = self.resolve(ui);
     if (!self.selectable) {
-        const decoration = try ui.textDecorationStyled(self.content, &resolved);
-        const id = try ui.openWith(self.key, resolved.element(.{}), decoration, .{ .content = resolved.content });
+        const body = try self.decoration(ui, &resolved);
+        const id = try ui.openWith(self.key, resolved.element(.{}), body, .{ .content = resolved.content });
         try ui.setAccessibility(id, .{ .role = .text_run, .state = .{ .value_text = self.content } });
         return id;
     }
@@ -74,7 +100,7 @@ pub fn close(self: *const Text, frame: *Frame) !void {
         return;
     }
 
-    const deco = try ui.textDecorationStyled(self.content, &resolved);
+    const deco = try self.decoration(ui, &resolved);
     const inner_w: Element.sizing.Axis = if (resolved.wrap) .grow() else .fit();
     _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = inner_w, .height = .fit() }, deco);
     ui.close();
@@ -84,16 +110,14 @@ pub fn close(self: *const Text, frame: *Frame) !void {
 
 fn closeSlow(self: *const Text, ui: *UI, s: *State.TextSelect, resolved: *const Style.Resolved, need_hit_test: bool, press_here: bool) !void {
     const scale = ui.content_scale;
-    const face = try ui.font.getFace(resolved.content.font);
-    const wrap_px: f32 = if (resolved.wrap) @max(0, s.box.w() * scale) else 0;
-    const shaped = try face.shapeWrapped(self.content, resolved.content.font_size * scale, wrap_px);
-    const line_h = shaped.line_height / scale;
+    const body = try self.decoration(ui, resolved);
+    const text_layout = try ui.styledTextLayout(&body.text, wrapWidth(resolved, s));
+    const line_h = text_layout.line_height / scale;
 
     if (need_hit_test) {
         const mx: f32 = @floatCast(ui.input.mouse_pos[0]);
         const my: f32 = @floatCast(ui.input.mouse_pos[1]);
-        const local: util.Pos = .{ .x = mx - s.box.x(), .y = my - s.box.y() };
-        const byte = util.byteAtPos(shaped, local, scale);
+        const byte = text_layout.byteForPoint(.{ .x = (mx - s.box.x()) * scale, .y = (my - s.box.y()) * scale });
         if (press_here) {
             s.dragging = true;
             s.anchor_byte = byte;
@@ -115,19 +139,25 @@ fn closeSlow(self: *const Text, ui: *UI, s: *State.TextSelect, resolved: *const 
         const selection_key = self.key.indexed(SELECTION_INDEX);
         const selection = ui.resolveStyle(selection_key.hash(), .{ .base = &base.selection, .user = self.parts.selection }, .{}, null);
 
-        const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
-        defer ui.allocator.free(spans);
+        var spans: std.ArrayList(TextLayout.Rect) = .empty;
+        defer spans.deinit(ui.allocator);
+        try text_layout.selectionRects(ui.allocator, sel_lo, sel_hi, &spans);
 
-        for (spans, 0..) |sp, i| {
-            _ = try ui.open(self.key.indexed(SPANS_BASE + i), .at(sp.x, sp.y, sp.w, line_h), .{ .rect = selection.surface });
+        for (spans.items, 0..) |sp, i| {
+            _ = try ui.open(self.key.indexed(SPANS_BASE + i), .at(sp.x / scale, sp.y / scale, sp.w / scale, line_h), .{ .rect = selection.surface });
             ui.close();
         }
     }
 
-    const deco = try ui.textDecorationStyled(self.content, resolved);
+    const deco = try self.decoration(ui, resolved);
     const inner_w: Element.sizing.Axis = if (resolved.wrap) .grow() else .fit();
     _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = inner_w, .height = .fit() }, deco);
     ui.close();
 
     ui.close();
+}
+
+fn wrapWidth(resolved: *const Style.Resolved, s: *const State.TextSelect) f32 {
+    if (!resolved.wrap) return 0;
+    return @max(0, s.box.w());
 }

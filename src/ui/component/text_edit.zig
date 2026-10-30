@@ -5,11 +5,35 @@ const input_types = @import("input");
 const UI = @import("../root.zig").UI;
 const State = @import("../root.zig").State;
 const Element = @import("layout").Element;
-const glyph = @import("text").glyph;
-const Face = @import("text").Face;
-const util = @import("util.zig");
+const TextLayout = @import("text").TextLayout;
+const grapheme = @import("text").unicode.grapheme;
+const Accessibility = @import("../Accessibility.zig");
 
 const DOUBLE_CLICK_MS: i64 = 400;
+
+pub const text_bytes_max: u32 = 1024 * 1024;
+
+pub const Feature = @import("text").shape.Plan.Feature;
+
+/// Turns contextual alternates off around the caret, so ligatures break apart where the user is editing.
+pub fn caretFeatures(buf: []const u8, cursor: u32, out: *[1]Feature) []const Feature {
+    var start: u32 = @intCast(grapheme.previousBoundary(buf, cursor));
+    var end: u32 = @intCast(grapheme.nextBoundary(buf, cursor));
+    while (start > 0 and isOperator(buf[start - 1])) start -= 1;
+    while (end < buf.len and isOperator(buf[end])) end += 1;
+    if (start == end) return &.{};
+    out[0] = .{ .tag = std.mem.readInt(u32, "calt", .big), .value = 0, .start = start, .end = end };
+    return out[0..1];
+}
+
+fn isOperator(byte: u8) bool {
+    return std.ascii.isPrint(byte) and !std.ascii.isAlphanumeric(byte) and byte != ' ' and byte != '_';
+}
+
+/// Layout of an edited buffer, keyed by its element so edits reshape only the paragraphs they touch.
+pub fn editLayout(ui: *UI, key: u64, buf: []const u8, size: f32, font: ?[]const u8, wrap_width: f32, features: []const Feature) !*const TextLayout {
+    return ui.styledTextLayout(&.{ .content = buf, .size = size, .font = font, .features = features, .key = key }, wrap_width);
+}
 
 pub fn processAccessibility(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, frame: *Frame, state: *State.TextInput, id: Element.Id, bytes_max: u32) !void {
     const ui = frame.ui();
@@ -44,31 +68,15 @@ pub fn processAccessibility(buf: *std.ArrayList(u8), allocator: std.mem.Allocato
 }
 
 pub fn byteToCharacter(bytes: []const u8, byte: u32) u32 {
-    var offset: u32 = 0;
-    var characters: u32 = 0;
-    while (offset < @min(byte, bytes.len)) {
-        const width: u32 = std.unicode.utf8ByteSequenceLength(bytes[offset]) catch break;
-        if (offset + width > bytes.len) break;
-        offset += width;
-        characters += 1;
-    }
-    return characters;
+    return Accessibility.byteToCharacter(bytes, byte);
 }
 
 fn characterToByte(bytes: []const u8, character: u32) u32 {
-    var offset: u32 = 0;
-    var index: u32 = 0;
-    while (offset < bytes.len and index < character) {
-        const width: u32 = std.unicode.utf8ByteSequenceLength(bytes[offset]) catch break;
-        if (offset + width > bytes.len) break;
-        offset += width;
-        index += 1;
-    }
-    return offset;
+    return Accessibility.characterToByte(bytes, character);
 }
 
 pub fn validateByteLimit(bytes_max: u32) !void {
-    if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
+    if (bytes_max > text_bytes_max) return error.TextLimitTooLarge;
 }
 
 fn insertPaste(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, len: *u32, frame: *Frame, s: *State.TextInput, paste_text: []const u8, multiline: bool, bytes_max: u32) !void {
@@ -112,7 +120,7 @@ fn insertPaste(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, len: *u32,
 }
 
 pub fn processInputEarly(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, frame: *Frame, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
-    std.debug.assert(bytes_max <= Face.text_bytes_max);
+    std.debug.assert(bytes_max <= text_bytes_max);
     const ui = frame.ui();
     var len: u32 = @intCast(buf.items.len);
     s.cursor = @min(s.cursor, len);
@@ -219,11 +227,11 @@ pub fn processInputLate(
     wrap: bool,
     ui: *UI,
     s: *State.TextInput,
-    shaped: glyph.ShapedWrappedView,
+    text_layout: *const TextLayout,
     line_h: f32,
     bytes_max: u32,
 ) !void {
-    std.debug.assert(bytes_max <= Face.text_bytes_max);
+    std.debug.assert(bytes_max <= text_bytes_max);
     var len: u32 = @intCast(buf.items.len);
     const scale = ui.content_scale;
 
@@ -243,16 +251,15 @@ pub fn processInputLate(
                 return;
             },
             .up, .down => if (wrap) {
-                const cur_pos = util.posAtByte(shaped, s.cursor, scale);
-                const target_y = if (key == .up) cur_pos.y - line_h * 0.5 else cur_pos.y + line_h * 1.5;
-                const target: util.Pos = .{ .x = cur_pos.x, .y = target_y };
-                const new_cursor = util.byteAtPos(shaped, target, scale);
+                const current = text_layout.pointForByte(s.cursor);
+                const offset = verticalOffset(key, line_h * scale);
+                const new_cursor = text_layout.byteForPoint(.{ .x = current.x, .y = current.y + offset });
                 s.cursor = @min(new_cursor, len);
                 if (!event.mods.shift) s.sel_anchor = s.cursor;
             },
             .home => {
                 const new_cursor: u32 = if (wrap)
-                    lineBounds(shaped, s.cursor).start
+                    lineBounds(text_layout, s.cursor).start
                 else
                     0;
                 s.cursor = new_cursor;
@@ -260,7 +267,7 @@ pub fn processInputLate(
             },
             .end => {
                 const new_cursor: u32 = if (wrap)
-                    lineBounds(shaped, s.cursor).end
+                    lineBounds(text_layout, s.cursor).end
                 else
                     len;
                 s.cursor = new_cursor;
@@ -271,13 +278,17 @@ pub fn processInputLate(
     }
 }
 
-fn lineBounds(view: glyph.ShapedWrappedView, byte: u32) struct { start: u32, end: u32 } {
-    if (view.lines.len == 0) return .{ .start = 0, .end = 0 };
-    for (view.lines) |line| {
-        if (byte <= line.byte_end) return .{ .start = line.byte_start, .end = line.byte_end };
-    }
-    const last = view.lines[view.lines.len - 1];
-    return .{ .start = last.byte_start, .end = last.byte_end };
+fn verticalOffset(key: input_types.Key, line_h: f32) f32 {
+    return switch (key) {
+        .up => -line_h * 0.5,
+        else => line_h * 1.5,
+    };
+}
+
+fn lineBounds(text_layout: *const TextLayout, byte: u32) struct { start: u32, end: u32 } {
+    if (text_layout.lines.len == 0) return .{ .start = 0, .end = 0 };
+    const line = text_layout.lines[text_layout.lineForByte(byte)];
+    return .{ .start = line.byte_start, .end = line.byte_end };
 }
 
 fn deleteSelection(buf: *std.ArrayList(u8), len: *u32, s: *State.TextInput) void {
@@ -304,13 +315,13 @@ pub fn processMouse(
     id: Element.Id,
     buf: []const u8,
     s: *State.TextInput,
-    shaped: glyph.ShapedWrappedView,
+    text_layout: *const TextLayout,
     content_origin: [2]f32,
     scroll_offset: [2]f32,
     scale: f32,
 ) void {
     if (ui.input.mouseButton(.left).pressed and ui.hovering(id)) {
-        const byte = byteAtMouse(ui, shaped, content_origin, scroll_offset, scale, @intCast(buf.len));
+        const byte = byteAtMouse(ui, text_layout, content_origin, scroll_offset, scale, @intCast(buf.len));
         const double_click = if (s.last_click_ms) |last|
             ui.input.now_ms - last <= DOUBLE_CLICK_MS and s.last_click_byte == byte
         else
@@ -327,7 +338,7 @@ pub fn processMouse(
     }
 
     if (s.dragging and ui.input.mouseButton(.left).down) {
-        const byte = byteAtMouse(ui, shaped, content_origin, scroll_offset, scale, @intCast(buf.len));
+        const byte = byteAtMouse(ui, text_layout, content_origin, scroll_offset, scale, @intCast(buf.len));
         moveCursorToByte(buf, s, byte, true);
     }
 
@@ -372,24 +383,19 @@ pub fn selectWordAtByte(buf: []const u8, s: *State.TextInput, byte: u32) void {
 
 fn byteAtMouse(
     ui: *UI,
-    shaped: glyph.ShapedWrappedView,
+    text_layout: *const TextLayout,
     content_origin: [2]f32,
     scroll_offset: [2]f32,
     scale: f32,
     len: u32,
 ) u32 {
-    const local: util.Pos = .{
-        .x = @as(f32, @floatCast(ui.input.mouse_pos[0])) - content_origin[0] + scroll_offset[0],
-        .y = @as(f32, @floatCast(ui.input.mouse_pos[1])) - content_origin[1] + scroll_offset[1],
-    };
-    return @min(util.byteAtPos(shaped, local, scale), len);
+    const x = @as(f32, @floatCast(ui.input.mouse_pos[0])) - content_origin[0] + scroll_offset[0];
+    const y = @as(f32, @floatCast(ui.input.mouse_pos[1])) - content_origin[1] + scroll_offset[1];
+    return @min(text_layout.byteForPoint(.{ .x = x * scale, .y = y * scale }), len);
 }
 
 fn clampByte(buf: []const u8, byte: u32) u32 {
-    const len: u32 = @intCast(buf.len);
-    var i: u32 = @min(byte, len);
-    while (i > 0 and i < len and (buf[@intCast(i)] & 0xC0) == 0x80) i -= 1;
-    return i;
+    return @intCast(grapheme.floorBoundary(buf, byte));
 }
 
 fn isWordStart(buf: []const u8, pos: u32) bool {
@@ -413,27 +419,18 @@ fn wordBoundary(buf: []const u8, pos: u32, backward: bool) u32 {
 }
 
 fn prevCharStart(buf: []const u8, pos: u32) u32 {
-    var i = pos;
-    while (i > 0) {
-        i -= 1;
-        if (buf[i] & 0xC0 != 0x80) return i;
-    }
-    return 0;
+    return @intCast(grapheme.previousBoundary(buf, pos));
 }
 
 fn nextCharStart(buf: []const u8, pos: u32) u32 {
-    var i = pos + 1;
-    while (i < buf.len) : (i += 1) {
-        if (buf[i] & 0xC0 != 0x80) return i;
-    }
-    return @intCast(buf.len);
+    return @intCast(grapheme.nextBoundary(buf, pos));
 }
 
 test "text byte limit accepts one MiB and rejects one byte more" {
-    try validateByteLimit(Face.text_bytes_max);
+    try validateByteLimit(text_bytes_max);
     try std.testing.expectError(
         error.TextLimitTooLarge,
-        validateByteLimit(Face.text_bytes_max + 1),
+        validateByteLimit(text_bytes_max + 1),
     );
 }
 
@@ -452,4 +449,20 @@ test "selection deletion remains available above a smaller caller limit" {
     try std.testing.expectEqual(caller_bytes_max, len);
     try std.testing.expectEqual(caller_bytes_max, state.cursor);
     try std.testing.expectEqual(caller_bytes_max, state.sel_anchor);
+}
+
+test "caret features cover the operator run around the caret" {
+    var storage: [1]Feature = undefined;
+    const features = caretFeatures("a != b", 3, &storage);
+    try std.testing.expectEqual(@as(u32, 2), features[0].start);
+    try std.testing.expectEqual(@as(u32, 4), features[0].end);
+}
+
+test "cursor movement steps over graphemes" {
+    const value = "a\u{1F44D}\u{1F3FD}e\u{0301}";
+    try std.testing.expectEqual(@as(u32, 9), nextCharStart(value, 1));
+    try std.testing.expectEqual(@as(u32, 1), prevCharStart(value, 9));
+    try std.testing.expectEqual(@as(u32, 9), clampByte(value, 10));
+    try std.testing.expectEqual(@as(u32, 1), byteToCharacter(value, 1));
+    try std.testing.expectEqual(@as(u32, 2), byteToCharacter(value, 9));
 }

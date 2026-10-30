@@ -12,7 +12,7 @@ pub const ShaderSource = union(enum) {
 
 pub const VertexStepMode = enum { vertex, instance };
 
-pub const VertexFormat = enum { f32, f32x2, f32x3, f32x4 };
+pub const VertexFormat = enum { f32, f32x2, f32x3, f32x4, u32, f16x4 };
 
 pub const VertexAttribute = struct {
     location: u32,
@@ -110,11 +110,15 @@ pub const Desc = struct {
     primitive: PrimitiveState = .{},
 };
 
-pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".field_names.len]VertexAttribute {
+/// Fields named with a leading `_` are padding and get no attribute.
+pub fn attrsFromStruct(comptime T: type) [attributeCount(T)]VertexAttribute {
     const field_names = @typeInfo(T).@"struct".field_names;
     const field_types = @typeInfo(T).@"struct".field_types;
-    var attrs: [field_names.len]VertexAttribute = undefined;
-    inline for (field_names, field_types, 0..) |field_name, field_type, i| {
+    var attrs: [attributeCount(T)]VertexAttribute = undefined;
+    comptime var i = 0;
+    inline for (field_names, field_types) |field_name, field_type| {
+        if (comptime field_name[0] == '_') continue;
+        defer i += 1;
         attrs[i] = .{
             .location = i,
             .offset = @offsetOf(T, field_name),
@@ -126,15 +130,31 @@ pub fn attrsFromStruct(comptime T: type) [@typeInfo(T).@"struct".field_names.len
                         4 => .f32x4,
                         else => @compileError("unsupported array length for vertex attribute"),
                     },
+                    f16 => switch (arr.len) {
+                        4 => .f16x4,
+                        else => @compileError("unsupported array length for vertex attribute"),
+                    },
                     else => @compileError("unsupported array element type for vertex attribute"),
                 },
                 .float => |float| switch (float.bits) {
                     32 => .f32,
                     else => @compileError("unsupported float width for vertex attribute"),
                 },
+                .int => |int| switch (int.bits) {
+                    32 => .u32,
+                    else => @compileError("unsupported integer width for vertex attribute"),
+                },
                 else => @compileError("unsupported field type for vertex attribute"),
             },
         };
     }
     return attrs;
+}
+
+fn attributeCount(comptime T: type) usize {
+    var count = 0;
+    for (@typeInfo(T).@"struct".field_names) |name| {
+        if (name[0] != '_') count += 1;
+    }
+    return count;
 }

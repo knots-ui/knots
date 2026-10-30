@@ -92,7 +92,7 @@ pub fn of(app: *knots.App) *Playground {
 pub fn init(io: std.Io, allocator: std.mem.Allocator) !Playground {
     var app = try knots.App.init(io, allocator, .{ .window = .{ .width = 1280, .height = 720, .title = "Playground", .canvas_selector = "#canvas" }, .arena_reset_mode = .free_all });
     errdefer app.deinit();
-    try app.main_viewport.ui_ctx.ui.font.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
+    try app.main_viewport.ui_ctx.ui.text_system.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
     const devtools = try knots.debug.DevTools.init(allocator, app.main_viewport.renderer.cfg.present_mode);
     return .{ .app = app, .devtools = devtools };
 }

@@ -233,6 +233,8 @@ fn toVkVertexFormat(f: CommonPipeline.VertexFormat) vk.Format {
         .f32x2 => .r32g32_sfloat,
         .f32x3 => .r32g32b32_sfloat,
         .f32x4 => .r32g32b32a32_sfloat,
+        .u32 => .r32_uint,
+        .f16x4 => .r16g16b16a16_sfloat,
     };
 }
 

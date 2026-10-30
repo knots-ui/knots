@@ -76,15 +76,15 @@ const slug_uniform_bgl = gpu.Pipeline.BindGroupLayoutDesc{
     },
 };
 
-const slug_curveband_bgl = gpu.Pipeline.BindGroupLayoutDesc{
-    .label = "slug_curveband_bgl",
+const slug_glyph_bgl = gpu.Pipeline.BindGroupLayoutDesc{
+    .label = "slug_glyph_bgl",
     .entries = &.{
-        .{ .binding = 0, .visibility = .{ .fragment = true }, .type = .{ .sampled_texture = .unfilterable_float } },
-        .{ .binding = 1, .visibility = .{ .fragment = true }, .type = .{ .sampled_texture = .uint } },
+        .{ .binding = 0, .visibility = .{ .vertex = true }, .type = .read_only_storage_buffer },
+        .{ .binding = 1, .visibility = .{ .fragment = true }, .type = .read_only_storage_buffer },
     },
 };
 
-const slug_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ slug_uniform_bgl, slug_curveband_bgl, clip_bgl };
+const slug_bgls = [_]gpu.Pipeline.BindGroupLayoutDesc{ slug_uniform_bgl, slug_glyph_bgl, clip_bgl };
 
 pub fn primitivesDesc(kind: PrimitivesKind, srgb_surface: bool) gpu.Pipeline.Desc {
     return primitivesDescForTarget(kind, null, !srgb_surface);

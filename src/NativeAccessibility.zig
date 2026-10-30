@@ -460,15 +460,9 @@ fn action(raw: ?*c.accesskit_action_request, userdata: ?*anyopaque) callconv(.c)
 fn setCharacterLengths(allocator: std.mem.Allocator, node: *c.accesskit_node, value: []const u8) void {
     const lengths = allocator.alloc(u8, value.len) catch @panic("AccessKit text allocation failed");
     defer allocator.free(lengths);
-    var offset: usize = 0;
+    var characters = Accessibility.CharacterIterator.init(value);
     var count: usize = 0;
-    while (offset < value.len) {
-        const width = std.unicode.utf8ByteSequenceLength(value[offset]) catch @panic("Invalid UTF-8 in accessibility text");
-        std.debug.assert(offset + width <= value.len);
-        lengths[count] = width;
-        offset += width;
-        count += 1;
-    }
+    while (characters.next()) |len| : (count += 1) lengths[count] = len;
     c.accesskit_node_set_character_lengths(node, count, lengths.ptr);
 }
 

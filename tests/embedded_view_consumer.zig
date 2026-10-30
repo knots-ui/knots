@@ -111,7 +111,8 @@ test "accessibility actions take the ordinary button checkbox and slider paths" 
 test "independent renderer caches consume the same output without acknowledgements" {
     const Uploader = struct {
         calls: u32 = 0,
-        pub fn uploadGlyphAtlas(self: *@This(), atlas: *const render.GlyphAtlas) !void {
+        pub fn uploadGlyphAtlas(self: *@This(), atlas: *const render.GlyphAtlas, delta: bool) !void {
+            _ = delta;
             atlas.validate();
             std.debug.assert(self.calls < 4);
             self.calls += 1;
