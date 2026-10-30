@@ -1,0 +1,2 @@
+# suite:line[:config] | reason
+# A `*` line matches every case of the suite. Entries naming a config must fail, others may pass.
