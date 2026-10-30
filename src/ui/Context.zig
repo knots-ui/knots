@@ -1611,3 +1611,120 @@ test "every finalization allocation failure releases the frame and permits retry
     try std.testing.expect(completed);
     try std.testing.expect(failure_offset > 0);
 }
+
+fn textEditTestInput(pos: [2]f64, button: input_types.MouseButtonState, chars: []const u21, key_events: []const input_types.KeyEvent) input_types.FrameInput {
+    var frame_input: input_types.FrameInput = .{
+        .input = .{ .pos = pos, .chars = chars, .key_events = key_events },
+        .now_ms = 0,
+        .delta_ns = 0,
+        .logical_extent = .{ .width = 400, .height = 100 },
+        .physical_extent = .{ .width = 400, .height = 100 },
+        .content_scale = 1,
+    };
+    frame_input.input.mouse[0] = button;
+    return frame_input;
+}
+
+fn textEditTestClick(pos: [2]f64) [2]input_types.FrameInput {
+    return .{
+        textEditTestInput(pos, .{ .down = true, .pressed = true, .pressed_pos = pos }, &.{}, &.{}),
+        textEditTestInput(pos, .{ .released = true, .released_pos = pos }, &.{}, &.{}),
+    };
+}
+
+const TextInputClearTest = struct {
+    draft: *std.ArrayList(u8),
+    submitted: *std.ArrayList(u8),
+
+    fn frame(self: TextInputClearTest, f: *Frame) !void {
+        const component = @import("component/root.zig");
+        const row: component.Rect = .{
+            .key = .str("row"),
+            .style = &.{
+                .width = .fixed(400),
+                .height = .fixed(40),
+                .direction = .row,
+                .gap = 8,
+            },
+        };
+        _ = try row.open(f);
+        try f.e(component.TextInput{ .key = .str("input"), .buf = self.draft, .allocator = testing.allocator });
+        const add = try f.interact(component.Button{ .key = .str("add"), .label = "Add" });
+        try row.close(f);
+        if (add.clicked) {
+            try self.submitted.appendSlice(testing.allocator, self.draft.items);
+            self.draft.clearRetainingCapacity();
+        }
+    }
+};
+
+test "text input may be cleared after it is emitted in the same frame" {
+    var view = try Context.init(testing.allocator, .{});
+    defer view.deinit();
+
+    var draft: std.ArrayList(u8) = .empty;
+    defer draft.deinit(testing.allocator);
+
+    var submitted: std.ArrayList(u8) = .empty;
+    defer submitted.deinit(testing.allocator);
+
+    const t: TextInputClearTest = .{ .draft = &draft, .submitted = &submitted };
+
+    const input_pos = [2]f64{ 40, 20 };
+    const add_pos = [2]f64{ 385, 20 };
+    const focus = textEditTestClick(input_pos);
+    const add = textEditTestClick(add_pos);
+    const steps = [_]input_types.FrameInput{
+        textEditTestInput(input_pos, .{}, &.{}, &.{}),
+        focus[0],
+        focus[1],
+        textEditTestInput(input_pos, .{}, &.{ 'h', 'i' }, &.{}),
+        add[0],
+        add[1],
+        textEditTestInput(add_pos, .{}, &.{}, &.{}),
+    };
+    for (steps) |step| {
+        var f = try view.beginFrame(step);
+        try t.frame(&f);
+        _ = try view.endFrame(&f);
+    }
+    try testing.expectEqualStrings("hi", submitted.items);
+    try testing.expectEqual(0, draft.items.len);
+}
+
+test "text area draws the text after enter grows the buffer" {
+    var view = try Context.init(testing.allocator, .{});
+    defer view.deinit();
+
+    var notes = try std.ArrayList(u8).initCapacity(testing.allocator, 2);
+    defer notes.deinit(testing.allocator);
+
+    notes.appendSliceAssumeCapacity("ab");
+
+    const pos = [2]f64{ 40, 20 };
+    const focus = textEditTestClick(pos);
+    const enter = [_]input_types.KeyEvent{.{ .key = .enter, .action = .press, .mods = .{} }};
+    const steps = [_]input_types.FrameInput{
+        textEditTestInput(pos, .{}, &.{}, &.{}),
+        focus[0],
+        focus[1],
+        textEditTestInput(pos, .{}, &.{}, &enter),
+    };
+    for (steps) |step| {
+        var f = try view.beginFrame(step);
+        try f.e(@import("component/root.zig").TextArea{
+            .key = .str("notes"),
+            .buf = &notes,
+            .allocator = testing.allocator,
+            .style = &.{ .width = .fixed(400) },
+        });
+        _ = try view.endFrame(&f);
+    }
+    try testing.expectEqualStrings("ab\n", notes.items);
+    var drawn: ?[]const u8 = null;
+    for (view.ui.decorations.items) |decoration| switch (decoration) {
+        .text => |t| drawn = t.content,
+        else => {},
+    };
+    try testing.expectEqualStrings("ab\n", drawn.?);
+}

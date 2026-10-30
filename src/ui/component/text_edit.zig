@@ -11,12 +11,12 @@ const util = @import("util.zig");
 
 const DOUBLE_CLICK_MS: i64 = 400;
 
-pub fn processAccessibility(buf: *std.ArrayList(u8), frame: *Frame, state: *State.TextInput, id: Element.Id, bytes_max: u32) !void {
+pub fn processAccessibility(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, frame: *Frame, state: *State.TextInput, id: Element.Id, bytes_max: u32) !void {
     const ui = frame.ui();
     if (ui.consumeAccessibilityAction(id, .set_value)) |request| {
         if (request.value_text) |value| {
             if (value.len <= bytes_max) {
-                try buf.replaceRange(ui.allocator, 0, buf.items.len, value);
+                try buf.replaceRange(allocator, 0, buf.items.len, value);
                 state.cursor = @intCast(value.len);
                 state.sel_anchor = state.cursor;
             }
@@ -35,7 +35,7 @@ pub fn processAccessibility(buf: *std.ArrayList(u8), frame: *Frame, state: *Stat
             const selection = selectionRange(state);
             const final_len = buf.items.len - (selection.hi - selection.lo) + value.len;
             if (final_len <= bytes_max) {
-                try buf.replaceRange(ui.allocator, selection.lo, selection.hi - selection.lo, value);
+                try buf.replaceRange(allocator, selection.lo, selection.hi - selection.lo, value);
                 state.cursor = selection.lo + @as(u32, @intCast(value.len));
                 state.sel_anchor = state.cursor;
             }
@@ -71,8 +71,7 @@ pub fn validateByteLimit(bytes_max: u32) !void {
     if (bytes_max > Face.text_bytes_max) return error.TextLimitTooLarge;
 }
 
-fn insertPaste(buf: *std.ArrayList(u8), len: *u32, frame: *Frame, s: *State.TextInput, paste_text: []const u8, multiline: bool, bytes_max: u32) !void {
-    const ui = frame.ui();
+fn insertPaste(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, len: *u32, frame: *Frame, s: *State.TextInput, paste_text: []const u8, multiline: bool, bytes_max: u32) !void {
     const raw = try frame.arena().dupe(u8, paste_text);
     _ = std.unicode.Utf8View.init(raw) catch return;
 
@@ -104,15 +103,15 @@ fn insertPaste(buf: *std.ArrayList(u8), len: *u32, frame: *Frame, s: *State.Text
     const base_len = buf.items.len - selected_len;
     const max_len: usize = @intCast(bytes_max);
     if (base_len > max_len or paste_len > max_len - base_len) return;
-    try buf.ensureTotalCapacity(ui.allocator, base_len + paste_len);
+    try buf.ensureTotalCapacity(allocator, base_len + paste_len);
     if (selected_len > 0) deleteSelection(buf, len, s);
-    try buf.insertSlice(ui.allocator, s.cursor, raw[0..paste_len]);
+    try buf.insertSlice(allocator, s.cursor, raw[0..paste_len]);
     len.* += @intCast(paste_len);
     s.cursor += @intCast(paste_len);
     s.sel_anchor = s.cursor;
 }
 
-pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
+pub fn processInputEarly(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, frame: *Frame, s: *State.TextInput, multiline: bool, bytes_max: u32) !void {
     std.debug.assert(bytes_max <= Face.text_bytes_max);
     const ui = frame.ui();
     var len: u32 = @intCast(buf.items.len);
@@ -129,14 +128,14 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextI
         if (base_len > bytes_max or n > bytes_max - base_len) continue;
         if (s.sel_anchor != s.cursor) deleteSelection(buf, &len, s);
 
-        buf.insertSlice(ui.allocator, s.cursor, encoded[0..n]) catch continue;
+        buf.insertSlice(allocator, s.cursor, encoded[0..n]) catch continue;
         len += n;
         s.cursor += n;
         s.sel_anchor = s.cursor;
     }
 
     if (frame.pasteText()) |paste_text| {
-        try insertPaste(buf, &len, frame, s, paste_text, multiline, bytes_max);
+        try insertPaste(buf, allocator, &len, frame, s, paste_text, multiline, bytes_max);
     }
 
     for (ui.input.key_events) |event| {
@@ -216,6 +215,7 @@ pub fn processInputEarly(buf: *std.ArrayList(u8), frame: *Frame, s: *State.TextI
 
 pub fn processInputLate(
     buf: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
     wrap: bool,
     ui: *UI,
     s: *State.TextInput,
@@ -236,7 +236,7 @@ pub fn processInputLate(
                 const base_len = len - (selection.hi - selection.lo);
                 if (base_len >= bytes_max) return;
                 if (s.sel_anchor != s.cursor) deleteSelection(buf, &len, s);
-                buf.insertSlice(ui.allocator, s.cursor, "\n") catch return;
+                buf.insertSlice(allocator, s.cursor, "\n") catch return;
                 len += 1;
                 s.cursor += 1;
                 s.sel_anchor = s.cursor;

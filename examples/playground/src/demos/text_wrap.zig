@@ -21,13 +21,13 @@ const with_newlines =
 
 notes: std.ArrayList(u8) = .empty,
 
-pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
+pub fn render(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
     const root = Rect{ .key = .src(@src()), .style = &.{ .width = .grow(), .direction = .column, .gap = 16 } };
     _ = try root.open(frame);
     try fixedWidthSection(frame);
     try growWidthSection(frame);
     try newlinesSection(frame);
-    try multiLineInputSection(frame, &self.notes);
+    try multiLineInputSection(frame, &self.notes, app.allocator);
     try root.close(frame);
 }
 
@@ -111,11 +111,12 @@ fn newlinesSection(frame: *ui.Frame) !void {
     });
 }
 
-fn multiLineInputSection(frame: *ui.Frame, notes: *std.ArrayList(u8)) !void {
+fn multiLineInputSection(frame: *ui.Frame, notes: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
     try caption(frame, "TextArea: multi-line, enter inserts a newline, arrow up/down navigate lines; drag the bottom edge to resize height (persists)", .src(@src()));
     try frame.e(TextArea{
         .key = .src(@src()),
         .buf = notes,
+        .allocator = allocator,
         .placeholder = "type a multi-line note... drag the bottom edge to grow it",
         .style = &.{ .width = .fixed(360), .height = .fixed(96) },
     });

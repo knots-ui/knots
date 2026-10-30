@@ -22,7 +22,11 @@ const GRIP_HIT_H: f32 = 10;
 const GRIP_W: f32 = 40;
 const GRIP_H: f32 = 5;
 
+/// Edited in place and grown with `allocator`. Borrowed only for the call:
+/// the text is copied for drawing, so the caller may change `buf` at any time.
 buf: *std.ArrayList(u8),
+/// Allocates `buf`, the caller frees `buf` with the same allocator.
+allocator: std.mem.Allocator,
 placeholder: []const u8 = "",
 bytes_max: u32 = Face.text_bytes_max,
 key: Key,
@@ -75,11 +79,11 @@ pub fn open(self: *const TextArea, frame: *Frame) !Element.Id {
     _ = try ui.state.getOrCreate(.measured, ui.allocator, id);
 
     const edit_state = try ui.state.getOrCreate(.text_input, ui.allocator, id);
-    try edit.processAccessibility(self.buf, frame, edit_state, id, self.bytes_max);
+    try edit.processAccessibility(self.buf, self.allocator, frame, edit_state, id, self.bytes_max);
 
     if (is_focused) {
         ui.requestTextInput();
-        try edit.processInputEarly(self.buf, frame, edit_state, true, self.bytes_max);
+        try edit.processInputEarly(self.buf, self.allocator, frame, edit_state, true, self.bytes_max);
     }
 
     const rs = try ui.state.getOrCreate(.resize, ui.allocator, id);
@@ -108,7 +112,7 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
     const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
-    const items = self.buf.items;
+    var items = self.buf.items;
     const content = ui.contents.items[ui.currentSlot()];
     const padding = (ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, .{}, null)).layout.padding;
 
@@ -132,6 +136,7 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
 
         try edit.processInputLate(
             self.buf,
+            self.allocator,
             true,
             ui,
             s,
@@ -139,6 +144,7 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
             line_h,
             self.bytes_max,
         );
+        items = self.buf.items;
         ui.input.consumeKeyboard();
 
         const sel_lo = @min(s.cursor, s.sel_anchor);
@@ -163,14 +169,14 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
             ui.close();
         }
 
-        if (has_sel) ui.state.selection_text = items[sel_lo..sel_hi];
+        if (has_sel) ui.state.selection_text = try frame.arena().dupe(u8, items[sel_lo..sel_hi]);
     }
 
     if (!is_focused and items.len == 0) {
         if (self.placeholder.len > 0)
             _ = try ui.styledText(self.key.indexed(BODY_INDEX), self.placeholder, .{ .base = &base.placeholder, .user = self.parts.placeholder }, .{});
     } else if (items.len > 0) {
-        var deco = try ui.textDecoration(items, content.font_size, content.font, true);
+        var deco = try ui.textDecoration(try frame.arena().dupe(u8, items), content.font_size, content.font, true);
         deco.text.color = content.foreground;
         _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = .grow(), .height = .fit() }, deco);
         ui.close();
