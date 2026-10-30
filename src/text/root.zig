@@ -19,6 +19,7 @@ pub const Kern = @import("font/Kern.zig");
 pub const Colr = @import("font/Colr.zig");
 pub const participation = @import("font/participation.zig");
 pub const shape = @import("shape/root.zig");
+pub const itemize = @import("itemize.zig");
 
 test {
     _ = band;
@@ -33,4 +34,5 @@ test {
     _ = coverage;
     _ = Layout;
     _ = shape;
+    _ = itemize;
 }
