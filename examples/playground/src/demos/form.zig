@@ -28,7 +28,7 @@ password: std.ArrayList(u8) = .empty,
 role: u32 = 0,
 volume: f32 = 0.7,
 
-pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
+pub fn render(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
     const arena = frame.arena();
 
     const form = Rect{
@@ -36,8 +36,8 @@ pub fn render(self: *@This(), _: *knots.App, frame: *ui.Frame) !void {
         .style = &.{ .width = .fixed(420), .direction = .column, .gap = 12 },
     };
     _ = try form.open(frame);
-    try self.emailField(frame);
-    try self.passwordField(frame);
+    try self.emailField(app, frame);
+    try self.passwordField(app, frame);
     try self.roleField(frame);
     try self.notificationsField(frame);
     try self.deliveryField(frame);
@@ -106,21 +106,23 @@ fn openLabeled(frame: *ui.Frame, comptime label: []const u8) !Rect {
     return field;
 }
 
-fn emailField(self: *@This(), frame: *ui.Frame) !void {
+fn emailField(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
     const field = try openLabeled(frame, "email");
     try frame.e(TextInput{
         .key = .src(@src()),
         .buf = &self.email,
+        .allocator = app.allocator,
         .placeholder = "you@example.com",
     });
     try field.close(frame);
 }
 
-fn passwordField(self: *@This(), frame: *ui.Frame) !void {
+fn passwordField(self: *@This(), app: *knots.App, frame: *ui.Frame) !void {
     const field = try openLabeled(frame, "password");
     try frame.e(TextInput{
         .key = .src(@src()),
         .buf = &self.password,
+        .allocator = app.allocator,
         .placeholder = "...",
     });
     try field.close(frame);
