@@ -5,9 +5,11 @@ pub const GlyphBuilder = @import("GlyphBuilder.zig");
 pub const band = @import("band.zig");
 pub const curve = @import("curve.zig");
 pub const glyph = @import("glyph.zig");
+pub const unicode = @import("unicode/root.zig");
 
 test {
     _ = band;
     _ = curve;
     _ = GlyphBuilder;
+    _ = unicode;
 }
