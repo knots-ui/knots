@@ -1,4 +1,5 @@
 const std = @import("std");
+const TextLayout = @import("text").TextLayout;
 
 const Frame = @import("../root.zig").Frame;
 const UI = @import("../root.zig").UI;
@@ -6,11 +7,9 @@ const State = @import("../root.zig").State;
 const Style = @import("../root.zig").Style;
 const Key = @import("../root.zig").Key;
 const Decoration = @import("../root.zig").Decoration;
-const Face = @import("text").Face;
 
 const Element = @import("layout").Element;
 const Accessibility = @import("../Accessibility.zig");
-const util = @import("util.zig");
 const edit = @import("text_edit.zig");
 
 const BODY_INDEX: usize = 1;
@@ -28,7 +27,7 @@ buf: *std.ArrayList(u8),
 /// Allocates `buf`, the caller frees `buf` with the same allocator.
 allocator: std.mem.Allocator,
 placeholder: []const u8 = "",
-bytes_max: u32 = Face.text_bytes_max,
+bytes_max: u32 = edit.text_bytes_max,
 key: Key,
 style: *const Style = &.{},
 parts: Parts = .{},
@@ -112,7 +111,7 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
     const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
-    var items = self.buf.items;
+    const items = self.buf.items;
     const content = ui.contents.items[ui.currentSlot()];
     const padding = (ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, .{}, null)).layout.padding;
 
@@ -120,19 +119,18 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
         const s = ui.state.get(.text_input, id).?;
         const scale = ui.content_scale;
 
-        const face = try ui.font.getFace(content.font);
         const m = try ui.state.getOrCreate(.measured, ui.allocator, id);
         const content_w = m.width - padding.left() - padding.right();
-        const wrap_px: f32 = @max(0, content_w * scale);
-        const shaped = try face.shapeWrapped(items, content.font_size * scale, wrap_px);
-        const line_h = shaped.line_height / scale;
+        var feature_storage: [1]edit.Feature = undefined;
+        var text_layout = try edit.editLayout(ui, self.key.indexed(BODY_INDEX).hash(), items, content.font_size, content.font, @max(0, content_w), edit.caretFeatures(items, s.cursor, &feature_storage));
+        const line_h = text_layout.line_height / scale;
         const scroll = try ui.state.getOrCreate(.scroll, ui.allocator, id);
         const content_origin = [2]f32{
             m.box.x() + padding.left(),
             m.box.y() + padding.top(),
         };
 
-        edit.processMouse(ui, id, items, s, shaped, content_origin, scroll.offset, scale);
+        edit.processMouse(ui, id, items, s, text_layout, content_origin, scroll.offset, scale);
 
         try edit.processInputLate(
             self.buf,
@@ -140,27 +138,29 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
             true,
             ui,
             s,
-            shaped,
+            text_layout,
             line_h,
             self.bytes_max,
         );
-        items = self.buf.items;
         ui.input.consumeKeyboard();
+        text_layout = try edit.editLayout(ui, self.key.indexed(BODY_INDEX).hash(), self.buf.items, content.font_size, content.font, @max(0, content_w), edit.caretFeatures(self.buf.items, s.cursor, &feature_storage));
 
         const sel_lo = @min(s.cursor, s.sel_anchor);
         const sel_hi = @max(s.cursor, s.sel_anchor);
         const has_sel = sel_lo != sel_hi;
-        const cursor_pos = util.posAtByte(shaped, s.cursor, scale);
+        const caret_point = text_layout.pointForByte(s.cursor);
+        const cursor_pos = .{ .x = caret_point.x / scale, .y = caret_point.y / scale };
         const viewport_h = @max(0, m.height - padding.top() - padding.bottom());
-        ensureCaretVisibleY(scroll, cursor_pos.y, line_h, viewport_h, shaped.height / scale);
+        ensureCaretVisibleY(scroll, cursor_pos.y, line_h, viewport_h, text_layout.height / scale);
         const scroll_offset = scroll.offset;
 
         if (has_sel) {
             const selection = ui.resolveStyle(self.key.indexed(SELECTION_BASE).hash(), .{ .base = &base.selection, .user = self.parts.selection }, .{}, null);
-            const spans = try util.lineSpansForRange(ui.allocator, shaped, sel_lo, sel_hi, scale);
-            defer ui.allocator.free(spans);
-            for (spans, 0..) |sp, i| {
-                _ = try ui.open(self.key.indexed(SELECTION_BASE + i), .at(sp.x - scroll_offset[0], sp.y - scroll_offset[1], sp.w, line_h), .{ .rect = selection.surface });
+            var spans: std.ArrayList(TextLayout.Rect) = .empty;
+            defer spans.deinit(ui.allocator);
+            try text_layout.selectionRects(ui.allocator, sel_lo, sel_hi, &spans);
+            for (spans.items, 0..) |sp, i| {
+                _ = try ui.open(self.key.indexed(SELECTION_BASE + i), .at(sp.x / scale - scroll_offset[0], sp.y / scale - scroll_offset[1], sp.w / scale, line_h), .{ .rect = selection.surface });
                 ui.close();
             }
         } else {
@@ -169,15 +169,22 @@ pub fn close(self: *const TextArea, frame: *Frame) !void {
             ui.close();
         }
 
-        if (has_sel) ui.state.selection_text = try frame.arena().dupe(u8, items[sel_lo..sel_hi]);
+        if (has_sel) ui.state.selection_text = try frame.arena().dupe(u8, self.buf.items[sel_lo..sel_hi]);
     }
 
-    if (!is_focused and items.len == 0) {
+    var body_features: [1]edit.Feature = undefined;
+    if (!is_focused and self.buf.items.len == 0) {
         if (self.placeholder.len > 0)
             _ = try ui.styledText(self.key.indexed(BODY_INDEX), self.placeholder, .{ .base = &base.placeholder, .user = self.parts.placeholder }, .{});
-    } else if (items.len > 0) {
-        var deco = try ui.textDecoration(try frame.arena().dupe(u8, items), content.font_size, content.font, true);
+    } else if (self.buf.items.len > 0) {
+        var deco = try ui.textDecoration(try frame.arena().dupe(u8, self.buf.items), content.font_size, content.font, true);
         deco.text.color = content.foreground;
+        deco.text.key = self.key.indexed(BODY_INDEX).hash();
+        if (is_focused) {
+            const edit_cursor = ui.state.get(.text_input, id).?.cursor;
+            deco.text.features = try frame.arena().dupe(edit.Feature, edit.caretFeatures(self.buf.items, edit_cursor, &body_features));
+            try ui.measureText(&deco.text);
+        }
         _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = .grow(), .height = .fit() }, deco);
         ui.close();
     }

@@ -14,11 +14,12 @@ const Canvas = ui.component.Canvas;
 const Image = ui.component.Image;
 const Spacer = ui.component.Spacer;
 const Dialog = ui.component.Dialog;
+const TextInput = ui.component.TextInput;
 
 const WIDTH = 800;
 const HEIGHT = 600;
 const MAX_CHANNEL_DELTA = 2;
-const scene_names = [_][]const u8{ "layout", "components", "graphics", "overlay", "backdrop" };
+const scene_names = [_][]const u8{ "layout", "components", "graphics", "overlay", "backdrop", "text" };
 
 io: std.Io,
 allocator: std.mem.Allocator,
@@ -30,11 +31,13 @@ scene: usize = 0,
 checked: bool = true,
 slider: f32 = 0.64,
 dialog_open: bool = true,
+edit_buffer: std.ArrayList(u8) = .empty,
+color_font: []u8 = &.{},
 
 const Runner = @This();
 
 pub fn init(io: std.Io, allocator: std.mem.Allocator, backend: []const u8, update: bool) !Runner {
-    return .{
+    var runner: Runner = .{
         .io = io,
         .allocator = allocator,
         .backend = backend,
@@ -44,10 +47,64 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, backend: []const u8, updat
             .renderer = .{ .present_mode = .fifo, .clear_color = .{ 0.035, 0.043, 0.059, 1 } },
         }),
     };
+    errdefer runner.app.deinit();
+    try runner.app.main_viewport.ui_ctx.ui.text_system.addFace("mono", @embedFile("snapshot_mono"));
+    runner.color_font = try colorFont(allocator, @embedFile("snapshot_mono"));
+    errdefer allocator.free(runner.color_font);
+    try runner.app.main_viewport.ui_ctx.ui.text_system.addFace("color", runner.color_font);
+    try runner.edit_buffer.appendSlice(allocator, "if (a != b) return a -> b;");
+    return runner;
 }
 
 pub fn deinit(self: *Runner) void {
+    self.edit_buffer.deinit(self.allocator);
     self.app.deinit();
+    self.allocator.free(self.color_font);
+}
+
+/// `base` plus COLRv0/CPAL tables drawing "O" as a red O, a blue + and a text-colored dot.
+fn colorFont(allocator: std.mem.Allocator, base: []const u8) ![]u8 {
+    var program = try ui.text.FontProgram.init(allocator, base, 0);
+    defer program.deinit();
+    const o = program.cmap.glyph('O');
+    const plus = program.cmap.glyph('+');
+    const dot = program.cmap.glyph('.');
+    const colr = [_]u16{ 0, 1, 0, 14, 0, 20, 3, o, 0, 3, o, 0, plus, 1, dot, 0xFFFF };
+    const cpal = [_]u16{ 0, 2, 1, 2, 0, 14, 0, 0x2040, 0xE0FF, 0xE070, 0x20FF };
+    const extra = [_]struct { tag: *const [4]u8, words: []const u16 }{ .{ .tag = "COLR", .words = &colr }, .{ .tag = "CPAL", .words = &cpal } };
+
+    const count = std.mem.readInt(u16, base[4..6], .big);
+    const directory_end = 12 + @as(usize, count) * 16;
+    const shift = extra.len * 16;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, base[0..12]);
+    std.mem.writeInt(u16, out.items[4..6], count + @as(u16, extra.len), .big);
+    try out.appendNTimes(allocator, 0, (count + extra.len) * 16);
+    try out.appendSlice(allocator, base[directory_end..]);
+    var records: std.ArrayList([16]u8) = .empty;
+    defer records.deinit(allocator);
+    for (0..count) |index| {
+        var record = base[12 + index * 16 ..][0..16].*;
+        std.mem.writeInt(u32, record[8..12], std.mem.readInt(u32, record[8..12], .big) + @as(u32, @intCast(shift)), .big);
+        try records.append(allocator, record);
+    }
+    for (extra) |table| {
+        while (out.items.len % 4 != 0) try out.append(allocator, 0);
+        var record: [16]u8 = @splat(0);
+        record[0..4].* = table.tag.*;
+        std.mem.writeInt(u32, record[8..12], @intCast(out.items.len), .big);
+        std.mem.writeInt(u32, record[12..16], @intCast(table.words.len * 2), .big);
+        try records.append(allocator, record);
+        for (table.words) |word| try out.appendSlice(allocator, &std.mem.toBytes(std.mem.nativeToBig(u16, word)));
+    }
+    std.mem.sort([16]u8, records.items, {}, struct {
+        fn lessThan(_: void, a: [16]u8, b: [16]u8) bool {
+            return std.mem.order(u8, a[0..4], b[0..4]) == .lt;
+        }
+    }.lessThan);
+    for (records.items, 0..) |record, index| out.items[12 + index * 16 ..][0..16].* = record;
+    return out.toOwnedSlice(allocator);
 }
 
 pub fn start(self: *Runner) !void {
@@ -83,6 +140,7 @@ fn frame(view: *knots.View, app: *ui.Frame) !void {
         2 => try renderGraphics(app),
         3 => try self.renderOverlay(app),
         4 => try renderBackdrop(app),
+        5 => try self.renderText(app),
         else => unreachable,
     }
     try view.app.requestReadback(view.id, self.allocator);
@@ -399,6 +457,41 @@ fn renderLayout(app: *ui.Frame) !void {
                 .{Text{ .content = "This oversized child and its text are clipped by a rounded parent.", .style = &.{ .font_size = .md }, .key = .str("clip-text") }},
                 Rect{ .style = &.{ .width = .fixed(390), .height = .fixed(48), .background = .info, .radius = .{ .fixed = 24 } }, .key = .str("clip-pill") },
             },
+        },
+    });
+}
+
+const code_line = "const value = compute(input, 42) != other; // ok";
+const code_colors = [_]ui.Decoration.ColorSpan{
+    .{ .start = 0, .end = 5, .color = .{ 0.78, 0.47, 0.87, 1 } },
+    .{ .start = 14, .end = 21, .color = .{ 0.38, 0.69, 0.94, 1 } },
+    .{ .start = 29, .end = 31, .color = .{ 0.82, 0.6, 0.4, 1 } },
+    .{ .start = 33, .end = 35, .color = .{ 0.9, 0.35, 0.35, 1 } },
+    .{ .start = 43, .end = 48, .color = .{ 0.5, 0.55, 0.6, 1 } },
+};
+const underlined = [_]ui.Decoration.Underline{.{ .start = 6, .end = 11, .color = .{ 0.9, 0.35, 0.35, 1 } }};
+const sized_runs = [_]ui.TextRun{
+    .{ .start = 8, .end = 14, .size = 28 },
+    .{ .start = 24, .end = 31, .font = "mono" },
+};
+
+fn renderText(self: *Runner, app: *ui.Frame) !void {
+    const input_key = ui.Key.str("text-edit");
+    app.ui().state.focused = input_key.hash();
+    const edit_state = try app.ui().state.getOrCreate(.text_input, app.ui().allocator, input_key.hash());
+    edit_state.cursor = 7;
+    edit_state.sel_anchor = 7;
+    const mono: ui.Style = .{ .font = "mono", .font_size = .lg };
+    try app.e(.{
+        page(),
+        .{
+            Text{ .content = "Shaping: ligatures, colors, runs and carets", .style = &.{ .font_size = .xl }, .key = .str("text-title"), .selectable = false },
+            Text{ .content = "a -> b => c != d === e <= f >= g |> h", .style = &mono, .key = .str("text-ligatures"), .selectable = false },
+            Text{ .content = code_line, .style = &mono, .colors = &code_colors, .underlines = &underlined, .key = .str("text-code"), .selectable = false },
+            Text{ .content = "Mixed: a large word and mono -> run.", .runs = &sized_runs, .key = .str("text-runs"), .selectable = false },
+            Text{ .content = "tab\tstops\tline up", .style = &mono, .key = .str("text-tabs"), .selectable = false },
+            TextInput{ .buf = &self.edit_buffer, .allocator = self.allocator, .key = input_key, .style = &.{ .font = "mono", .font_size = .lg, .width = .fixed(420) } },
+            Text{ .content = "COLR layers: O O", .style = &.{ .font = "color", .font_size = .xl }, .key = .str("text-color"), .selectable = false },
         },
     });
 }

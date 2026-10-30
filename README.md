@@ -27,8 +27,10 @@ Select a backend with the `gpu_backend` dependency option. Read
 ## Known limitations
 
 - Linux windows use Wayland only. There is no X11 support.
-- Text uses one glyph for each Unicode codepoint. There is no complex shaping,
-  bidirectional text, ligatures, kerning, font fallback, or IME composition.
+- Text shaping matches HarfBuzz for simple scripts (ligatures, kerning, marks,
+  font fallback, COLRv0 color glyphs). There is no complex-script shaping
+  (Arabic, Indic, …), bidirectional or vertical text, bitmap color glyphs, or IME
+  composition. Variable fonts are used at their default instance.
 - Accessibility (AccessKit) is available on macOS, Windows, and Linux. It is
   not available in the browser.
 
@@ -51,7 +53,6 @@ Select a backend with the `gpu_backend` dependency option. Read
 | accesskit (`lib/accesskit`) | Native accessibility | Static, patched so it links next to wgpu-native |
 | zig_objc | macOS windowing | - |
 | wayland | Linux windowing | System `libwayland` |
-| TrueType | Text | - |
 | js_bridge (`lib/js-bridge`) | Browser host | - |
 | celer | `zig build dev` web server (dev only) | - |
 

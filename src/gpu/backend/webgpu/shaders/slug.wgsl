@@ -1,8 +1,6 @@
 // WGSL port of the Slug analytic font rendering algorithm.
 // Reference: https://github.com/EricLengyel/Slug/tree/main
 
-const LOG_BAND_TEXTURE_WIDTH: u32 = 12u;
-
 struct Uniforms {
     mvp_row0: vec4f,
     mvp_row1: vec4f,
@@ -12,8 +10,17 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(1) @binding(0) var curve_texture: texture_2d<f32>;
-@group(1) @binding(1) var band_texture: texture_2d<u32>;
+struct GlyphEntry {
+    bounds: vec4f,
+    band: vec4f,
+    blob: u32,
+    points: u32,
+    band_max: u32,
+    flags: u32,
+};
+
+@group(1) @binding(0) var<storage, read> glyph_table: array<GlyphEntry>;
+@group(1) @binding(1) var<storage, read> glyph_words: array<u32>;
 
 struct ClipNode {
     rect: vec4f,
@@ -30,12 +37,11 @@ var<storage, read> clip_nodes: array<ClipNode>;
 const MAX_CLIP_DEPTH: u32 = 32u;
 
 struct VsIn {
-    @location(0) bounds: vec4f,
-    @location(1) origin_size: vec4f,
-    @location(2) glyph: vec2f,
-    @location(3) bnd: vec4f,
-    @location(4) col: vec4f,
-    @location(5) clip_node: f32,
+    @location(0) origin: vec2f,
+    @location(1) size: f32,
+    @location(2) slot: u32,
+    @location(3) col: vec4f,
+    @location(4) clip_node: f32,
 };
 
 struct VsOut {
@@ -43,9 +49,10 @@ struct VsOut {
     @location(0) color: vec4f,
     @location(1) texcoord: vec2f,
     @interpolate(flat) @location(2) banding: vec4f,
-    @interpolate(flat) @location(3) glyph: vec4i,
-    @location(4) world_pos: vec2f,
-    @location(5) clip_node: f32,
+    @interpolate(flat) @location(3) glyph: vec4u,
+    @interpolate(flat) @location(4) quant: vec4f,
+    @location(5) world_pos: vec2f,
+    @location(6) clip_node: f32,
 };
 
 fn slug_dilate(
@@ -75,26 +82,16 @@ fn slug_dilate(
     return vec4f(vpos, vtex);
 }
 
-fn unpack_glyph(tex: vec4f) -> vec4i {
-    let zb = bitcast<u32>(tex.z);
-    let wb = bitcast<u32>(tex.w);
-    return vec4i(
-        i32(zb & 0xFFFFu),
-        i32(zb >> 16u),
-        i32(wb & 0xFFFFu),
-        i32(wb >> 16u),
-    );
-}
-
 @vertex
 fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
     let right = index == 1u || index == 2u;
     let bottom = index == 2u || index == 3u;
-    let em = vec2f(select(in.bounds.x, in.bounds.z, right), select(in.bounds.y, in.bounds.w, bottom));
+    let entry = glyph_table[in.slot];
+    let em = vec2f(select(entry.bounds.x, entry.bounds.z, right), select(entry.bounds.w, entry.bounds.y, bottom));
     let normal = vec2f(select(-0.70710677, 0.70710677, right), select(-0.70710677, 0.70710677, bottom));
-    let pos = vec4f(in.origin_size.xy + em * vec2f(in.origin_size.z, -in.origin_size.z), normal);
-    let tex = vec4f(em, in.glyph);
-    let jac = vec4f(in.origin_size.w, 0.0, 0.0, -in.origin_size.w);
+    let pos = vec4f(in.origin + em * vec2f(in.size, -in.size), normal);
+    let tex = vec4f(em, 0.0, 0.0);
+    let jac = vec4f(1.0 / in.size, 0.0, 0.0, -1.0 / in.size);
     let dilated = slug_dilate(pos, tex, jac, u.mvp_row0, u.mvp_row1, u.mvp_row3, u.viewport.zw);
     let p = dilated.xy;
 
@@ -106,8 +103,9 @@ fn vs_main(in: VsIn, @builtin(vertex_index) index: u32) -> VsOut {
         p.x * u.mvp_row3.x + p.y * u.mvp_row3.y + u.mvp_row3.w,
     );
     out.texcoord = dilated.zw;
-    out.banding = in.bnd;
-    out.glyph = unpack_glyph(tex);
+    out.banding = entry.band;
+    out.glyph = vec4u(entry.blob, entry.points, entry.band_max & 0xFFu, (entry.band_max >> 8u) & 0xFFu);
+    out.quant = vec4f(entry.bounds.xy, (entry.bounds.zw - entry.bounds.xy) / 65535.0);
     out.color = in.col;
     out.world_pos = p;
     out.clip_node = in.clip_node;
@@ -223,16 +221,14 @@ fn solve_vert_poly(p12: vec4f, p3: vec2f) -> vec2f {
     );
 }
 
-fn offset_texture_loc(base: vec2i, offset: i32) -> vec2i {
-    let mask: i32 = i32((1u << LOG_BAND_TEXTURE_WIDTH) - 1u);
-    var loc = vec2i(base.x + offset, base.y);
-    loc.y = loc.y + (loc.x >> LOG_BAND_TEXTURE_WIDTH);
-    loc.x = loc.x & mask;
-    return loc;
+fn glyph_point(base: u32, index: u32, quant: vec4f) -> vec2f {
+    let word = glyph_words[base + index];
+    return quant.xy + vec2f(f32(word & 0xFFFFu), f32(word >> 16u)) * quant.zw;
 }
 
-fn calc_band_loc(glyph_loc: vec2i, offset: u32) -> vec2i {
-    return offset_texture_loc(glyph_loc, i32(offset));
+fn band_curve(blob: u32, list: u32, i: u32) -> u32 {
+    let word = glyph_words[blob + list + (i >> 1u)];
+    return (word >> ((i & 1u) * 16u)) & 0xFFFFu;
 }
 
 fn calc_coverage(xcov: f32, ycov: f32, xwgt: f32, ywgt: f32) -> f32 {
@@ -242,28 +238,29 @@ fn calc_coverage(xcov: f32, ycov: f32, xwgt: f32, ywgt: f32) -> f32 {
     return clamp(cov, 0.0, 1.0);
 }
 
-fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4i) -> f32 {
+fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4u, quant: vec4f) -> f32 {
     let ems_per_pixel = fwidth(render_coord);
     let pixels_per_em = vec2f(1.0, 1.0) / ems_per_pixel;
 
-    var band_max = glyph_data.zw;
-    band_max.y = band_max.y & 0x00FF;
-
+    let band_max = vec2i(glyph_data.zw);
     var band_index = vec2i(render_coord * banding.xy + banding.zw);
     band_index = clamp(band_index, vec2i(0, 0), band_max);
-    let glyph_loc = glyph_data.xy;
+    let blob = glyph_data.x;
+    let points = blob + glyph_data.y;
 
     var xcov: f32 = 0.0;
     var xwgt: f32 = 0.0;
 
-    let hband = textureLoad(band_texture, offset_texture_loc(glyph_loc, band_index.y), 0).xy;
-    let hcount = i32(hband.x);
-    let hloc = calc_band_loc(glyph_loc, hband.y);
+    let hband = glyph_words[blob + u32(band_index.y)];
+    let hcount = hband & 0xFFFFu;
+    let hlist = hband >> 16u;
 
-    for (var i: i32 = 0; i < hcount; i = i + 1) {
-        let curve_loc = vec2i(textureLoad(band_texture, offset_texture_loc(hloc, i), 0).xy);
-        let p12 = textureLoad(curve_texture, curve_loc, 0) - vec4f(render_coord, render_coord);
-        let p3 = textureLoad(curve_texture, offset_texture_loc(curve_loc, 1), 0).xy - render_coord;
+    for (var i: u32 = 0u; i < hcount; i = i + 1u) {
+        let curve = points + band_curve(blob, hlist, i);
+        let p1 = glyph_point(curve, 0u, quant) - render_coord;
+        let p2 = glyph_point(curve, 1u, quant) - render_coord;
+        let p3 = glyph_point(curve, 2u, quant) - render_coord;
+        let p12 = vec4f(p1, p2);
 
         if max(max(p12.x, p12.z), p3.x) * pixels_per_em.x < -0.5 {
             break;
@@ -286,14 +283,16 @@ fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4i) -> f32 {
     var ycov: f32 = 0.0;
     var ywgt: f32 = 0.0;
 
-    let vband = textureLoad(band_texture, offset_texture_loc(glyph_loc, band_max.y + 1 + band_index.x), 0).xy;
-    let vcount = i32(vband.x);
-    let vloc = calc_band_loc(glyph_loc, vband.y);
+    let vband = glyph_words[blob + u32(band_max.y + 1 + band_index.x)];
+    let vcount = vband & 0xFFFFu;
+    let vlist = vband >> 16u;
 
-    for (var i: i32 = 0; i < vcount; i = i + 1) {
-        let curve_loc = vec2i(textureLoad(band_texture, offset_texture_loc(vloc, i), 0).xy);
-        let p12 = textureLoad(curve_texture, curve_loc, 0) - vec4f(render_coord, render_coord);
-        let p3 = textureLoad(curve_texture, offset_texture_loc(curve_loc, 1), 0).xy - render_coord;
+    for (var i: u32 = 0u; i < vcount; i = i + 1u) {
+        let curve = points + band_curve(blob, vlist, i);
+        let p1 = glyph_point(curve, 0u, quant) - render_coord;
+        let p2 = glyph_point(curve, 1u, quant) - render_coord;
+        let p3 = glyph_point(curve, 2u, quant) - render_coord;
+        let p12 = vec4f(p1, p2);
 
         if max(max(p12.y, p12.w), p3.y) * pixels_per_em.y < -0.5 {
             break;
@@ -317,7 +316,7 @@ fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4i) -> f32 {
 }
 
 fn shade_linear(in: VsOut) -> vec4f {
-    let coverage = slug_render(in.texcoord, in.banding, in.glyph);
+    let coverage = slug_render(in.texcoord, in.banding, in.glyph, in.quant);
     let alpha = in.color.a * coverage * clipAlpha(in.world_pos, in.clip_node);
     return vec4f(in.color.rgb * alpha, alpha);
 }

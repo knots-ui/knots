@@ -29,9 +29,10 @@ pub const bindings = struct {
 
     pub const text_uniform_group: u32 = 0;
     pub const text_uniform: u32 = 0;
+    /// Read-only storage: the slot table (vertex stage) and the glyph words (fragment stage).
     pub const glyph_atlas_group: u32 = 1;
-    pub const glyph_curve_atlas: u32 = 0;
-    pub const glyph_band_atlas: u32 = 1;
+    pub const glyph_table: u32 = 0;
+    pub const glyph_words: u32 = 1;
 };
 
 /// The primitive uniform is the logical viewport width and height in pixels.
@@ -47,8 +48,6 @@ pub const TextUniform = extern struct {
 };
 
 pub const formats = struct {
-    pub const glyph_curve: types.Texture.Format = .rgba32f;
-    pub const glyph_band: types.Texture.Format = .rgba32u;
     pub const offscreen_color: types.Texture.Format = .rgba8;
     pub const index_size_bytes: u8 = @sizeOf(u32);
 };

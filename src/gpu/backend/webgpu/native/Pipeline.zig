@@ -152,6 +152,8 @@ fn toWgpuVertexFormat(f: CommonPipeline.VertexFormat) wgpu.RenderPipeline.Vertex
         .f32x2 => .float32x2,
         .f32x3 => .float32x3,
         .f32x4 => .float32x4,
+        .u32 => .uint32,
+        .f16x4 => .float16x4,
     };
 }
 

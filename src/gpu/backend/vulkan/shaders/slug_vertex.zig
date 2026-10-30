@@ -1,11 +1,14 @@
 //! Zig port of the Slug analytic font rendering algorithm.
 //! Reference: https://github.com/EricLengyel/Slug/tree/main
 
-const Vec4f = @import("spirv").Vec4f;
-const Vec2f = @import("spirv").Vec2f;
-const uniform = @import("spirv").uniform;
-const input = @import("spirv").input;
-const output = @import("spirv").output;
+const spirv = @import("spirv");
+const ui = @import("ui.zig");
+
+const Vec4f = spirv.Vec4f;
+const Vec2f = spirv.Vec2f;
+const uniform = spirv.uniform;
+const input = spirv.input;
+const output = spirv.output;
 
 const Uniforms = extern struct {
     mvp_row0: Vec4f,
@@ -16,20 +19,21 @@ const Uniforms = extern struct {
 };
 
 const u = uniform(Uniforms, "u", .{ .descriptor = .{ .set = 0, .binding = 0 } });
+const glyph_table = spirv.storageBuffer(ui.GlyphTable, "glyph_table", .{ .descriptor = .{ .set = 1, .binding = 0 } });
 
-const in_bounds = input(Vec4f, "in_bounds", .{ .location = 0 });
-const in_origin_size = input(Vec4f, "in_origin_size", .{ .location = 1 });
-const in_glyph = input(Vec2f, "in_glyph", .{ .location = 2 });
-const in_bnd = input(Vec4f, "in_bnd", .{ .location = 3 });
-const in_col = input(Vec4f, "in_col", .{ .location = 4 });
-const in_clip_node = input(f32, "in_clip_node", .{ .location = 5 });
+const in_origin = input(Vec2f, "in_origin", .{ .location = 0 });
+const in_size = input(f32, "in_size", .{ .location = 1 });
+const in_slot = input(u32, "in_slot", .{ .location = 2 });
+const in_col = input(Vec4f, "in_col", .{ .location = 3 });
+const in_clip_node = input(f32, "in_clip_node", .{ .location = 4 });
 
 const out_color = output(Vec4f, "out_color", .{ .location = 0 });
 const out_texcoord = output(Vec2f, "out_texcoord", .{ .location = 1 });
 const out_banding = output(Vec4f, "out_banding", .{ .location = 2 });
-const out_glyph = output(@Vector(4, i32), "out_glyph", .{ .location = 3 });
-const out_world_pos = output(Vec2f, "out_world_pos", .{ .location = 4 });
-const out_clip_node = output(f32, "out_clip_node", .{ .location = 5 });
+const out_glyph = output(spirv.Vec4u, "out_glyph", .{ .location = 3 });
+const out_quant = output(Vec4f, "out_quant", .{ .location = 4 });
+const out_world_pos = output(Vec2f, "out_world_pos", .{ .location = 5 });
+const out_clip_node = output(f32, "out_clip_node", .{ .location = 6 });
 
 extern var position: Vec4f addrspace(.output);
 
@@ -80,18 +84,20 @@ export fn main() callconv(.spirv_vertex) void {
     const index = @import("std").spirv.vertex_index;
     const right = index == 1 or index == 2;
     const bottom = index == 2 or index == 3;
-    const bounds = in_bounds.*;
-    const origin = in_origin_size.*;
+    const entry = glyph_table.*.entries[in_slot.*];
+    const bounds = entry.bounds;
+    const origin = in_origin.*;
+    const size = in_size.*;
     const em_x = if (right) bounds[2] else bounds[0];
-    const em_y = if (bottom) bounds[3] else bounds[1];
+    const em_y = if (bottom) bounds[1] else bounds[3];
     const pos = Vec4f{
-        origin[0] + em_x * origin[2],
-        origin[1] - em_y * origin[2],
+        origin[0] + em_x * size,
+        origin[1] - em_y * size,
         if (right) 0.70710677 else -0.70710677,
         if (bottom) 0.70710677 else -0.70710677,
     };
-    const tex = Vec4f{ em_x, em_y, in_glyph.*[0], in_glyph.*[1] };
-    const jac = Vec4f{ origin[3], 0, 0, -origin[3] };
+    const tex = Vec4f{ em_x, em_y, 0, 0 };
+    const jac = Vec4f{ 1.0 / size, 0, 0, -1.0 / size };
 
     const dilated = slugDilate(
         pos,
@@ -113,18 +119,11 @@ export fn main() callconv(.spirv_vertex) void {
     };
 
     out_texcoord.* = .{ dilated[2], dilated[3] };
-    out_banding.* = in_bnd.*;
+    out_banding.* = entry.band;
     out_color.* = in_col.*;
     out_world_pos.* = .{ px, py };
     out_clip_node.* = in_clip_node.*;
-
-    const t = tex;
-    const zb: u32 = @bitCast(t[2]);
-    const wb: u32 = @bitCast(t[3]);
-    out_glyph.* = .{
-        @bitCast(zb & 0xFFFF),
-        @bitCast(zb >> 16),
-        @bitCast(wb & 0xFFFF),
-        @bitCast(wb >> 16),
-    };
+    out_glyph.* = .{ entry.blob, entry.points, entry.band_max & 0xFF, (entry.band_max >> 8) & 0xFF };
+    const quant_scale: f32 = 1.0 / 65535.0;
+    out_quant.* = .{ bounds[0], bounds[1], (bounds[2] - bounds[0]) * quant_scale, (bounds[3] - bounds[1]) * quant_scale };
 }

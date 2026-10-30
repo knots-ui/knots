@@ -19,6 +19,23 @@ pub const ClipNodes = extern struct {
     clip_nodes: @SpirvType(.{ .runtime_array = ClipNode }),
 };
 
+pub const GlyphEntry = extern struct {
+    bounds: Vec4f,
+    band: Vec4f,
+    blob: u32,
+    points: u32,
+    band_max: u32,
+    flags: u32,
+};
+
+pub const GlyphTable = extern struct {
+    entries: @SpirvType(.{ .runtime_array = GlyphEntry }),
+};
+
+pub const GlyphWords = extern struct {
+    words: @SpirvType(.{ .runtime_array = u32 }),
+};
+
 pub fn sdRoundedBox(p: Vec2f, half_size: Vec2f, radii: Vec4f) f32 {
     const radius = cornerRadius(p, normalizedRadii(radii, half_size * @as(Vec2f, @splat(2.0))));
     const q = absVec2f(p) - half_size + @as(Vec2f, @splat(radius));
