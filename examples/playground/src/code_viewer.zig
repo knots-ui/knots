@@ -517,20 +517,26 @@ fn renderLine(frame: *ui.Frame, line: VisibleLine, line_idx: usize) !void {
             },
         });
     }
-    const spans = Rect{ .key = ui.Key.str("code.spans").indexed(line_idx), .style = &.{ .height = .fixed(line_height), .direction = .row } };
-    _ = try spans.open(frame);
-    for (line.row.spans, 0..) |span, span_idx| {
+    // One text per line, colored by spans, so ligatures can form across tokens.
+    const arena = frame.arena();
+    var content: std.ArrayList(u8) = .empty;
+    var colors: std.ArrayList(ui.Decoration.ColorSpan) = .empty;
+    const scope = frame.ui().parentContent();
+    for (line.row.spans) |span| {
         if (std.mem.eql(u8, span.content, "\n")) continue;
         if (span.content.len == 0) continue;
-
+        const start: u32 = @intCast(content.items.len);
+        try content.appendSlice(arena, span.content);
+        try colors.append(arena, .{ .start = start, .end = @intCast(content.items.len), .color = scope.color(span.color, &frame.ui().theme) });
+    }
+    if (content.items.len > 0) {
         try frame.e(Text{
-            .content = span.content,
-            .style = &.{ .foreground = span.color },
+            .content = content.items,
+            .colors = colors.items,
             .selectable = false,
-            .key = ui.Key.str("code.span").indexed(line_idx).indexed(span_idx),
+            .key = ui.Key.str("code.spans").indexed(line_idx),
         });
     }
-    try spans.close(frame);
     try code.close(frame);
 
     try row.close(frame);
