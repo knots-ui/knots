@@ -282,6 +282,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/text/root.zig"),
         .imports = &.{.{ .name = "TrueType", .module = truetype_dep.module("TrueType") }},
     });
+    text_mod.addAnonymousImport("test_font", .{ .root_source_file = b.path("src/ui/fonts/default.ttf") });
 
     const render_mod = b.addModule("render", .{
         .target = target,
