@@ -7,25 +7,21 @@ const ui = @import("ui.zig");
 const Vec4f = spirv.Vec4f;
 const Vec3f = spirv.Vec3f;
 const Vec2f = spirv.Vec2f;
-const Vec4i = spirv.Vec4i;
 const Vec2i = spirv.Vec2i;
 const storageBuffer = spirv.storageBuffer;
-const uniformConstant = spirv.uniformConstant;
 const input = spirv.input;
 const output = spirv.output;
 
-const LOG_BAND_TEXTURE_WIDTH: u5 = 12;
-
-const curve_texture = uniformConstant(spirv.Image2D(f32), "curve_texture", .{ .descriptor = .{ .set = 1, .binding = 0 } });
-const band_texture = uniformConstant(spirv.Image2D(u32), "band_texture", .{ .descriptor = .{ .set = 1, .binding = 1 } });
+const glyph_words = storageBuffer(ui.GlyphWords, "glyph_words", .{ .descriptor = .{ .set = 1, .binding = 1 } });
 const clip_nodes = storageBuffer(ui.ClipNodes, "clip_nodes", .{ .descriptor = .{ .set = 2, .binding = 0 } });
 
 const in_color = input(Vec4f, "in_color", .{ .location = 0 });
 const in_texcoord = input(Vec2f, "in_texcoord", .{ .location = 1 });
 const in_banding = input(Vec4f, "in_banding", .{ .flat = 2 });
-const in_glyph = input(Vec4i, "in_glyph", .{ .flat = 3 });
-const in_world_pos = input(Vec2f, "in_world_pos", .{ .location = 4 });
-const in_clip_node = input(f32, "in_clip_node", .{ .location = 5 });
+const in_glyph = input(spirv.Vec4u, "in_glyph", .{ .flat = 3 });
+const in_quant = input(Vec4f, "in_quant", .{ .flat = 4 });
+const in_world_pos = input(Vec2f, "in_world_pos", .{ .location = 5 });
+const in_clip_node = input(f32, "in_clip_node", .{ .location = 6 });
 
 const frag_color = output(Vec4f, "frag_color", .{ .location = 0 });
 
@@ -84,28 +80,23 @@ fn solveVertPoly(p12: Vec4f, p3: Vec2f) Vec2f {
     };
 }
 
-fn offsetTextureLoc(base: Vec2i, offset: i32) Vec2i {
-    const mask = (@as(i32, 1) << LOG_BAND_TEXTURE_WIDTH) - 1;
-    var x = base[0] + offset;
-    const y_offset = asm (
-        \\%int = OpTypeInt 32 1
-        \\%uint = OpTypeInt 32 0
-        \\%shift = OpConstant %uint 12
-        \\%ret = OpShiftRightArithmetic %int %x %shift
-        : [ret] "=r" (-> i32),
-        : [x] "" (x),
-    );
-    const y = base[1] + y_offset;
-    x &= mask;
-    return .{ x, y };
+fn word(index: u32) u32 {
+    return glyph_words.*.words[index];
+}
+
+fn glyphPoint(index: u32, quant: Vec4f) Vec2f {
+    const value = word(index);
+    const q = Vec2f{ @floatFromInt(value & 0xFFFF), @floatFromInt(value >> 16) };
+    return Vec2f{ quant[0], quant[1] } + q * Vec2f{ quant[2], quant[3] };
+}
+
+fn bandCurve(list: u32, i: u32) u32 {
+    const shift: u5 = @intCast((i & 1) * 16);
+    return (word(list + (i >> 1)) >> shift) & 0xFFFF;
 }
 
 fn intBits(value: u32) i32 {
     return @bitCast(value);
-}
-
-fn calcBandLoc(glyph_loc: Vec2i, offset: u32) Vec2i {
-    return offsetTextureLoc(glyph_loc, intBits(offset));
 }
 
 fn calcCoverage(xcov: f32, ycov: f32, xwgt: f32, ywgt: f32) f32 {
@@ -114,19 +105,11 @@ fn calcCoverage(xcov: f32, ycov: f32, xwgt: f32, ywgt: f32) f32 {
     return spirv.clamp(@max(combined, alt), 0.0, 1.0);
 }
 
-fn texelFetchBand(loc: Vec2i) spirv.Vec4u {
-    return spirv.texelFetch2Du(band_texture, loc);
-}
-
-fn texelFetchCurve(loc: Vec2i) Vec4f {
-    return spirv.texelFetch2Df(curve_texture, loc);
-}
-
-fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
+fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: spirv.Vec4u, quant: Vec4f) f32 {
     const ems_per_pixel = spirv.fwidth2f(render_coord);
     const pixels_per_em = @as(Vec2f, @splat(1.0)) / ems_per_pixel;
 
-    const band_max = Vec2i{ glyph_data[2], glyph_data[3] & 0x00FF };
+    const band_max = Vec2i{ intBits(glyph_data[2]), intBits(glyph_data[3]) };
     var band_index = Vec2i{
         @intFromFloat(render_coord[0] * banding[0] + banding[2]),
         @intFromFloat(render_coord[1] * banding[1] + banding[3]),
@@ -135,22 +118,24 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
         @min(@max(band_index[0], 0), band_max[0]),
         @min(@max(band_index[1], 0), band_max[1]),
     };
-    const glyph_loc = Vec2i{ glyph_data[0], glyph_data[1] };
+    const blob = glyph_data[0];
+    const points = blob + glyph_data[1];
+    const coord = Vec4f{ render_coord[0], render_coord[1], render_coord[0], render_coord[1] };
 
     var xcov: f32 = 0.0;
     var xwgt: f32 = 0.0;
 
-    const hband = texelFetchBand(offsetTextureLoc(glyph_loc, band_index[1]));
-    const hcount = intBits(hband[0]);
-    const hloc = calcBandLoc(glyph_loc, hband[1]);
+    const hband = word(blob + @as(u32, @bitCast(band_index[1])));
+    const hcount = hband & 0xFFFF;
+    const hlist = blob + (hband >> 16);
 
-    var hi: i32 = 0;
+    var hi: u32 = 0;
     while (hi < hcount) : (hi += 1) {
-        const curve_band = texelFetchBand(offsetTextureLoc(hloc, hi));
-        const curve_loc = Vec2i{ intBits(curve_band[0]), intBits(curve_band[1]) };
-        const p12 = texelFetchCurve(curve_loc) - Vec4f{ render_coord[0], render_coord[1], render_coord[0], render_coord[1] };
-        const p3_texel = texelFetchCurve(offsetTextureLoc(curve_loc, 1));
-        const p3 = Vec2f{ p3_texel[0] - render_coord[0], p3_texel[1] - render_coord[1] };
+        const curve = points + bandCurve(hlist, hi);
+        const p1 = glyphPoint(curve, quant);
+        const p2 = glyphPoint(curve + 1, quant);
+        const p12 = Vec4f{ p1[0], p1[1], p2[0], p2[1] } - coord;
+        const p3 = glyphPoint(curve + 2, quant) - render_coord;
 
         if (@max(@max(p12[0], p12[2]), p3[0]) * pixels_per_em[0] < -0.5) break;
 
@@ -171,17 +156,17 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
     var ycov: f32 = 0.0;
     var ywgt: f32 = 0.0;
 
-    const vband = texelFetchBand(offsetTextureLoc(glyph_loc, band_max[1] + 1 + band_index[0]));
-    const vcount = intBits(vband[0]);
-    const vloc = calcBandLoc(glyph_loc, vband[1]);
+    const vband = word(blob + @as(u32, @bitCast(band_max[1] + 1 + band_index[0])));
+    const vcount = vband & 0xFFFF;
+    const vlist = blob + (vband >> 16);
 
-    var vi: i32 = 0;
+    var vi: u32 = 0;
     while (vi < vcount) : (vi += 1) {
-        const curve_band = texelFetchBand(offsetTextureLoc(vloc, vi));
-        const curve_loc = Vec2i{ intBits(curve_band[0]), intBits(curve_band[1]) };
-        const p12 = texelFetchCurve(curve_loc) - Vec4f{ render_coord[0], render_coord[1], render_coord[0], render_coord[1] };
-        const p3_texel = texelFetchCurve(offsetTextureLoc(curve_loc, 1));
-        const p3 = Vec2f{ p3_texel[0] - render_coord[0], p3_texel[1] - render_coord[1] };
+        const curve = points + bandCurve(vlist, vi);
+        const p1 = glyphPoint(curve, quant);
+        const p2 = glyphPoint(curve + 1, quant);
+        const p12 = Vec4f{ p1[0], p1[1], p2[0], p2[1] } - coord;
+        const p3 = glyphPoint(curve + 2, quant) - render_coord;
 
         if (@max(@max(p12[1], p12[3]), p3[1]) * pixels_per_em[1] < -0.5) break;
 
@@ -204,7 +189,7 @@ fn slugRender(render_coord: Vec2f, banding: Vec4f, glyph_data: Vec4i) f32 {
 
 fn fragment(comptime encode_srgb: bool) void {
     const color = in_color.*;
-    const coverage = slugRender(in_texcoord.*, in_banding.*, in_glyph.*);
+    const coverage = slugRender(in_texcoord.*, in_banding.*, in_glyph.*, in_quant.*);
     const alpha = color[3] * coverage * ui.clipAlpha(clip_nodes, in_world_pos.*, in_clip_node.*);
     const col = Vec4f{ color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha };
     if (comptime encode_srgb) {

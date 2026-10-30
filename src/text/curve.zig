@@ -1,5 +1,5 @@
 const std = @import("std");
-const TrueType = @import("TrueType");
+const Outline = @import("font/Outline.zig");
 
 pub const Curve = struct {
     p1: [2]f32,
@@ -77,7 +77,7 @@ fn appendCubic(curves: *std.ArrayList(Curve), allocator: std.mem.Allocator, cubi
     }
 }
 
-pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueType.Vertex, units_per_em: f32) ![]Curve {
+pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const Outline.Vertex, units_per_em: f32) ![]Curve {
     std.debug.assert(std.math.isFinite(units_per_em));
     std.debug.assert(units_per_em > 0);
 
@@ -92,11 +92,11 @@ pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueTyp
             @as(f32, @floatFromInt(vertex.x)) * units_per_em_inverse,
             @as(f32, @floatFromInt(vertex.y)) * units_per_em_inverse,
         };
-        switch (vertex.type) {
-            .vmove => {
+        switch (vertex.kind) {
+            .move => {
                 current_point = point;
             },
-            .vline => {
+            .line => {
                 try curves.append(allocator, .{
                     .p1 = current_point,
                     .p2 = midpoint(current_point, point),
@@ -104,7 +104,7 @@ pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueTyp
                 });
                 current_point = point;
             },
-            .vcurve => {
+            .quad => {
                 try curves.append(allocator, .{
                     .p1 = current_point,
                     .p2 = .{
@@ -115,7 +115,7 @@ pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueTyp
                 });
                 current_point = point;
             },
-            .vcubic => {
+            .cubic => {
                 try appendCubic(&curves, allocator, .{
                     .p0 = current_point,
                     .p1 = .{
@@ -130,7 +130,6 @@ pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueTyp
                 });
                 current_point = point;
             },
-            else => {},
         }
     }
 
@@ -140,12 +139,12 @@ pub fn decomposeVertices(allocator: std.mem.Allocator, vertices: []const TrueTyp
 test "decomposeVertices produces line as degenerate quadratic" {
     const allocator = std.testing.allocator;
 
-    const vertices = [_]TrueType.Vertex{
-        .{ .x = 0, .y = 0, .cx = 0, .cy = 0, .cx1 = 0, .cy1 = 0, .type = .vmove },
-        .{ .x = 1024, .y = 0, .cx = 0, .cy = 0, .cx1 = 0, .cy1 = 0, .type = .vline },
-        .{ .x = 1024, .y = 1024, .cx = 0, .cy = 0, .cx1 = 0, .cy1 = 0, .type = .vline },
-        .{ .x = 0, .y = 1024, .cx = 0, .cy = 0, .cx1 = 0, .cy1 = 0, .type = .vline },
-        .{ .x = 0, .y = 0, .cx = 0, .cy = 0, .cx1 = 0, .cy1 = 0, .type = .vline },
+    const vertices = [_]Outline.Vertex{
+        .{ .kind = .move, .x = 0, .y = 0 },
+        .{ .kind = .line, .x = 1024, .y = 0 },
+        .{ .kind = .line, .x = 1024, .y = 1024 },
+        .{ .kind = .line, .x = 0, .y = 1024 },
+        .{ .kind = .line, .x = 0, .y = 0 },
     };
 
     const curves = try decomposeVertices(allocator, &vertices, 1024.0);

@@ -391,10 +391,9 @@ fn header(frame: *ui.Frame, source_path: []const u8, highlighted: ?Highlighted, 
 fn characterWidth(frame: *ui.Frame) !f32 {
     const ui_ = frame.ui();
     const content = ui_.parentContent();
-    const face = try ui_.font.getFace(content.font);
     const sample = "0000000000";
-    const metrics = try face.measure(sample, content.font_size * ui_.content_scale);
-    return metrics.width / ui_.content_scale / sample.len;
+    const layout = try ui_.textLayout(sample, content.font_size, content.font, 0);
+    return layout.width / ui_.content_scale / sample.len;
 }
 
 /// Mouse selection, from the layout of the previous frame.

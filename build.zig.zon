@@ -27,10 +27,6 @@
             .url = "git+https://github.com/marlersoft/zigwin32.git#ec98bb4d9eea532320a8551720a9e3ec6de64994",
             .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
         },
-        .TrueType = .{
-            .url = "git+https://codeberg.org/andrewrk/TrueType.git#c90d976877f1dbd4014f6fa4da30139f41df366b",
-            .hash = "TrueType-1.0.0-Ne-mWFx1AQAk8u43nEzx-W3oPUGaXnuLNFa2jTStHFjj",
-        },
         .wayland = .{
             .url = "git+https://codeberg.org/ifreund/zig-wayland?ref=next-zig#5c01e66af4bd2b3672250c31f1a8036a720eb078",
             .hash = "wayland-0.7.0-dev-lQa1krf8AQDEncPPkLgIo8fq4kXqSRsGdG1haA2hPj_w",
