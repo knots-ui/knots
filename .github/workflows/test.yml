@@ -66,6 +66,31 @@ jobs:
         working-directory: lib/js-bridge
         run: zig build test ${{ matrix.target_flag }} --summary all
 
+  shaping:
+    name: shaping goldens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2
+      - name: Install Wayland development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev wayland-protocols libxkbcommon-dev pkg-config
+
+      # Downloads have pinned hashes, so they only change with the manifest.
+      - uses: actions/cache@v4
+        with:
+          path: .cache/shaping/downloads
+          key: shaping-${{ hashFiles('tests/shaping/fonts.txt') }}
+
+      - name: Fetch the font corpus and test data
+        working-directory: tests/shaping
+        run: zig build fetch --summary all
+
+      - name: Compare against HarfBuzz
+        working-directory: tests/shaping
+        run: zig build test -Doptimize=ReleaseSafe --summary all
+
   wasi:
     name: wasm32-wasi
     runs-on: ubuntu-latest

@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     const platform: Platform = if (target.result.cpu.arch.isWasm()) .browser else .native;
     const web_threads_option = b.option(bool, "web_threads", "Enable worker threads in browser WebAssembly builds.") orelse true;
     const web_threads = web_threads_option and platform == .browser;
-    if (platform == .browser) web_build.configureWasmTarget(&target, web_threads);
+    if (platform == .browser) web_build.configureWasmTarget(&target, web_threads, optimize);
 
     const accesskit_dep = if (platform == .native)
         b.dependency("accesskit", .{ .target = target, .optimize = optimize })
@@ -67,8 +67,6 @@ pub fn build(b: *std.Build) void {
     const gpu_backend =
         b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
         defaultGpuBackend(target.result);
-
-    const truetype_dep = b.dependency("TrueType", .{ .target = target, .optimize = optimize });
 
     const js_bridge_mod = if (platform == .browser)
         b.dependency("js_bridge", .{ .target = target, .optimize = optimize }).module("js-bridge")
@@ -276,12 +274,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/math/root.zig"),
     });
 
-    const text_mod = b.createModule(.{
+    const text_mod = b.addModule("text", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/text/root.zig"),
-        .imports = &.{.{ .name = "TrueType", .module = truetype_dep.module("TrueType") }},
+        .imports = &.{.{ .name = "render_types", .module = render_types_mod }},
     });
+    text_mod.addAnonymousImport("test_font", .{ .root_source_file = b.path("src/ui/fonts/default.ttf") });
 
     const render_mod = b.addModule("render", .{
         .target = target,
@@ -464,6 +463,7 @@ pub fn build(b: *std.Build) void {
                 },
             }),
         });
+        snapshot_exe.root_module.addAnonymousImport("snapshot_mono", .{ .root_source_file = b.path("examples/playground/src/fonts/JetBrainsMono-VariableFont_wght.ttf") });
 
         const run_snapshots = b.addRunArtifact(snapshot_exe);
         run_snapshots.addArg(@tagName(gpu_backend));

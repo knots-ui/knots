@@ -48,7 +48,6 @@ frame_input: input_types.FrameInput,
 frame_state: ?Frame.State,
 generation: u64,
 atlas_id: u32,
-glyph_revision_emitted: u64,
 accessibility_pending: std.ArrayList(Accessibility.ActionRequest) = .empty,
 accessibility_frame: std.ArrayList(Accessibility.ActionRequest) = .empty,
 semantic_revision: u64 = 0,
@@ -70,7 +69,6 @@ pub fn init(allocator: std.mem.Allocator, cfg: Config) !Context {
         .frame_state = null,
         .generation = 0,
         .atlas_id = render.GlyphAtlas.allocateId(),
-        .glyph_revision_emitted = 0,
     };
 }
 
@@ -312,25 +310,18 @@ fn frameIsActive(self: *const Context) bool {
 }
 
 fn glyphAtlas(self: *Context) render.GlyphAtlas {
-    const builder = self.ui.font.glyph_builder;
-    comptime {
-        std.debug.assert(text.GlyphBuilder.texture_width == render.GlyphAtlas.width);
-        std.debug.assert(@sizeOf(text.GlyphBuilder.CurveTexel) == render.GlyphAtlas.texel_bytes);
-        std.debug.assert(@sizeOf(text.GlyphBuilder.BandTexel) == render.GlyphAtlas.texel_bytes);
-    }
+    const snapshot = self.ui.text_system.glyph_store.snapshot();
     const atlas: render.GlyphAtlas = .{
         .id = self.atlas_id,
-        .revision = builder.revision(),
-        .base_revision = self.glyph_revision_emitted,
-        .curve_row_start = if (builder.curveDirtyRange()) |range| range.y_start else builder.curveTextureHeight(),
-        .band_row_start = if (builder.bandDirtyRange()) |range| range.y_start else builder.bandTextureHeight(),
-        .curve = std.mem.sliceAsBytes(builder.curve_data.items),
-        .band = std.mem.sliceAsBytes(builder.band_data.items),
+        .revision = snapshot.revision,
+        .base_revision = snapshot.base_revision,
+        .full = snapshot.full,
+        .words = snapshot.words,
+        .table = snapshot.table,
+        .words_dirty = .{ .start = snapshot.words_dirty[0], .end = snapshot.words_dirty[1] },
+        .table_dirty = .{ .start = snapshot.table_dirty[0], .end = snapshot.table_dirty[1] },
     };
     atlas.validate();
-    // A missed output is safe: consumers with an older revision use full data.
-    self.glyph_revision_emitted = atlas.revision;
-    builder.markClean();
     return atlas;
 }
 
@@ -422,9 +413,8 @@ fn reflowWrappedText(ui: *UI) !bool {
         const wrap_px = el.box.w() * ui.content_scale;
         if (wrap_px <= 0) continue;
 
-        const face = try ui.font.getFace(t.font);
-        const shaped = try face.shapeWrapped(t.content, t.size * ui.content_scale, wrap_px);
-        const new_h = shaped.height / ui.content_scale;
+        const text_layout = try ui.styledTextLayout(&t, el.box.w());
+        const new_h = text_layout.height / ui.content_scale;
         if (new_h != el.intrinsic_h) {
             el.intrinsic_h = new_h;
             changed = true;
@@ -746,7 +736,7 @@ fn updateStats(ui: *UI) void {
 }
 
 fn tessellate(ui: *UI, allocator: Allocator, draw_list: *DrawList) !void {
-    defer ui.font.endFrame();
+    defer ui.text_system.endFrame();
 
     try buildClipStates(ui);
     try draw_list.clip_nodes.appendSlice(draw_list.allocator, ui.clip_nodes.items);
@@ -823,8 +813,161 @@ fn childClip(ui: *UI, slot: Element.Slot, parent_clip: Clip.State) !Clip.State {
     return out;
 }
 
-fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: []const Element.Slot, layer: Layer) !void {
+fn textWrapWidth(t: Decoration.Text, el: *const Element) f32 {
+    if (!t.wrap) return 0;
+    return @max(0, el.box.w());
+}
+
+fn paintText(ui: *UI, draw_list: *DrawList, el: *const Element, t: Decoration.Text, clip: Clip.State) !void {
     const content_scale = ui.content_scale;
+    if (t.size <= 0) return;
+    const text_layout = try ui.styledTextLayout(&t, textWrapWidth(t, el));
+    if (text_layout.lines.len == 0) return;
+    try paintUnderlines(draw_list, el, t, text_layout, content_scale, clip);
+    if (text_layout.glyphs.ids.len == 0) return;
+
+    const glyphs = text_layout.glyphs;
+    const dilation_margin = 2.0 / content_scale;
+    const batch = (try draw_list.beginTextBatch(glyphs.ids.len, clip)).?;
+    const primary_size = t.size * content_scale;
+
+    var line_range: struct { start: u32, end: u32 } = .{ .start = 0, .end = @intCast(text_layout.lines.len) };
+    var glyph_left: f64 = -std.math.inf(f64);
+    var glyph_right: f64 = std.math.inf(f64);
+    if (clip.scissor) |c| {
+        // Ink can overhang the line box and the pen position by a few ems.
+        const margin_y = 2 * t.size + dilation_margin;
+        const margin_x = 4 * t.size + dilation_margin;
+        const top = (c.y() - el.box.y() - margin_y) * content_scale;
+        const bottom = (c.y() + c.h() - el.box.y() + margin_y) * content_scale;
+        const visible = text_layout.visibleLines(top, bottom);
+        line_range = .{ .start = visible.start, .end = visible.end };
+        glyph_left = (c.x() - el.box.x() - margin_x) * content_scale;
+        glyph_right = (c.x() + c.w() - el.box.x() + margin_x) * content_scale;
+    }
+
+    const slots = try ui.text_system.resolveSlots(text_layout);
+    const store = &ui.text_system.glyph_store;
+    var colors: ColorCursor = .{ .spans = t.colors, .default = t.color };
+    for (text_layout.lines[line_range.start..line_range.end]) |line| {
+        const baseline = el.box.y() + line.baseline / content_scale + line.y / content_scale;
+        const visible = text_layout.visibleGlyphs(line, glyph_left, glyph_right, 0);
+        var run_index = text_layout.runIndex(visible.start);
+        for (visible.start..visible.end) |index| {
+            const slot = slots[index];
+            if (slot == text.GlyphStore.empty_slot) continue;
+            while (text_layout.runs[run_index].glyph_end <= index) run_index += 1;
+            const run = text_layout.runs[run_index];
+            const size_logical = runSize(run.size, primary_size, t.size, content_scale);
+            const pen_x: f32 = @floatCast(glyphs.x[index]);
+            const pen: Pen = .{
+                .origin = .{ el.box.x() + (pen_x + glyphs.x_offset[index]) / content_scale, baseline - glyphs.y_offset[index] / content_scale },
+                .size = size_logical,
+                .clip = clip.scissor,
+                .margin = dilation_margin,
+            };
+            const color = colors.at(glyphs.cluster[index]);
+            if (slot != text.TextLayout.layered_slot) {
+                store.touch(slot);
+                try pushSlot(draw_list, batch, slot, store.table.items[slot].bounds, pen, color);
+                continue;
+            }
+            const colr = &ui.text_system.faceById(run.face).program.colr;
+            const layers = colr.layers(glyphs.ids[index]);
+            try draw_list.reserveTextInstances(layers.count);
+            for (layers.start..layers.start + layers.count) |layer_index| {
+                const layer = colr.layer(@intCast(layer_index));
+                try pushGlyph(ui, draw_list, batch, run.face, layer.glyph, pen, layerColor(colr.color(layer.palette_index), color));
+            }
+        }
+    }
+}
+
+const Pen = struct {
+    origin: [2]f32,
+    size: f32,
+    clip: ?math.Rect,
+    margin: f32,
+};
+
+fn pushGlyph(ui: *UI, draw_list: *DrawList, batch: DrawList.TextBatch, face: text.TextSystem.FaceId, glyph_id: u32, pen: Pen, color: [4]f32) !void {
+    const rec = try ui.text_system.glyphRecord(face, glyph_id);
+    if (rec.isEmpty()) return;
+    const bounds = [4]f32{ rec.bounds_em_min[0], rec.bounds_em_min[1], rec.bounds_em_max[0], rec.bounds_em_max[1] };
+    try pushSlot(draw_list, batch, rec.slot, bounds, pen, color);
+}
+
+/// Pushes one glyph instance unless its ink, `bounds` in ems, falls outside the clip.
+fn pushSlot(draw_list: *DrawList, batch: DrawList.TextBatch, slot: u32, bounds: [4]f32, pen: Pen, color: [4]f32) !void {
+    const ink = math.Rect.fromMinMax(
+        .{ pen.origin[0] + bounds[0] * pen.size, pen.origin[1] - bounds[3] * pen.size },
+        .{ pen.origin[0] + bounds[2] * pen.size, pen.origin[1] - bounds[1] * pen.size },
+    );
+    if (pen.clip) |c| {
+        if (!c.overlaps(ink.expand(pen.margin))) return;
+    }
+    try draw_list.pushTextInstance(batch, ink, .{ .origin = pen.origin, .size = pen.size, .slot = slot, .col = halfColor(color) });
+}
+
+/// Palette colors keep the text's opacity. A null palette color is the text color.
+fn layerColor(palette: ?[4]f32, text_color: [4]f32) [4]f32 {
+    const value = palette orelse return text_color;
+    return .{ value[0], value[1], value[2], value[3] * text_color[3] };
+}
+
+fn halfColor(color: [4]f32) [4]f16 {
+    return .{ @floatCast(color[0]), @floatCast(color[1]), @floatCast(color[2]), @floatCast(color[3]) };
+}
+
+fn runSize(run_size: f32, primary_size: f32, logical: f32, content_scale: f32) f32 {
+    if (run_size == primary_size) return logical;
+    return run_size / content_scale;
+}
+
+/// Colors glyphs by the span containing their cluster's first byte. Clusters mostly increase, so it walks forward.
+const ColorCursor = struct {
+    spans: []const Decoration.ColorSpan,
+    default: [4]f32,
+    index: usize = 0,
+
+    fn at(self: *ColorCursor, byte: u32) [4]f32 {
+        if (self.spans.len == 0) return self.default;
+        if (self.index >= self.spans.len or self.spans[self.index].start > byte) self.index = 0;
+        while (self.index < self.spans.len and self.spans[self.index].end <= byte) self.index += 1;
+        if (self.index < self.spans.len and self.spans[self.index].start <= byte) return self.spans[self.index].color;
+        return self.default;
+    }
+};
+
+fn paintUnderlines(draw_list: *DrawList, el: *const Element, t: Decoration.Text, text_layout: *const text.TextLayout, content_scale: f32, clip: Clip.State) !void {
+    if (t.underlines.len == 0) return;
+    const thickness = @max(text_layout.underline_thickness / content_scale, 1.0 / content_scale);
+    for (t.underlines) |underline| {
+        for (text_layout.lines) |line| {
+            if (underline.end <= line.byte_start or underline.start > line.byte_end) continue;
+            const lo = @max(underline.start, line.byte_start);
+            const hi = @min(underline.end, line.byte_end);
+            if (hi <= lo) continue;
+            const x0: f32 = @floatCast(text_layout.xForByte(lo));
+            const x1: f32 = @floatCast(text_layout.xForByte(hi));
+            const y = el.box.y() + (line.y + line.baseline + text_layout.underline_offset) / content_scale;
+            const inst = types.Instance{
+                .pos = .{ el.box.x() + x0 / content_scale, y },
+                .size = .{ (x1 - x0) / content_scale, thickness },
+                .uv0 = .{ 0, 0 },
+                .uv1 = .{ 0, 0 },
+                .color = underline.color orelse t.color,
+                .border_color = .{ 0, 0, 0, 0 },
+                .corner_radius = Radius.zero.value,
+                .border_width = BorderWidth.zero.value,
+                .prim_type = 0.0,
+            };
+            try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
+        }
+    }
+}
+
+fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: []const Element.Slot, layer: Layer) !void {
     const elements = ui.layout_ctx.pool.elements.items;
 
     for (slots) |slot| {
@@ -856,65 +999,7 @@ fn tessellateLayer(ui: *UI, allocator: Allocator, draw_list: *DrawList, slots: [
                 };
                 try draw_list.pushInstances(&[_]types.Instance{inst}, .atlas, clip);
             },
-            .text => |t| if (t.content.len > 0) {
-                const face = try ui.font.getFace(t.font);
-                const wrap_px: f32 = if (t.wrap) @max(0, el.box.w() * content_scale) else 0;
-                const shaped = try face.shapeWrapped(t.content, t.size * content_scale, wrap_px);
-                if (shaped.lines.len > 0) {
-                    const ascender = shaped.ascender / content_scale;
-                    const size_logical = t.size;
-
-                    if (size_logical <= 0) continue;
-                    const inv_size = 1.0 / size_logical;
-
-                    var total_glyphs: usize = 0;
-                    for (shaped.lines) |ln| total_glyphs += ln.glyphs.len;
-                    if (total_glyphs == 0) continue;
-
-                    const batch = (try draw_list.beginTextBatch(total_glyphs, clip)).?;
-
-                    for (shaped.lines) |line| {
-                        const baseline = el.box.y() + ascender + line.y / content_scale;
-                        for (line.glyphs) |gl| {
-                            const rec = gl.record;
-                            if (rec.is_empty) continue;
-
-                            const origin_x = el.box.x() + gl.x / content_scale;
-
-                            if (clip.scissor) |c| {
-                                const dilation_margin = 2.0 / content_scale;
-                                const glyph_bounds = math.Rect.fromMinMax(
-                                    .{ origin_x + rec.bounds_em_min[0] * size_logical, baseline - rec.bounds_em_max[1] * size_logical },
-                                    .{ origin_x + rec.bounds_em_max[0] * size_logical, baseline - rec.bounds_em_min[1] * size_logical },
-                                ).expand(dilation_margin);
-                                if (!c.overlaps(glyph_bounds)) continue;
-                            }
-
-                            const tex_z_bits: u32 =
-                                @as(u32, rec.glyph_location_x) |
-                                (@as(u32, rec.glyph_location_y) << 16);
-                            const tex_w_bits: u32 =
-                                @as(u32, rec.band_x_max) |
-                                (@as(u32, rec.band_y_max) << 16);
-                            const tex_z: f32 = @bitCast(tex_z_bits);
-                            const tex_w: f32 = @bitCast(tex_w_bits);
-
-                            const bnd = [4]f32{
-                                rec.band_scale[0],  rec.band_scale[1],
-                                rec.band_offset[0], rec.band_offset[1],
-                            };
-
-                            try draw_list.pushTextInstance(batch, .{
-                                .bounds = .{ rec.bounds_em_min[0], rec.bounds_em_max[1], rec.bounds_em_max[0], rec.bounds_em_min[1] },
-                                .origin_size = .{ origin_x, baseline, size_logical, inv_size },
-                                .glyph = .{ tex_z, tex_w },
-                                .bnd = bnd,
-                                .col = t.color,
-                            });
-                        }
-                    }
-                }
-            },
+            .text => |t| if (t.content.len > 0) try paintText(ui, draw_list, el, t, clip),
             .canvas => |c| try canvas_tessellator.tessellate(allocator, draw_list, c.cmds, .{ el.box.x(), el.box.y() }, clip),
             .gpu_canvas => |canvas| {
                 try draw_list.pushCustomDraw(&canvas, el.box, clip);

@@ -1,6 +1,7 @@
 const Radius = @import("style").Radius;
 const BorderWidth = @import("style").BorderWidth;
 const DrawList = @import("render").DrawList;
+const text = @import("text");
 
 pub const Decoration = union(enum) {
     none: void,
@@ -21,7 +22,23 @@ pub const Decoration = union(enum) {
         intrinsic_w: f32 = 0,
         intrinsic_h: f32 = 0,
         wrap: bool = false,
+        /// Font, size (logical pixels) and features over byte ranges of `content`.
+        runs: []const text.TextSystem.StyleRun = &.{},
+        colors: []const ColorSpan = &.{},
+        underlines: []const Underline = &.{},
+        /// Global or ranged over bytes of `content`, e.g. `-calt` under the caret.
+        features: []const text.shape.Plan.Feature = &.{},
+        tab_size: u8 = text.TextSystem.tab_size_default,
+        /// The element's identity. Keyed layouts are cached per key and style: content is
+        /// compared instead of hashed, and an edit relayouts only the paragraphs it touches.
+        key: ?u64 = null,
+        /// Bump to force a relayout of keyed content.
+        revision: u32 = 0,
     };
+
+    pub const ColorSpan = struct { start: u32, end: u32, color: [4]f32 };
+
+    pub const Underline = struct { start: u32, end: u32, color: ?[4]f32 = null };
 
     pub const Canvas = struct {
         cmds: []const DrawCmd,

@@ -43,6 +43,7 @@ const Demos = struct {
     async_dispatch: @import("demos/async_dispatch.zig") = .{},
     windows: @import("demos/windows.zig") = .{},
     drops: @import("demos/drops.zig") = .{},
+    shaping: @import("demos/shaping.zig") = .{},
     text_wrap: @import("demos/text_wrap.zig") = .{},
     theme: @import("demos/theme.zig") = .{},
 };
@@ -71,6 +72,7 @@ const entries = [_]Entry{
     .{ .demo = .async_dispatch, .name = "Async dispatch", .icon = "\u{e627}", .description = "Schedule background work via app.dispatch and react to wakeups." },
     .{ .demo = .windows, .name = "Windows", .icon = "\u{e30c}", .description = "Floating windows in the current viewport and secondary native windows." },
     .{ .demo = .drops, .name = "Drops", .icon = "\u{e2c6}", .description = "Drag files onto the window and consume the paths from the frame input." },
+    .{ .demo = .shaping, .name = "Shaping", .icon = "\u{e262}", .description = "Type text, pick a font, toggle its features and inspect every shaped glyph." },
     .{ .demo = .text_wrap, .name = "Text wrap", .icon = "\u{e25b}", .description = "Text and TextInput with wrap=true." },
     .{ .demo = .theme, .name = "Theme", .icon = "\u{e40a}", .description = "Switch UI theme at runtime between dark, light and the playground's custom theme." },
 };
@@ -92,7 +94,7 @@ pub fn of(app: *knots.App) *Playground {
 pub fn init(io: std.Io, allocator: std.mem.Allocator) !Playground {
     var app = try knots.App.init(io, allocator, .{ .window = .{ .width = 1280, .height = 720, .title = "Playground", .canvas_selector = "#canvas" }, .arena_reset_mode = .free_all });
     errdefer app.deinit();
-    try app.main_viewport.ui_ctx.ui.font.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
+    try app.main_viewport.ui_ctx.ui.text_system.addFace("jetbrains-mono", @embedFile("fonts/JetBrainsMono-VariableFont_wght.ttf"));
     const devtools = try knots.debug.DevTools.init(allocator, app.main_viewport.renderer.cfg.present_mode);
     return .{ .app = app, .devtools = devtools };
 }

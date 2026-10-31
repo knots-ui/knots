@@ -1,22 +1,25 @@
-//! Borrowed complete atlas, available even after dropped frames or device loss.
-//! No acknowledgement mutates the producer. Each GPU atlas owns an GlyphAtlasCache.
+//! Borrowed glyph store snapshot: a u32 word buffer of glyph blobs and a slot table,
+//! both bound as read-only storage buffers. Each GPU copy owns a GlyphAtlasCache.
 const std = @import("std");
 const GlyphAtlas = @This();
 
 id: u32,
 revision: u64,
 /// Dirty ranges are relative to this previous emitted revision. A consumer that
-/// missed it must upload the full snapshot instead.
+/// missed it, or sees `full`, must replace its copy with the whole snapshot.
 base_revision: u64 = 0,
-curve_row_start: u32 = 0,
-band_row_start: u32 = 0,
-curve: []const u8,
-band: []const u8,
+full: bool = true,
+words: []const u8,
+table: []const u8,
+words_dirty: Range = .{},
+table_dirty: Range = .{},
 
-pub const width: u32 = 4096;
-pub const texel_bytes: u32 = 16;
-pub const row_bytes: u32 = width * texel_bytes;
-pub const plane_bytes_max: u32 = width * row_bytes;
+pub const Range = struct { start: usize = 0, end: usize = 0 };
+
+pub const word_bytes: u32 = 4;
+pub const entry_bytes: u32 = @sizeOf(@import("render_types").GlyphEntry);
+/// The minimum storage binding size WebGPU and Vulkan guarantee.
+pub const plane_bytes_max: u32 = 128 * 1024 * 1024;
 var next_id: std.atomic.Value(u32) = .init(1);
 
 /// IDs never repeat, including when an allocator reuses a destroyed Context address.
@@ -32,10 +35,10 @@ pub fn allocateId() u32 {
 
 pub fn validate(self: *const GlyphAtlas) void {
     std.debug.assert(self.id > 0);
-    std.debug.assert(self.curve.len <= plane_bytes_max);
-    std.debug.assert(self.band.len <= plane_bytes_max);
-    std.debug.assert(self.curve.len % texel_bytes == 0);
-    std.debug.assert(self.band.len % texel_bytes == 0);
-    std.debug.assert(self.curve_row_start <= std.math.divCeil(u64, self.curve.len, row_bytes) catch unreachable);
-    std.debug.assert(self.band_row_start <= std.math.divCeil(u64, self.band.len, row_bytes) catch unreachable);
+    std.debug.assert(self.words.len > 0 and self.words.len <= plane_bytes_max);
+    std.debug.assert(self.table.len > 0 and self.table.len <= plane_bytes_max);
+    std.debug.assert(self.words.len % word_bytes == 0);
+    std.debug.assert(self.table.len % entry_bytes == 0);
+    std.debug.assert(self.words_dirty.start <= self.words_dirty.end and self.words_dirty.end <= self.words.len);
+    std.debug.assert(self.table_dirty.start <= self.table_dirty.end and self.table_dirty.end <= self.table.len);
 }

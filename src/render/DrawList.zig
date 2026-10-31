@@ -26,6 +26,8 @@ vertices: std.ArrayList(types.Vertex),
 indices: std.ArrayList(u32),
 instances: std.ArrayList(types.Instance),
 text_instances: std.ArrayList(types.SlugInstance),
+/// Ink box per text instance, for overlap tests. Instances carry no bounds of their own.
+text_ink: std.ArrayList(math.Rect),
 clip_nodes: std.ArrayList(Clip.Node),
 layer_cmds: std.ArrayList(Command),
 layer_ranges: [MAX_LAYERS]LayerRange,
@@ -54,6 +56,7 @@ pub fn init(allocator: std.mem.Allocator) DrawList {
         .vertices = .empty,
         .instances = .empty,
         .text_instances = .empty,
+        .text_ink = .empty,
         .clip_nodes = .empty,
         .layer_cmds = .empty,
         .layer_ranges = @splat(.{}),
@@ -77,6 +80,7 @@ pub fn deinit(self: *DrawList) void {
     self.indices.deinit(self.allocator);
     self.instances.deinit(self.allocator);
     self.text_instances.deinit(self.allocator);
+    self.text_ink.deinit(self.allocator);
     self.clip_nodes.deinit(self.allocator);
     self.layer_cmds.deinit(self.allocator);
     self.backdrop_groups.deinit(self.allocator);
@@ -95,6 +99,7 @@ pub fn reset(self: *DrawList) void {
     self.indices.clearRetainingCapacity();
     self.instances.clearRetainingCapacity();
     self.text_instances.clearRetainingCapacity();
+    self.text_ink.clearRetainingCapacity();
     self.clip_nodes.clearRetainingCapacity();
     self.layer_cmds.clearRetainingCapacity();
     self.layers_dirty = .empty;
@@ -439,10 +444,9 @@ fn commandBounds(self: *const DrawList, command: Command) Box {
             box.add(inst.pos[0], inst.pos[1]);
             box.add(inst.pos[0] + inst.size[0], inst.pos[1] + inst.size[1]);
         },
-        .text => |draw| for (self.text_instances.items[draw.offset..][0..draw.count]) |inst| {
-            const size = inst.origin_size[2];
-            box.add(inst.origin_size[0] + inst.bounds[0] * size, inst.origin_size[1] - inst.bounds[1] * size);
-            box.add(inst.origin_size[0] + inst.bounds[2] * size, inst.origin_size[1] - inst.bounds[3] * size);
+        .text => |draw| for (self.text_ink.items[draw.offset..][0..draw.count]) |ink| {
+            box.add(ink.x(), ink.y());
+            box.add(ink.x() + ink.w(), ink.y() + ink.h());
         },
         .custom_draw, .backdrop => unreachable,
     }
@@ -609,13 +613,19 @@ pub fn pushBackdrop(
 
 pub fn beginTextBatch(self: *DrawList, glyph_count_max: usize, clip: Clip.State) !?TextBatch {
     if (glyph_count_max == 0) return null;
-    try self.text_instances.ensureUnusedCapacity(self.allocator, glyph_count_max);
+    try self.reserveTextInstances(glyph_count_max);
     return .{ .clip = clip };
 }
 
-pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: types.SlugInstance) !void {
+/// Room for more instances in an open batch, e.g. the layers of a color glyph.
+pub fn reserveTextInstances(self: *DrawList, count: usize) !void {
+    try self.text_instances.ensureUnusedCapacity(self.allocator, count);
+    try self.text_ink.ensureUnusedCapacity(self.allocator, count);
+}
+
+pub fn pushTextInstance(self: *DrawList, batch: TextBatch, ink: math.Rect, instance: types.SlugInstance) !void {
     std.debug.assert(self.text_instances.items.len < self.text_instances.capacity);
-    std.debug.assert(instance.origin_size[2] > 0);
+    std.debug.assert(instance.size > 0);
     if (!self.lastCmdMatches(.text, .atlas, batch.clip)) {
         try self.beginCommand(.{ .text = .{
             .offset = @intCast(self.text_instances.items.len),
@@ -626,6 +636,7 @@ pub fn pushTextInstance(self: *DrawList, batch: TextBatch, instance: types.SlugI
     var out = instance;
     out.clip_node = @floatFromInt(batch.clip.node);
     self.text_instances.appendAssumeCapacity(out);
+    self.text_ink.appendAssumeCapacity(ink);
     self.lastCommand().payload.text.count += 1;
 }
 
@@ -718,15 +729,15 @@ fn testRect(x: f32, y: f32, w: f32, h: f32) types.Instance {
 
 fn testGlyph(x: f32, y: f32) types.SlugInstance {
     var inst = std.mem.zeroes(types.SlugInstance);
-    // Em box 0..1 at 10px: covers x..x+10, y-10..y.
-    inst.bounds = .{ 0, 0, 1, 1 };
-    inst.origin_size = .{ x, y, 10, 0.1 };
+    inst.origin = .{ x, y };
+    inst.size = 10;
     return inst;
 }
 
 fn testPushGlyph(draw_list: *DrawList, x: f32, y: f32) !void {
     const batch = (try draw_list.beginTextBatch(1, .{})).?;
-    try draw_list.pushTextInstance(batch, testGlyph(x, y));
+    // Em box 0..1 at 10px: covers x..x+10, y-10..y.
+    try draw_list.pushTextInstance(batch, .init(x, y - 10, 10, 10), testGlyph(x, y));
 }
 
 test "disjoint widgets batch into one draw per pipeline" {

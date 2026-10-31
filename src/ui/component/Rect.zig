@@ -11,6 +11,8 @@ pub const GridPlacement = Grid.Placement;
 
 key: Key,
 style: *const Style = &.{},
+/// Takes part in hit testing, so it can be hovered and clicked.
+interactive: bool = false,
 
 pub const base = struct {
     pub const root: Style = .{};
@@ -19,7 +21,7 @@ pub const base = struct {
 const Rect = @This();
 
 pub fn open(self: *const Rect, frame: *Frame) !Element.Id {
-    return (try frame.ui().openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{}, .{})).id;
+    return (try frame.ui().openStyled(self.key, .{ .base = &base.root, .user = self.style }, .{}, .{ .interactive = self.interactive })).id;
 }
 
 pub fn close(_: *const Rect, frame: *Frame) !void {
