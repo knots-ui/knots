@@ -137,7 +137,7 @@ const Shared = struct {
     repeat_window_key: input_types.Key = @fromBackingInt(@intCast(0)),
     repeat_char: ?u21 = null,
     repeat_next_ms: i64 = 0,
-    last_keyboard_serial: u32 = 0,
+    last_input_serial: u32 = 0,
     keyboard_state: ?*State = null,
     pointer_state: ?*State = null,
     first: ?*State = null,
@@ -805,7 +805,7 @@ pub const Backend = struct {
         const shared = self.state.shared;
         const manager = shared.data_device_manager orelse return false;
         const data_device = shared.data_device orelse return false;
-        if (shared.last_keyboard_serial == 0) return false;
+        if (shared.last_input_serial == 0) return false;
 
         const source = manager.createDataSource() catch return false;
         errdefer source.destroy();
@@ -820,7 +820,7 @@ pub const Backend = struct {
         shared.clipboard_source = source;
         shared.clipboard_text = owned_text;
 
-        data_device.setSelection(source, shared.last_keyboard_serial);
+        data_device.setSelection(source, shared.last_input_serial);
         _ = shared.display.flush();
         return true;
     }
@@ -1145,6 +1145,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, shared: *Shared) voi
             state.updateResizeEdge();
         },
         .button => |button| {
+            shared.last_input_serial = button.serial;
             const state = shared.pointer_state orelse return;
             const translated: ?input_types.MouseButton = switch (button.button) {
                 BTN_LEFT => .left,
@@ -1208,6 +1209,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
             std.log.warn("failed to load Wayland XKB keymap: {s}", .{@errorName(err)});
         },
         .enter => |enter| {
+            state.last_input_serial = enter.serial;
             const target = findState(state, enter.surface orelse return) orelse return;
             state.keyboard_state = target;
             if (target.owner) |owner| owner.setFocused(true);
@@ -1223,7 +1225,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
             const owner = (state.keyboard_state orelse return).owner orelse return;
             const translated = input_types.layoutKey(keymap.translateEvdev(key.key), state.unshiftedForKey(key.key));
             const mods = state.currentMods();
-            state.last_keyboard_serial = key.serial;
+            state.last_input_serial = key.serial;
             switch (key.state) {
                 .pressed => {
                     const cp = state.utf32ForKey(key.key);
