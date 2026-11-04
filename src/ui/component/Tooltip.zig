@@ -1,9 +1,8 @@
-const std = @import("std");
-
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
+const clampAxis = @import("popup.zig").clampAxis;
 
 const Key = ui_mod.Key;
 const State = ui_mod.State;
@@ -205,11 +204,6 @@ pub fn placePopup(viewport: math.Rect, anchor: math.Rect, requested_size: math.V
         .width = width,
         .height = height,
     };
-}
-
-fn clampAxis(value: f32, min: f32, max: f32) f32 {
-    if (max <= min) return min;
-    return std.math.clamp(value, min, max);
 }
 
 fn sameRect(a: math.Rect, b: math.Rect) bool {

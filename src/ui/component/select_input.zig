@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ui_mod = @import("../root.zig");
+const placePopup = @import("popup.zig").place;
 
 const UI = ui_mod.UI;
 const Style = ui_mod.Style;
@@ -221,8 +222,6 @@ pub fn SelectInput(comptime T: type) type {
             ui.close();
 
             if (s.open) {
-                const anchor = s.anchor_box;
-                const viewport = s.viewport_box;
                 const popup_key = self.key.indexed(3);
                 const popup = ui.resolveStyle(popup_key.hash(), .{ .base = &base.popup, .user = self.parts.popup }, .{}, &content);
 
@@ -230,18 +229,12 @@ pub fn SelectInput(comptime T: type) type {
                 const item_h = line_h + 12 + 2;
                 const dropdown_h = item_h * @as(f32, @floatFromInt(self.labels.len)) + 4;
 
-                const viewport_h = viewport.y() + viewport.h();
-                const space_below = viewport_h - (anchor.y() + anchor.h());
-                const space_above = anchor.y() - viewport.y();
-
-                const open_above = dropdown_h > space_below and space_above > space_below;
-                const max_h = if (open_above) space_above else space_below;
-                const popup_y = if (open_above) anchor.y() - @min(dropdown_h, max_h) else anchor.y() + anchor.h();
+                const p = placePopup(s.viewport_box, s.anchor_box, s.anchor_box.w(), dropdown_h);
 
                 var config = popup.element(.{});
-                config.width = .fixed(anchor.w());
-                config.height = .{ .kind = .fit, .max = max_h };
-                const list_id = try ui.openResolved(popup_key, &popup, config, .{ anchor.x(), popup_y });
+                config.width = .fixed(p.width);
+                config.height = .{ .kind = .fit, .max = p.max_height };
+                const list_id = try ui.openResolved(popup_key, &popup, config, .{ p.x, p.y });
                 try ui.setAccessibility(list_id, .{ .role = .list_box, .parent = self.key.hash() });
 
                 for (self.labels, 0..) |option, i| {

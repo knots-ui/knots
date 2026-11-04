@@ -1728,3 +1728,71 @@ test "text area draws the text after enter grows the buffer" {
     };
     try testing.expectEqualStrings("ab\n", drawn.?);
 }
+
+const EdgePopupTest = struct {
+    color: *@import("style").Color,
+
+    fn frame(self: EdgePopupTest, f: *Frame) !void {
+        const component = @import("component/root.zig");
+        const column: component.Rect = .{ .key = .str("column"), .style = &.{ .direction = .column } };
+        _ = try column.open(f);
+        const menu_row: component.Rect = .{
+            .key = .str("menu_row"),
+            .style = &.{ .width = .fixed(400), .height = .fixed(40), .direction = .row, .padding = .init(0, 24, 0, 0) },
+        };
+        _ = try menu_row.open(f);
+        try f.e(component.Spacer{ .key = .str("menu_spacer"), .style = &.{ .width = .grow() } });
+        try f.e(component.MenuButton(component.Spacer){
+            .key = .str("menu"),
+            .menu = .{ .key = .str("item"), .style = &.{ .width = .fixed(100), .height = .fixed(20) } },
+            .style = &.{ .width = .fixed(36), .height = .fixed(28) },
+            .parts = .{ .popup = &.{ .width = .fixed(180) } },
+        });
+        try menu_row.close(f);
+
+        const picker_row: component.Rect = .{
+            .key = .str("picker_row"),
+            .style = &.{ .width = .fixed(400), .height = .fixed(40), .direction = .row, .padding = .init(0, 24, 0, 0) },
+        };
+        _ = try picker_row.open(f);
+        try f.e(component.Spacer{ .key = .str("picker_spacer"), .style = &.{ .width = .grow() } });
+        try f.e(component.ColorPicker{ .key = .str("picker"), .value = self.color });
+        try picker_row.close(f);
+        try column.close(f);
+    }
+};
+
+test "popups near the right edge end-align to their anchor" {
+    var view = try Context.init(testing.allocator, .{});
+    defer view.deinit();
+
+    var color: @import("style").Color = .rgba(255, 0, 0, 255);
+    const t: EdgePopupTest = .{ .color = &color };
+
+    const menu_pos = [2]f64{ 358, 14 };
+    const picker_pos = [2]f64{ 370, 62 };
+    const open_menu = textEditTestClick(menu_pos);
+    const open_picker = textEditTestClick(picker_pos);
+    const settle = textEditTestInput(picker_pos, .{}, &.{}, &.{});
+
+    const menu_popup = Key.str("menu").indexed(1).hash();
+    const hover_menu = textEditTestInput(menu_pos, .{}, &.{}, &.{});
+    const steps = [_]input_types.FrameInput{ hover_menu, open_menu[0], open_menu[1], hover_menu };
+    for (steps) |step| {
+        var f = try view.beginFrame(step);
+        try t.frame(&f);
+        _ = try view.endFrame(&f);
+    }
+    try testing.expectEqual(196, view.ui.state.get(.measured, menu_popup).?.box.x());
+
+    const picker_popup = Key.str("picker").indexed(3).hash();
+    const picker_steps = [_]input_types.FrameInput{ open_picker[0], open_picker[1], settle };
+    for (picker_steps) |step| {
+        var f = try view.beginFrame(step);
+        try t.frame(&f);
+        _ = try view.endFrame(&f);
+    }
+    const picker_anchor = view.ui.state.get(.color_picker, Key.str("picker").hash()).?.anchor_box;
+    const picker_box = view.ui.state.get(.measured, picker_popup).?.box;
+    try testing.expectEqual(picker_anchor.x() + picker_anchor.w(), picker_box.x() + picker_box.w());
+}
