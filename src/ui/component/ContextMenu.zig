@@ -1,20 +1,12 @@
-const std = @import("std");
-
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
+const placePopup = @import("popup.zig").place;
 
 const Key = ui_mod.Key;
 const State = ui_mod.State;
 const Style = ui_mod.Style;
-
-pub const Placement = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    max_height: f32,
-};
 
 pub fn ContextMenu(comptime Menu: type) type {
     return struct {
@@ -98,7 +90,7 @@ pub fn ContextMenu(comptime Menu: type) type {
             const popup = ui.resolveStyle(popup_id, .{ .base = &base.popup, .user = self.parts.popup }, .{}, parent);
             const measured_h = if (measured_box.h() > 0) measured_box.h() else self.fallback_menu_height;
             const requested_w = if (popup.layout.width.kind == .fixed) popup.layout.width.value else 180;
-            const p = placePopup(s.viewport_box, s.click_pos, requested_w, measured_h);
+            const p = placePopup(s.viewport_box, .init(s.click_pos[0], s.click_pos[1], 0, 0), requested_w, measured_h);
 
             var config = popup.element(.{ .interactive = true });
             config.width = .fixed(p.width);
@@ -161,41 +153,6 @@ fn containsInputPoint(rect: math.Rect, mouse_pos: [2]f64) bool {
         @floatCast(mouse_pos[1]),
     };
     return rect.contains(p);
-}
-
-pub fn placePopup(viewport: math.Rect, click_pos: math.Vec2, requested_width: f32, estimated_height: f32) Placement {
-    const viewport_w = @max(0, viewport.w());
-    const viewport_h = @max(0, viewport.h());
-    const width = @max(0, @min(requested_width, viewport_w));
-
-    const left = viewport.x();
-    const top = viewport.y();
-    const right = left + viewport_w;
-    const bottom = top + viewport_h;
-
-    const opens_left = click_pos[0] + width > right and click_pos[0] - width >= left;
-    const raw_x = if (opens_left) click_pos[0] - width else click_pos[0];
-    const x = clampAxis(raw_x, left, right - width);
-
-    const space_below = @max(0, bottom - click_pos[1]);
-    const space_above = @max(0, click_pos[1] - top);
-    const opens_above = estimated_height > space_below and space_above > space_below;
-    const max_height = if (opens_above) space_above else space_below;
-    const height = @min(estimated_height, max_height);
-    const raw_y = if (opens_above) click_pos[1] - height else click_pos[1];
-    const y = clampAxis(raw_y, top, bottom - height);
-
-    return .{
-        .x = x,
-        .y = y,
-        .width = width,
-        .max_height = max_height,
-    };
-}
-
-fn clampAxis(value: f32, min: f32, max: f32) f32 {
-    if (max <= min) return min;
-    return std.math.clamp(value, min, max);
 }
 
 fn sameRect(a: math.Rect, b: math.Rect) bool {

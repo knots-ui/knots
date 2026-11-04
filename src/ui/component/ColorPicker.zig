@@ -3,6 +3,7 @@ const std = @import("std");
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const ui_mod = @import("../root.zig");
+const placePopup = @import("popup.zig").place;
 
 const Color = ui_mod.Color;
 const Decoration = ui_mod.Decoration;
@@ -307,25 +308,18 @@ fn isCommittableHexLen(hex: []const u8, allow_shorthand: bool) bool {
 
 fn renderPopover(self: *const ColorPicker, frame: *Frame, s: *State.ColorPicker, parent: *const Style.Content, m: Metrics) !void {
     const ui = frame.ui();
-    const anchor = s.anchor_box;
-    const viewport = s.viewport_box;
     const popup_id = self.key.indexed(POPUP_INDEX).hash();
 
     const line_h = try ui.lineHeight(parent.font_size, parent.font);
     const popup_h = m.area_h + m.strip_h * 2 + line_h + 76;
-    const viewport_bottom = viewport.y() + viewport.h();
-    const space_below = viewport_bottom - (anchor.y() + anchor.h());
-    const space_above = anchor.y() - viewport.y();
-    const open_above = popup_h > space_below and space_above > space_below;
-    const max_h = if (open_above) space_above else space_below;
-    const popup_y = if (open_above) anchor.y() - @min(popup_h, max_h) else anchor.y() + anchor.h();
+    const p = placePopup(s.viewport_box, s.anchor_box, m.popup_w, popup_h);
 
     _ = try ui.state.getOrCreate(.measured, ui.allocator, popup_id);
     const popup = ui.resolveStyle(popup_id, .{ .base = &base.popup, .user = self.parts.popup }, .{}, parent);
     var config = popup.element(.{ .interactive = true });
-    config.width = .fixed(m.popup_w);
-    config.height = .{ .kind = .fit, .max = max_h };
-    _ = try ui.openResolved(self.key.indexed(POPUP_INDEX), &popup, config, .{ anchor.x(), popup_y });
+    config.width = .fixed(p.width);
+    config.height = .{ .kind = .fit, .max = p.max_height };
+    _ = try ui.openResolved(self.key.indexed(POPUP_INDEX), &popup, config, .{ p.x, p.y });
 
     try self.renderSvControl(frame, s, m);
     try self.renderHueControl(frame, s, m);

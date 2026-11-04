@@ -1,22 +1,14 @@
-const std = @import("std");
-
 const Frame = @import("../root.zig").Frame;
 const Element = @import("layout").Element;
 const math = @import("math");
 const ui_mod = @import("../root.zig");
 
 const Button = @import("Button.zig");
+const placePopup = @import("popup.zig").place;
 
 const Key = ui_mod.Key;
 const State = ui_mod.State;
 const Style = ui_mod.Style;
-
-pub const Placement = struct {
-    x: f32,
-    y: f32,
-    width: f32,
-    max_height: f32,
-};
 
 pub fn MenuButton(comptime Menu: type) type {
     return struct {
@@ -166,39 +158,4 @@ fn containsInputPoint(rect: math.Rect, mouse_pos: [2]f64) bool {
         @floatCast(mouse_pos[1]),
     };
     return rect.contains(p);
-}
-
-fn placePopup(viewport: math.Rect, anchor: math.Rect, requested_width: f32, estimated_height: f32) Placement {
-    const viewport_w = @max(0, viewport.w());
-    const viewport_h = @max(0, viewport.h());
-    const width = @max(0, @min(requested_width, viewport_w));
-
-    const left = viewport.x();
-    const top = viewport.y();
-    const right = left + viewport_w;
-    const bottom = top + viewport_h;
-
-    const raw_x = anchor.x();
-    const x = clampAxis(raw_x, left, right - width);
-
-    const anchor_bottom = anchor.y() + anchor.h();
-    const space_below = @max(0, bottom - anchor_bottom);
-    const space_above = @max(0, anchor.y() - top);
-    const opens_above = estimated_height > space_below and space_above > space_below;
-    const max_height = if (opens_above) space_above else space_below;
-    const height = @min(estimated_height, max_height);
-    const raw_y = if (opens_above) anchor.y() - height else anchor_bottom;
-    const y = clampAxis(raw_y, top, bottom - height);
-
-    return .{
-        .x = x,
-        .y = y,
-        .width = width,
-        .max_height = max_height,
-    };
-}
-
-fn clampAxis(value: f32, min: f32, max: f32) f32 {
-    if (max <= min) return min;
-    return std.math.clamp(value, min, max);
 }
