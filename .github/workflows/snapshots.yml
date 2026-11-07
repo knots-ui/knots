@@ -12,7 +12,11 @@ concurrency:
 
 jobs:
   snapshots:
-    name: vulkan
+    name: ${{ matrix.backend }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [vulkan, webgpu]
     runs-on: ubuntu-latest
     env:
       WAYLAND_DISPLAY: wayland-ci
@@ -41,13 +45,13 @@ jobs:
           exit 1
 
       - name: Compare snapshots
-        run: zig build snapshots -Dgpu_backend=vulkan --summary all
+        run: zig build snapshots -Dgpu_backend=${{ matrix.backend }} --summary all
 
       - name: Upload snapshot diffs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: snapshot-diffs-vulkan
+          name: snapshot-diffs-${{ matrix.backend }}
           path: |
             zig-out/snapshot-diffs
             ${{ runner.temp }}/weston.log

@@ -20,6 +20,7 @@ const WIDTH = 800;
 const HEIGHT = 600;
 const MAX_CHANNEL_DELTA = 2;
 const scene_names = [_][]const u8{ "layout", "components", "graphics", "overlay", "backdrop", "text" };
+const references_dir = "tests/snapshots/references";
 
 io: std.Io,
 allocator: std.mem.Allocator,
@@ -153,10 +154,10 @@ fn check(self: *Runner, name: []const u8, capture: capture_utils.Frame) !bool {
         return false;
     }
 
-    const baseline_path = try std.fmt.allocPrint(self.allocator, "tests/snapshots/{s}/{s}.qoi", .{ self.backend, name });
+    const baseline_path = try std.fmt.allocPrint(self.allocator, references_dir ++ "/{s}.qoi", .{name});
     defer self.allocator.free(baseline_path);
     if (self.update) {
-        try ensureBaselineDirs(self.io, self.allocator, self.backend);
+        try ensureBaselineDirs(self.io);
         try writeQoi(self.io, self.allocator, baseline_path, capture.width, capture.height, capture.rgba);
         return true;
     }
@@ -428,12 +429,10 @@ fn writeQoi(io: std.Io, allocator: std.mem.Allocator, path: []const u8, width: u
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = encoded });
 }
 
-fn ensureBaselineDirs(io: std.Io, allocator: std.mem.Allocator, backend: []const u8) !void {
+fn ensureBaselineDirs(io: std.Io) !void {
     try makeDir(io, "tests");
     try makeDir(io, "tests/snapshots");
-    const path = try std.fmt.allocPrint(allocator, "tests/snapshots/{s}", .{backend});
-    defer allocator.free(path);
-    try makeDir(io, path);
+    try makeDir(io, references_dir);
 }
 
 fn renderLayout(app: *ui.Frame) !void {
