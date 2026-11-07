@@ -2,11 +2,11 @@
 //! language and feature set, following hb-ot-map.cc and hb-ot-shape.cc.
 
 const std = @import("std");
-const FontProgram = @import("../font/FontProgram.zig");
-const Layout = @import("../font/Layout.zig");
-const Partition = @import("../font/Partition.zig");
-const unicode = @import("../unicode/root.zig");
-const participation = @import("../font/participation.zig");
+const FontProgram = @import("font").FontProgram;
+const Layout = @import("font").Layout;
+const Partition = @import("font").Partition;
+const unicode = @import("unicode");
+const participation = @import("font").participation;
 const Follow = @import("follow.zig");
 
 arena_state: std.heap.ArenaAllocator,

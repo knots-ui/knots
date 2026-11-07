@@ -77,7 +77,7 @@ fn sourceLines(io: Io, arena: std.mem.Allocator, root: Io.Dir) ![]const []const 
 /// Every line shaped once per pass, best of five, against HarfBuzz shaping the same lines in process.
 fn benchCold(io: Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, root: Io.Dir, fonts: []const manifest.FontEntry, name: []const u8, lines: []const []const u8) !void {
     const data = try loadFont(io, arena, root, fonts, name);
-    var program = try text.FontProgram.init(gpa, data, 0);
+    var program = try text.font.FontProgram.init(gpa, data, 0);
     defer program.deinit();
     var follow = try text.shape.follow.Store.init(gpa, &program);
     defer follow.deinit(gpa);

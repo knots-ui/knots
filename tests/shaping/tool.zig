@@ -27,7 +27,7 @@ fn generateDigests(io: Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, roo
     for (fonts) |font| {
         if (font.isDirectory()) continue;
         const data = try root.readFileAlloc(io, try font.fontPath(arena), arena, .unlimited);
-        var program = try knots_text.FontProgram.init(gpa, data, 0);
+        var program = try knots_text.font.FontProgram.init(gpa, data, 0);
         defer program.deinit();
         try font_digest.appendLine(arena, &out, font.name, try font_digest.compute(gpa, &program));
     }

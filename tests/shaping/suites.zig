@@ -54,7 +54,7 @@ fn codeLigatures(io: Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, root:
         for (operator_sequences) |sequence| try appendCase(arena, &cases, name, sequence);
         const entry = manifest.findFont(fonts, name) orelse return error.UnknownFont;
         const data = try root.readFileAlloc(io, try entry.fontPath(arena), arena, .unlimited);
-        var program = try text.FontProgram.init(gpa, data, 0);
+        var program = try text.font.FontProgram.init(gpa, data, 0);
         defer program.deinit();
         try appendLigatureSequences(arena, &cases, name, &program);
     }
@@ -92,7 +92,7 @@ fn appendCase(arena: std.mem.Allocator, cases: *std.ArrayList(manifest.Case), fo
     });
 }
 
-fn appendLigatureSequences(arena: std.mem.Allocator, cases: *std.ArrayList(manifest.Case), font: []const u8, program: *const text.FontProgram) !void {
+fn appendLigatureSequences(arena: std.mem.Allocator, cases: *std.ArrayList(manifest.Case), font: []const u8, program: *const text.font.FontProgram) !void {
     var reverse: std.AutoHashMapUnmanaged(u32, u21) = .empty;
     var codepoint: u21 = 0x7E;
     while (codepoint >= 0x20) : (codepoint -= 1) {
@@ -118,10 +118,10 @@ fn appendLigatureSequences(arena: std.mem.Allocator, cases: *std.ArrayList(manif
     }
 }
 
-fn appendLigatures(arena: std.mem.Allocator, cases: *std.ArrayList(manifest.Case), font: []const u8, reverse: *std.AutoHashMapUnmanaged(u32, u21), seen: *std.StringHashMapUnmanaged(void), count: *usize, data: *const text.Layout.Data, first: u32, index: u32) !void {
+fn appendLigatures(arena: std.mem.Allocator, cases: *std.ArrayList(manifest.Case), font: []const u8, reverse: *std.AutoHashMapUnmanaged(u32, u21), seen: *std.StringHashMapUnmanaged(void), count: *usize, data: *const text.font.Layout.Data, first: u32, index: u32) !void {
     for (data.ligatureRange(index)) |ligature| {
         if (count.* >= 300) return;
-        if (ligature.component_count == text.Layout.Ligature.absent or ligature.component_count < 2) continue;
+        if (ligature.component_count == text.font.Layout.Ligature.absent or ligature.component_count < 2) continue;
         var value: std.ArrayList(u8) = .empty;
         var ok = true;
         for (0..ligature.component_count) |component| {

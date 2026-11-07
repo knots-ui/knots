@@ -38,14 +38,14 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("gen_unicode.zig"),
         }),
     });
-    const tables = b.path("../../src/text/unicode/tables.zig");
+    const tables = b.path("../../src/unicode/tables.zig");
     const run_gen_unicode = b.addRunArtifact(gen_unicode);
     run_gen_unicode.addDirectoryArg(b.path("../../.cache/shaping/ucd"));
     run_gen_unicode.addFileArg(tables);
     run_gen_unicode.has_side_effects = true;
     const fmt_tables = b.addFmt(.{ .paths = &.{tables} });
     fmt_tables.step.dependOn(&run_gen_unicode.step);
-    b.step("unicode-tables", "Regenerate src/text/unicode/tables.zig from the fetched UCD").dependOn(&fmt_tables.step);
+    b.step("unicode-tables", "Regenerate src/unicode/tables.zig from the fetched UCD").dependOn(&fmt_tables.step);
 
     // HarfBuzz is not under test, so it is always optimized and built without sanitizers.
     const harfbuzz_dep = b.dependency("harfbuzz", .{});

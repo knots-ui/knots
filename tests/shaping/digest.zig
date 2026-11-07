@@ -14,17 +14,17 @@ pub const Digest = struct {
     outlines: u64,
 };
 
-pub fn compute(gpa: std.mem.Allocator, program: *const text.FontProgram) !Digest {
+pub fn compute(gpa: std.mem.Allocator, program: *const text.font.FontProgram) !Digest {
     var cmap: std.hash.Wyhash = .init(0);
     var codepoint: u21 = 0;
-    while (codepoint <= text.Cmap.codepoint_max) : (codepoint += 1) {
+    while (codepoint <= text.font.Cmap.codepoint_max) : (codepoint += 1) {
         if (codepoint >= 0xD800 and codepoint <= 0xDFFF) continue;
         hashInt(&cmap, u16, program.cmap.glyph(codepoint));
     }
 
     var advances: std.hash.Wyhash = .init(0);
     var outlines: std.hash.Wyhash = .init(0);
-    var vertices: std.ArrayList(text.Outline.Vertex) = .empty;
+    var vertices: std.ArrayList(text.font.Outline.Vertex) = .empty;
     defer vertices.deinit(gpa);
     const units_per_em: f32 = @floatFromInt(program.units_per_em);
     for (0..program.glyph_count) |glyph_id| {

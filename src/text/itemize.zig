@@ -1,8 +1,8 @@
 //! Splits a paragraph into runs of one face and one script.
 
 const std = @import("std");
-const unicode = @import("unicode/root.zig");
-const FontProgram = @import("font/FontProgram.zig");
+const unicode = @import("unicode");
+const FontProgram = @import("font").FontProgram;
 
 pub const chain_length_max = 16;
 

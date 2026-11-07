@@ -4,7 +4,7 @@
 //! output are O(1), so a lookup pass is linear however many glyphs it inserts or removes.
 
 const std = @import("std");
-const unicode = @import("../unicode/root.zig");
+const unicode = @import("unicode");
 
 allocator: std.mem.Allocator,
 glyphs: std.MultiArrayList(Glyph) = .empty,

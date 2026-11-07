@@ -1,5 +1,5 @@
 const std = @import("std");
-const grapheme = @import("unicode/grapheme.zig");
+const grapheme = @import("unicode").grapheme;
 
 text: []const u8,
 glyphs: Glyphs,

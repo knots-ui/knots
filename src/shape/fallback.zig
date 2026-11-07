@@ -1,7 +1,7 @@
 //! Mark positioning for fonts without GPOS, ported from hb-ot-shape-fallback.cc.
 
 const std = @import("std");
-const FontProgram = @import("../font/FontProgram.zig");
+const FontProgram = @import("font").FontProgram;
 const Buffer = @import("Buffer.zig");
 const props = @import("props.zig");
 
