@@ -5,7 +5,9 @@
 //! using another graphics API must implement those conventions and reject any
 //! texture or callback extension it does not support.
 
-const types = @import("render_types");
+const Vertex = @import("Vertex.zig");
+const Instance = @import("Instance.zig");
+const SlugInstance = @import("SlugInstance.zig");
 const Clip = @import("Clip.zig");
 const GlyphAtlas = @import("GlyphAtlas.zig");
 const Command = @import("Command.zig").Command;
@@ -21,10 +23,10 @@ pub const Range = struct {
 /// Every slice is borrowed from its producing `Context` and remains valid until
 /// that view begins its next frame or is deinitialized.
 commands_value: []const Command,
-primitive_vertices_value: []const types.Vertex,
+primitive_vertices_value: []const Vertex,
 primitive_indices_value: []const u32,
-instances_value: []const types.Instance,
-text_instances_value: []const types.SlugInstance,
+instances_value: []const Instance,
+text_instances_value: []const SlugInstance,
 clip_nodes_value: []const Clip.Node,
 glyph_atlas_value: ?GlyphAtlas,
 
@@ -32,10 +34,10 @@ const Packet = @This();
 
 pub fn init(
     commands_value: []const Command,
-    primitive_vertices_value: []const types.Vertex,
+    primitive_vertices_value: []const Vertex,
     primitive_indices_value: []const u32,
-    instances_value: []const types.Instance,
-    text_instances_value: []const types.SlugInstance,
+    instances_value: []const Instance,
+    text_instances_value: []const SlugInstance,
     clip_nodes_value: []const Clip.Node,
     glyph_atlas_value: ?GlyphAtlas,
 ) Packet {
@@ -54,7 +56,7 @@ pub fn commands(self: *const Packet) []const Command {
     return self.commands_value;
 }
 
-pub fn primitiveVertices(self: *const Packet) []const types.Vertex {
+pub fn primitiveVertices(self: *const Packet) []const Vertex {
     return self.primitive_vertices_value;
 }
 
@@ -62,11 +64,11 @@ pub fn primitiveIndices(self: *const Packet) []const u32 {
     return self.primitive_indices_value;
 }
 
-pub fn instances(self: *const Packet) []const types.Instance {
+pub fn instances(self: *const Packet) []const Instance {
     return self.instances_value;
 }
 
-pub fn textInstances(self: *const Packet) []const types.SlugInstance {
+pub fn textInstances(self: *const Packet) []const SlugInstance {
     return self.text_instances_value;
 }
 

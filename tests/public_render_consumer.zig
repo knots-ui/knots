@@ -1,5 +1,4 @@
 const std = @import("std");
-const gpu = render.types;
 const render = @import("render");
 
 const PortableEncoder = struct {
@@ -59,7 +58,7 @@ fn packetElementCount(packet: *const render.Packet) u64 {
 }
 
 test "consumer needs only the public render module" {
-    const primitive_vertices = [_]gpu.Vertex{std.mem.zeroes(gpu.Vertex)};
+    const primitive_vertices = [_]render.Vertex{std.mem.zeroes(render.Vertex)};
     const primitive_indices = [_]u32{0};
     const clip_nodes = [_]render.Clip.Node{render.Clip.Node.empty};
     const commands = [_]render.DrawList.Command{.{
@@ -80,7 +79,7 @@ test "consumer needs only the public render module" {
     try std.testing.expectEqual(@as(u32, 1), encoder.primitive_indices);
     try std.testing.expectEqual(@as(u64, 4), packetElementCount(&packet));
     try std.testing.expectEqual(
-        @as(u32, @sizeOf(gpu.Vertex)),
+        @as(u32, @sizeOf(render.Vertex)),
         render.contract.layouts.primitive_stride_bytes,
     );
     try std.testing.expect(render.shaders.primitives_wgsl.len > 0);

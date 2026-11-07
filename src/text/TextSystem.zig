@@ -1,6 +1,7 @@
 const std = @import("std");
-const FontProgram = @import("font").FontProgram;
-const Outline = @import("font").Outline;
+const font = @import("font");
+const FontProgram = font.FontProgram;
+const Outline = font.Outline;
 const GlyphStore = @import("GlyphStore.zig");
 const TextLayout = @import("TextLayout.zig");
 const curve = @import("curve.zig");
@@ -333,9 +334,9 @@ pub fn faceById(self: *const TextSystem, id: FaceId) *Face {
     return self.faces.items[id];
 }
 
-pub fn lineHeight(self: *const TextSystem, font: ?[]const u8, size: f32) !f32 {
+pub fn lineHeight(self: *const TextSystem, font_name: ?[]const u8, size: f32) !f32 {
     try validateSize(size);
-    const chain = self.chainOf(try self.chainId(font));
+    const chain = self.chainOf(try self.chainId(font_name));
     return self.faceById(chain.faces[0]).lineHeight(size);
 }
 

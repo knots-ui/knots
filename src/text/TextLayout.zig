@@ -1,5 +1,6 @@
 const std = @import("std");
-const grapheme = @import("unicode").grapheme;
+const unicode = @import("unicode");
+const grapheme = unicode.grapheme;
 
 text: []const u8,
 glyphs: Glyphs,

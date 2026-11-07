@@ -1,7 +1,6 @@
 //! Borrowed glyph store snapshot: a u32 word buffer of glyph blobs and a slot table,
 //! both bound as read-only storage buffers. Each GPU copy owns a GlyphAtlasCache.
 const std = @import("std");
-const GlyphAtlas = @This();
 
 id: u32,
 revision: u64,
@@ -14,10 +13,29 @@ table: []const u8,
 words_dirty: Range = .{},
 table_dirty: Range = .{},
 
+const GlyphAtlas = @This();
+
 pub const Range = struct { start: usize = 0, end: usize = 0 };
 
+/// One slot of the table as the Slug shaders read it: ink bounds and band transform in
+/// ems, then where the glyph's blob and point stream start in the word buffer.
+pub const Entry = extern struct {
+    bounds: [4]f32,
+    band: [4]f32,
+    blob: u32,
+    points: u32,
+    band_max: u32,
+    flags: u32 = 0,
+
+    pub const empty: Entry = .{ .bounds = @splat(0), .band = @splat(0), .blob = 0, .points = 0, .band_max = 0 };
+
+    comptime {
+        std.debug.assert(@sizeOf(Entry) == 48);
+    }
+};
+
 pub const word_bytes: u32 = 4;
-pub const entry_bytes: u32 = @sizeOf(@import("render_types").GlyphEntry);
+pub const entry_bytes: u32 = @sizeOf(Entry);
 /// The minimum storage binding size WebGPU and Vulkan guarantee.
 pub const plane_bytes_max: u32 = 128 * 1024 * 1024;
 var next_id: std.atomic.Value(u32) = .init(1);

@@ -3,7 +3,7 @@ const Frame = ui_mod.Frame;
 const Key = ui_mod.Key;
 const Style = ui_mod.Style;
 const Element = @import("layout").Element;
-const types = @import("render_types");
+const gpu = @import("gpu");
 const render = @import("render");
 
 /// `data` is borrowed and uploaded at draw time, after the frame callback
@@ -19,7 +19,7 @@ pub const Pixels = struct {
     data: []const u8,
     width: u32,
     height: u32,
-    format: types.Texture.Format = .rgba8,
+    format: gpu.Texture.Format = .rgba8,
     bytes_per_row: ?u32 = null,
     upload_policy: UploadPolicy = .always,
     version: u64 = 0,

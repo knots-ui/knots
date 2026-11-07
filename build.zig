@@ -146,17 +146,11 @@ pub fn build(b: *std.Build) void {
         },
     };
 
-    const render_types_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/render/types/root.zig"),
-    });
     const gpu_mod = b.addModule("gpu", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/gpu/root.zig"),
     });
-    gpu_mod.addImport("render_types", render_types_mod);
     gpu_impl_mod.addImport("gpu", gpu_mod);
 
     const input_mod = b.addModule("input", .{
@@ -274,6 +268,16 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/math/root.zig"),
     });
 
+    const render_mod = b.addModule("render", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/render/root.zig"),
+        .imports = &.{
+            .{ .name = "gpu", .module = gpu_mod },
+            .{ .name = "math", .module = math_mod },
+        },
+    });
+
     const test_font = b.path("src/ui/fonts/default.ttf");
 
     const unicode_mod = b.createModule(.{
@@ -307,20 +311,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "font", .module = font_mod },
             .{ .name = "shape", .module = shape_mod },
             .{ .name = "unicode", .module = unicode_mod },
-            .{ .name = "render_types", .module = render_types_mod },
+            .{ .name = "render", .module = render_mod },
         },
     });
     text_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
-
-    const render_mod = b.addModule("render", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/render/root.zig"),
-        .imports = &.{
-            .{ .name = "render_types", .module = render_types_mod },
-            .{ .name = "math", .module = math_mod },
-        },
-    });
 
     const renderer_mod = b.addModule("renderer", .{
         .target = target,
@@ -367,7 +361,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "math", .module = math_mod },
-            .{ .name = "render_types", .module = render_types_mod },
+            .{ .name = "render", .module = render_mod },
         },
     });
 
@@ -380,7 +374,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "style", .module = style_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "input", .module = input_mod },
-            .{ .name = "render_types", .module = render_types_mod },
+            .{ .name = "gpu", .module = gpu_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
         },
