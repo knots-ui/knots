@@ -412,6 +412,7 @@ fn renderFrame(
     viewport.window.setCursorShape(
         output.cursor_shape,
     );
+    try viewport.window.setTextInput(output.text_input);
 
     try viewport.window.setHitRegions(output.hit_regions);
 

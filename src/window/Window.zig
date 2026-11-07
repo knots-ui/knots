@@ -22,6 +22,9 @@ const mouse_button_count = input.mouse_button_count;
 const MouseButtonState = input.MouseButtonState;
 const key_count = input.key_count;
 const CursorShape = input.CursorShape;
+const TextEdit = input.TextEdit;
+const TextInputSession = input.TextInputSession;
+const TextInputState = @import("TextInputState.zig");
 
 backend: impl.Backend,
 allocator: std.mem.Allocator,
@@ -29,6 +32,10 @@ should_close: bool = false,
 mouse: Mouse = .{},
 scroll: ScrollInput = .{},
 char_buf: std.ArrayList(u21) = .empty,
+/// Edits from the input method since the last frame; text and segments are owned.
+text_edits: std.ArrayList(TextEdit) = .empty,
+/// The focused field, as the input method sees it.
+text_input: TextInputState = .{},
 key_events: std.ArrayList(KeyEvent) = .empty,
 key_down: [key_count]bool = @splat(false),
 input_error: ?std.mem.Allocator.Error = null,
@@ -85,6 +92,9 @@ fn initWithPrimary(primary: ?*const Window, io: std.Io, allocator: std.mem.Alloc
 pub fn deinit(self: *Window) void {
     self.backend.deinit();
     self.char_buf.deinit(self.allocator);
+    self.freeTextEdits();
+    self.text_edits.deinit(self.allocator);
+    self.text_input.deinit(self.allocator);
     self.key_events.deinit(self.allocator);
     self.hit_regions.deinit(self.allocator);
     if (self.pending_paste) |text| self.allocator.free(text);
@@ -255,6 +265,7 @@ pub fn collectInput(self: *Window) !Input {
         .mouse = mouse.buttons,
         .scroll = scroll,
         .chars = chars,
+        .text_edits = self.text_edits.items,
         .key_events = key_events,
         .key_down = &self.key_down,
         .shift_held = self.mods.shift,
@@ -274,6 +285,9 @@ pub fn setInput(self: *Window, frame: Input) void {
     self.char_buf.appendSlice(self.allocator, frame.chars) catch |err| {
         self.input_error = err;
     };
+    for (frame.text_edits) |edit| self.queueTextEdit(edit) catch |err| {
+        self.input_error = err;
+    };
     self.key_events.appendSlice(self.allocator, frame.key_events) catch |err| {
         self.input_error = err;
     };
@@ -281,6 +295,7 @@ pub fn setInput(self: *Window, frame: Input) void {
 
 pub fn finishInputFrame(self: *Window) void {
     self.char_buf.clearRetainingCapacity();
+    self.freeTextEdits();
     self.key_events.clearRetainingCapacity();
 }
 
@@ -329,6 +344,43 @@ pub fn pushChar(self: *Window, codepoint: u21) void {
         return;
     };
     self.markInputChanged();
+}
+
+/// Hands the focused field to the input method; pass `Frame.Output.text_input` every frame.
+pub fn setTextInput(self: *Window, session: ?TextInputSession) !void {
+    const change = try self.text_input.set(self.allocator, if (session) |*s| s else null);
+    if (@hasDecl(impl.Backend, "updateTextInput")) self.backend.updateTextInput(self, change);
+}
+
+/// An edit from the input method. `replace` and `selection` are bytes of the
+/// session text as edits so far left it. Edits for another session are dropped.
+pub fn pushTextEdit(self: *Window, edit: TextEdit) void {
+    if (!self.text_input.active or edit.session != self.text_input.id) return;
+    self.queueTextEdit(edit) catch |err| {
+        self.input_error = err;
+    };
+    self.markInputChanged();
+}
+
+fn queueTextEdit(self: *Window, edit: TextEdit) !void {
+    var owned = edit;
+    owned.text = try self.allocator.dupe(u8, edit.text);
+    errdefer self.allocator.free(owned.text);
+    if (edit.compose) |compose| {
+        owned.compose.?.segments = try self.allocator.dupe(input.CompositionSegment, compose.segments);
+    }
+    errdefer if (owned.compose) |compose| self.allocator.free(compose.segments);
+    try self.text_edits.append(self.allocator, owned);
+    // The owned copy: `edit.text` may point into the session copy that `apply` rewrites.
+    try self.text_input.apply(self.allocator, owned);
+}
+
+fn freeTextEdits(self: *Window) void {
+    for (self.text_edits.items) |edit| {
+        self.allocator.free(edit.text);
+        if (edit.compose) |compose| self.allocator.free(compose.segments);
+    }
+    self.text_edits.clearRetainingCapacity();
 }
 
 pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {

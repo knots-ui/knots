@@ -7,6 +7,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const xdg = wayland.client.xdg;
 const zxdg = wayland.client.zxdg;
+const zwp = wayland.client.zwp;
 
 const gpu = @import("gpu");
 const window = @import("window");
@@ -14,6 +15,7 @@ const drop_paths = @import("window_drop_paths");
 
 const keymap = @import("keymap.zig");
 const xkb = @import("xkb.zig");
+const text_input = @import("text_input.zig");
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -131,6 +133,9 @@ const Shared = struct {
     xkb_context: ?*xkb.Context = null,
     xkb_keymap: ?*xkb.Keymap = null,
     xkb_state: ?*xkb.State = null,
+    compose: text_input.Compose = .{},
+    text_input_manager: ?*zwp.TextInputManagerV3 = null,
+    ime: text_input.Ime,
     repeat_rate: i32 = 0,
     repeat_delay_ms: i32 = 600,
     repeat_key: ?u32 = null,
@@ -144,6 +149,8 @@ const Shared = struct {
 
     fn deinit(self: *Shared) void {
         self.clearRepeat();
+        self.ime.deinit();
+        if (self.text_input_manager) |manager| manager.destroy();
         self.deinitXkb();
         self.clearClipboardSource();
         self.paste.deinit(self.allocator);
@@ -224,6 +231,7 @@ const Shared = struct {
     }
 
     fn deinitXkb(self: *Shared) void {
+        self.compose.deinit();
         if (self.xkb_state) |state| {
             xkb.xkb_state_unref(state);
             self.xkb_state = null;
@@ -321,7 +329,7 @@ const Shared = struct {
         while (now >= self.repeat_next_ms and emitted < 8) : (emitted += 1) {
             const typed = if (self.repeat_key) |k| self.typedForKey(k) orelse 0 else 0;
             owner.pushKeyText(@backingInt(self.repeat_window_key), .repeat, self.currentMods(), typed);
-            if (self.repeat_char) |cp| owner.pushChar(cp);
+            if (self.repeat_char) |cp| typeChar(owner, cp);
             self.repeat_next_ms += interval;
         }
     }
@@ -333,6 +341,22 @@ const Shared = struct {
         const data_device = manager.getDataDevice(seat) catch return;
         data_device.setListener(*Shared, dataDeviceListener, self);
         self.data_device = data_device;
+    }
+
+    fn setupTextInput(self: *Shared) void {
+        if (self.ime.text_input != null) return;
+        const manager = self.text_input_manager orelse return;
+        const seat = self.seat orelse return;
+        const ti = manager.getTextInput(seat) catch return;
+        ti.setListener(*Shared, textInputListener, self);
+        self.ime.text_input = ti;
+    }
+
+    /// Types a character into the focused field, or as a character event.
+    fn typeChar(owner: *window.Window, cp: u21) void {
+        var buf: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(cp, &buf) catch return;
+        text_input.typeText(owner, buf[0..n]);
     }
 
     fn offerMime(self: *Shared, data_offer: *wl.DataOffer, mime: [*:0]const u8) void {
@@ -381,6 +405,7 @@ const Shared = struct {
         if (state.xkb_keymap) |old| xkb.xkb_keymap_unref(old);
         state.xkb_keymap = new_keymap;
         state.xkb_state = new_state;
+        state.compose.init(context);
     }
 };
 
@@ -725,6 +750,13 @@ pub const Backend = struct {
         self.state.applyCursor();
     }
 
+    pub fn updateTextInput(self: *Self, owner: *window.Window, change: window.TextInputState.Change) void {
+        // The UI committed or dropped the dead-key preedit, so the sequence ends
+        // here; otherwise the next key would type the accent a second time.
+        if (change.any()) self.state.shared.compose.reset();
+        self.state.shared.ime.sync(self.state.surface, owner, change);
+    }
+
     pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
         if (self.state.cursor_shape == shape) return;
         self.state.cursor_shape = shape;
@@ -848,6 +880,7 @@ fn initShared(io: std.Io, allocator: std.mem.Allocator) !*Shared {
         .allocator = allocator,
         .display = display,
         .registry = registry,
+        .ime = .{ .allocator = allocator },
     };
     shared.wake_pipe = try createWakePipe();
     errdefer {
@@ -965,6 +998,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Sh
                 seat.setListener(*Shared, seatListener, state);
                 state.seat = seat;
                 state.setupDataDevice();
+                state.setupTextInput();
             } else if (std.mem.orderZ(u8, global.interface, wl.Output.interface.name) == .eq) {
                 if (state.output_count >= state.outputs.len) return;
                 const output = registry.bind(global.name, wl.Output, global.version) catch return;
@@ -978,6 +1012,9 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, state: *Sh
                 const wm_base = registry.bind(global.name, xdg.WmBase, global.version) catch return;
                 wm_base.setListener(*Shared, wmBaseListener, state);
                 state.wm_base = wm_base;
+            } else if (std.mem.orderZ(u8, global.interface, zwp.TextInputManagerV3.interface.name) == .eq) {
+                state.text_input_manager = registry.bind(global.name, zwp.TextInputManagerV3, 1) catch null;
+                state.setupTextInput();
             } else if (std.mem.orderZ(u8, global.interface, zxdg.DecorationManagerV1.interface.name) == .eq) {
                 state.decoration_manager = registry.bind(global.name, zxdg.DecorationManagerV1, global.version) catch null;
             }
@@ -1216,6 +1253,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
         },
         .leave => {
             state.clearRepeat();
+            state.compose.reset();
             if (state.keyboard_state) |target| {
                 if (target.owner) |owner| owner.setFocused(false);
             }
@@ -1228,9 +1266,17 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
             state.last_input_serial = key.serial;
             switch (key.state) {
                 .pressed => {
+                    // Dead keys and Compose sequences belong to the composition, not the UI.
+                    if (state.xkb_state) |xkb_state| {
+                        const keysym = xkb.xkb_state_key_get_one_sym(xkb_state, key.key + 8);
+                        if (state.compose.feed(owner, keysym) == .consumed) {
+                            state.clearRepeat();
+                            return;
+                        }
+                    }
                     const cp = state.utf32ForKey(key.key);
                     owner.pushKeyText(@backingInt(translated), .press, mods, state.typedForKey(key.key) orelse 0);
-                    if (cp) |ch| owner.pushChar(ch);
+                    if (cp) |ch| Shared.typeChar(owner, ch);
                     state.startRepeat(key.key, translated, cp);
                 },
                 .released => {
@@ -1261,6 +1307,18 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, state: *Shared) v
             state.repeat_delay_ms = @max(repeat.delay, 0);
             if (state.repeat_rate == 0) state.clearRepeat();
         },
+    }
+}
+
+fn textInputListener(_: *zwp.TextInputV3, event: zwp.TextInputV3.Event, state: *Shared) void {
+    const surface = switch (event) {
+        .enter => |enter| enter.surface,
+        else => state.ime.entered,
+    };
+    const owner = if (surface) |s| if (findState(state, s)) |target| target.owner else null else null;
+    state.ime.handle(event, owner);
+    if (event == .enter) {
+        if (owner) |o| state.ime.sync(surface.?, o, .{ .started = true });
     }
 }
 

@@ -291,9 +291,190 @@ class KnotsBrowserHost {
     return chars[0].codePointAt(0) ?? 0;
   }
 
-  shouldHandleEvent(event, catcher) {
+  /// Keys that belong to an input method: a composition in progress, or a dead key starting one.
+  isImeKey(event) {
+    return event.isComposing ||
+      event.keyCode === 229 ||
+      event.key === "Dead" ||
+      event.key === "Process"
+      ? 1
+      : 0;
+  }
+
+  /// The browser end of the focused field: an EditContext on the canvas where the
+  /// browser has one, else a hidden textarea at the caret. Offsets are UTF-16.
+  /// `callback(kind, start, end, text, a, b, formats)` reports edits:
+  /// - "commit": replace start..end (-1: the composition or selection) with text;
+  ///   a..b is the selection after it, or -1.
+  /// - "compose": the same, but the text becomes the composition; a..b is its caret.
+  /// - "format": formats is [start, end, active, ...] over the composition, in the field.
+  /// - "end": the composition is committed as it stands.
+  createTextInput(canvas, callback) {
+    const ti = {
+      active: false,
+      composing: false,
+      text: "",
+      selectionStart: 0,
+      selectionEnd: 0,
+      element: null,
+    };
+    const canvasRect = () => canvas.getBoundingClientRect();
+    const toClient = (x, y, w, h) => {
+      const rect = canvasRect();
+      return new DOMRect(rect.left + x, rect.top + y, w, h);
+    };
+
+    if (typeof EditContext !== "undefined") {
+      const ec = new EditContext();
+      ti.editContext = ec;
+      ti.element = canvas;
+      if (canvas.tabIndex < 0) canvas.tabIndex = 0;
+      canvas.style.outline = "none";
+      ec.addEventListener("compositionstart", () => {
+        ti.composing = true;
+      });
+      ec.addEventListener("compositionend", () => {
+        ti.composing = false;
+        callback("end", -1, -1, "", -1, -1, []);
+      });
+      ec.addEventListener("textupdate", (e) => {
+        if (ti.composing) {
+          callback(
+            "compose",
+            e.updateRangeStart,
+            e.updateRangeEnd,
+            e.text,
+            e.selectionStart - e.updateRangeStart,
+            e.selectionEnd - e.updateRangeStart,
+            [],
+          );
+        } else {
+          callback(
+            "commit",
+            e.updateRangeStart,
+            e.updateRangeEnd,
+            e.text,
+            e.selectionStart,
+            e.selectionEnd,
+            [],
+          );
+        }
+      });
+      ec.addEventListener("textformatupdate", (e) => {
+        const formats = [];
+        for (const f of e.getTextFormats()) {
+          if (f.underlineStyle === "none") continue;
+          formats.push(f.rangeStart, f.rangeEnd, f.underlineThickness === "thick" ? 1 : 0);
+        }
+        callback("format", -1, -1, "", -1, -1, formats);
+      });
+      ec.addEventListener("characterboundsupdate", (e) => {
+        const bounds = [];
+        const r = ti.compositionRect ?? ti.caretRect;
+        if (!r) return;
+        for (let i = e.rangeStart; i < e.rangeEnd; i++) bounds.push(r);
+        ec.updateCharacterBounds(e.rangeStart, bounds);
+      });
+    } else {
+      const ta = document.createElement("textarea");
+      ta.ariaHidden = "true";
+      ta.autocomplete = "off";
+      ta.spellcheck = false;
+      Object.assign(ta.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: "1px",
+        height: "1px",
+        opacity: "0",
+        padding: "0",
+        border: "0",
+        resize: "none",
+        overflow: "hidden",
+        pointerEvents: "none",
+      });
+      document.body.appendChild(ta);
+      ti.element = ta;
+      ta.addEventListener("compositionstart", () => {
+        ti.composing = true;
+      });
+      ta.addEventListener("compositionupdate", (e) => {
+        const n = e.data.length;
+        callback("compose", -1, -1, e.data, n, n, []);
+      });
+      ta.addEventListener("compositionend", (e) => {
+        ti.composing = false;
+        callback("commit", -1, -1, e.data ?? "", -1, -1, []);
+        ta.value = "";
+      });
+      ta.addEventListener("input", (e) => {
+        const type = e.inputType ?? "";
+        if (e.isComposing || ti.composing || type.includes("Composition")) return;
+        if (type.startsWith("insert") && ta.value) callback("commit", -1, -1, ta.value, -1, -1, []);
+        ta.value = "";
+      });
+    }
+
+    /// `reset`: focus moved to another field, or the UI committed the composition,
+    /// so the browser's input method must drop the composition it holds.
+    ti.sync = (active, reset, text, selectionStart, selectionEnd, x, y, w, h, cx, cy, cw, ch) => {
+      const caret = toClient(x, y, w, h);
+      ti.caretRect = caret;
+      ti.compositionRect = cw > 0 ? toClient(cx, cy, cw, ch) : null;
+      if (!active) {
+        if (ti.active) {
+          if (ti.editContext) canvas.editContext = null;
+          else if (document.activeElement === ti.element) ti.element.blur();
+        }
+        ti.active = false;
+        ti.composing = false;
+        return;
+      }
+      if (reset && ti.active) {
+        ti.composing = false;
+        if (ti.editContext) canvas.editContext = null;
+        else {
+          ti.element.blur();
+          ti.element.value = "";
+        }
+        ti.active = false;
+      }
+      if (ti.editContext) {
+        const ec = ti.editContext;
+        if (!ti.active) canvas.editContext = ec;
+        if (ec.text !== text) ec.updateText(0, ec.text.length, text);
+        if (ec.selectionStart !== selectionStart || ec.selectionEnd !== selectionEnd) {
+          ec.updateSelection(selectionStart, selectionEnd);
+        }
+        ec.updateControlBounds(canvasRect());
+        ec.updateSelectionBounds(caret);
+      } else {
+        Object.assign(ti.element.style, {
+          left: `${caret.left}px`,
+          top: `${caret.top}px`,
+          height: `${h}px`,
+        });
+      }
+      ti.active = true;
+      ti.focus();
+    };
+    ti.focus = () => {
+      const focused = document.activeElement;
+      if (focused !== ti.element && (!focused || focused === document.body || focused === canvas)) {
+        ti.element.focus({ preventScroll: true });
+      }
+    };
+    ti.isTarget = (target) => (target === ti.element ? 1 : 0);
+    ti.remove = () => {
+      if (ti.editContext) canvas.editContext = null;
+      else ti.element.remove();
+    };
+    return ti;
+  }
+
+  shouldHandleEvent(event, catcher, textInput) {
     const target = event.target;
-    if (!target || target === catcher) return 1;
+    if (!target || target === catcher || (textInput && textInput.isTarget(target))) return 1;
     const element =
       typeof Element !== "undefined" && target instanceof Element ? target : target.parentElement;
     if (!element) return 1;

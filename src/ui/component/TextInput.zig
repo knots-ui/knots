@@ -63,10 +63,8 @@ pub fn open(self: *const TextInput, frame: *Frame) !Element.Id {
     const edit_state = try ui.state.getOrCreate(.text_input, ui.allocator, id);
     try edit.processAccessibility(self.buf, self.allocator, frame, edit_state, id, self.bytes_max);
 
-    if (is_focused) {
-        ui.requestTextInput();
-        try edit.processInputEarly(self.buf, self.allocator, frame, edit_state, false, self.bytes_max);
-    }
+    try edit.processTextInput(self.buf, self.allocator, frame, edit_state, id, is_focused, false, self.bytes_max);
+    if (is_focused) try edit.processInputEarly(self.buf, self.allocator, frame, edit_state, false, self.bytes_max);
 
     if (ui.hovering(id)) ui.requestCursor(.text);
     const root = ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, ui.states(id, .{}), null);
@@ -82,13 +80,15 @@ pub fn close(self: *const TextInput, frame: *Frame) !void {
     const ui = frame.ui();
     const id = self.key.hash();
     const is_focused = ui.focused(id);
-    const items = self.buf.items;
     const content = ui.contents.items[ui.currentSlot()];
     const padding = (ui.resolveStyle(id, .{ .base = &base.root, .user = self.style }, .{}, null)).layout.padding;
 
+    var focused_display: ?edit.Display = null;
     if (is_focused) {
         const s = ui.state.get(.text_input, id).?;
         const scale = ui.content_scale;
+        try edit.commitOnPress(self.buf, self.allocator, ui, s, id, self.bytes_max);
+        const items = self.buf.items;
 
         var feature_storage: [1]edit.Feature = undefined;
         var text_layout = try edit.editLayout(ui, self.key.indexed(BODY_INDEX).hash(), items, content.font_size, content.font, 0, edit.caretFeatures(items, s.cursor, &feature_storage));
@@ -113,16 +113,19 @@ pub fn close(self: *const TextInput, frame: *Frame) !void {
             self.bytes_max,
         );
         ui.input.consumeKeyboard();
-        text_layout = try edit.editLayout(ui, self.key.indexed(BODY_INDEX).hash(), self.buf.items, content.font_size, content.font, 0, edit.caretFeatures(self.buf.items, s.cursor, &feature_storage));
+        const d = try edit.display(frame, id, self.buf.items, s);
+        focused_display = d;
+        text_layout = try edit.editLayout(ui, self.key.indexed(BODY_INDEX).hash(), d.text, content.font_size, content.font, 0, edit.caretFeatures(d.text, d.caret, &feature_storage));
 
-        const sel_lo = @min(s.cursor, s.sel_anchor);
-        const sel_hi = @max(s.cursor, s.sel_anchor);
-        const has_sel = sel_lo != sel_hi;
-        const caret_point = text_layout.pointForByte(s.cursor);
+        const sel_lo = d.selection.start;
+        const sel_hi = d.selection.end;
+        const has_sel = d.composition == null and sel_lo != sel_hi;
+        const caret_point = text_layout.pointForByte(d.caret);
         const cursor_pos = .{ .x = caret_point.x / scale, .y = caret_point.y / scale };
         const viewport_w = @max(0, measured.width - padding.left() - padding.right());
         ensureCaretVisibleX(scroll, cursor_pos.x, viewport_w, text_layout.width / scale);
         const scroll_x = scroll.offset[0];
+        try edit.publishTextInput(frame, id, d, text_layout, .{ content_origin[0] - scroll_x, content_origin[1] }, line_h, .text);
 
         if (has_sel) {
             const selection = ui.resolveStyle(self.key.indexed(SELECTION_BASE).hash(), .{ .base = &base.selection, .user = self.parts.selection }, .{}, null);
@@ -143,16 +146,17 @@ pub fn close(self: *const TextInput, frame: *Frame) !void {
     }
 
     var body_features: [1]edit.Feature = undefined;
-    if (!is_focused and self.buf.items.len == 0) {
+    const body = if (focused_display) |d| d.text else self.buf.items;
+    if (!is_focused and body.len == 0) {
         if (self.placeholder.len > 0)
             _ = try ui.styledText(self.key.indexed(BODY_INDEX), self.placeholder, .{ .base = &base.placeholder, .user = self.parts.placeholder }, .{});
-    } else if (self.buf.items.len > 0) {
-        var deco = try ui.textDecoration(try frame.arena().dupe(u8, self.buf.items), content.font_size, content.font, false);
+    } else if (body.len > 0) {
+        var deco = try ui.textDecoration(if (focused_display) |d| d.text else try frame.arena().dupe(u8, body), content.font_size, content.font, false);
         deco.text.color = content.foreground;
         deco.text.key = self.key.indexed(BODY_INDEX).hash();
-        if (is_focused) {
-            const edit_cursor = ui.state.get(.text_input, id).?.cursor;
-            deco.text.features = try frame.arena().dupe(edit.Feature, edit.caretFeatures(self.buf.items, edit_cursor, &body_features));
+        if (focused_display) |d| {
+            deco.text.features = try frame.arena().dupe(edit.Feature, edit.caretFeatures(d.text, d.caret, &body_features));
+            deco.text.underlines = try edit.compositionUnderlines(frame, d);
             try ui.measureText(&deco.text);
         }
         _ = try ui.open(self.key.indexed(BODY_INDEX), .{ .width = .fit(), .height = .fit() }, deco);

@@ -8,6 +8,10 @@ const Element = @import("layout").Element;
 const TextLayout = @import("text").TextLayout;
 const grapheme = @import("text").unicode.grapheme;
 const Accessibility = @import("../Accessibility.zig");
+const decoration = @import("../decoration.zig");
+const Decoration = decoration.Decoration;
+const TextRange = input_types.TextRange;
+const TextRect = input_types.TextRect;
 
 const DOUBLE_CLICK_MS: i64 = 400;
 
@@ -65,6 +69,119 @@ pub fn processAccessibility(buf: *std.ArrayList(u8), allocator: std.mem.Allocato
             }
         }
     }
+}
+
+/// Commits the composition of a field that lost focus, then applies the
+/// platform's edits to the focused field.
+pub fn processTextInput(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, frame: *Frame, s: *State.TextInput, id: Element.Id, focused: bool, multiline: bool, bytes_max: u32) !void {
+    const ui = frame.ui();
+    if (!focused) {
+        if (try ui.composition.commit(allocator, id, buf, bytes_max)) |end| {
+            s.cursor = end;
+            s.sel_anchor = end;
+        }
+        return;
+    }
+    const session = ui.textSessionId(id);
+    for (ui.input.text_edits) |text_edit| {
+        var to_apply = text_edit;
+        if (session) |current| {
+            if (text_edit.session != current) continue;
+        } else {
+            // Focus just moved here, so the platform still addresses the previous
+            // field. Its plain typing lands at this field's caret, as key presses would.
+            if (ui.text_session_owner == Element.INVALID_ID or text_edit.session != ui.text_session_id) continue;
+            if (text_edit.compose != null) continue;
+            const sel = selectionRange(s);
+            const len: u32 = @intCast(buf.items.len);
+            to_apply = .{ .session = text_edit.session, .replace = .{ .start = @min(sel.lo, len), .end = @min(sel.hi, len) }, .text = text_edit.text };
+        }
+        const applied = try ui.composition.apply(allocator, id, buf, to_apply, multiline, bytes_max) orelse continue;
+        s.sel_anchor = applied.anchor;
+        s.cursor = applied.cursor;
+    }
+    if (ui.composition.active(id)) ui.composition_seen = true;
+}
+
+/// Clicking a composing field commits the composition, as native fields do.
+pub fn commitOnPress(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, ui: *UI, s: *State.TextInput, id: Element.Id, bytes_max: u32) !void {
+    if (!ui.input.mouseButton(.left).pressed or !ui.hovering(id)) return;
+    if (try ui.composition.commit(allocator, id, buf, bytes_max)) |end| {
+        s.cursor = end;
+        s.sel_anchor = end;
+    }
+}
+
+/// What a field draws: its buffer with any composition in place.
+pub const Display = struct {
+    /// Owned by the frame arena, so it can be drawn and published without another copy.
+    text: []const u8,
+    caret: u32,
+    selection: TextRange,
+    composition: ?TextRange,
+};
+
+pub fn display(frame: *Frame, id: Element.Id, buf: []const u8, s: *const State.TextInput) !Display {
+    const ui = frame.ui();
+    const text = try ui.composition.splice(frame.arena(), id, buf);
+    if (ui.composition.active(id)) {
+        const range = ui.composition.range();
+        const caret = range.start + ui.composition.caret.end;
+        return .{
+            .text = text,
+            .caret = caret,
+            .selection = .{ .start = range.start + ui.composition.caret.start, .end = caret },
+            .composition = range,
+        };
+    }
+    const sel = selectionRange(s);
+    return .{ .text = text, .caret = s.cursor, .selection = .{ .start = sel.lo, .end = sel.hi }, .composition = null };
+}
+
+/// A thin underline under the composition and a thick one under its active clause.
+pub fn compositionUnderlines(frame: *Frame, d: Display) ![]const Decoration.Underline {
+    const range = d.composition orelse return &.{};
+    const ui = frame.ui();
+    const segments = ui.composition.segments.items;
+    const out = try frame.arena().alloc(Decoration.Underline, 1 + segments.len);
+    out[0] = .{ .start = range.start, .end = range.end };
+    var n: usize = 1;
+    for (segments) |segment| {
+        if (!segment.active) continue;
+        out[n] = .{ .start = range.start + segment.start, .end = range.start + segment.end, .thick = true };
+        n += 1;
+    }
+    return out[0..n];
+}
+
+/// Publishes the focused field to the platform text input. `origin` is where the
+/// text layout's top-left sits in the window, in logical pixels.
+pub fn publishTextInput(frame: *Frame, id: Element.Id, d: Display, text_layout: *const TextLayout, origin: [2]f32, line_h: f32, purpose: input_types.TextInputPurpose) !void {
+    const ui = frame.ui();
+    const scale = ui.content_scale;
+    const caret = text_layout.pointForByte(d.caret);
+    var rects: []TextRect = &.{};
+    if (d.composition) |range| {
+        var spans: std.ArrayList(TextLayout.Rect) = .empty;
+        try text_layout.selectionRects(frame.arena(), range.start, range.end, &spans);
+        rects = try frame.arena().alloc(TextRect, spans.items.len);
+        for (spans.items, rects) |sp, *r| r.* = .{
+            .x = origin[0] + sp.x / scale,
+            .y = origin[1] + sp.y / scale,
+            .w = sp.w / scale,
+            .h = line_h,
+        };
+    }
+    ui.publishTextInput(id, .{
+        .id = 0,
+        .text = d.text,
+        .selection = d.selection,
+        .composition = d.composition,
+        .composition_segments = if (d.composition != null) try frame.arena().dupe(input_types.CompositionSegment, ui.composition.segments.items) else &.{},
+        .purpose = purpose,
+        .caret = .{ .x = origin[0] + caret.x / scale, .y = origin[1] + caret.y / scale, .w = 1, .h = line_h },
+        .composition_rects = rects,
+    });
 }
 
 pub fn byteToCharacter(bytes: []const u8, byte: u32) u32 {

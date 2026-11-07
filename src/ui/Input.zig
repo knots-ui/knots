@@ -13,6 +13,7 @@ mouse: [mouse_button_count]input_types.MouseButtonState = @splat(.{}),
 scroll: input_types.ScrollInput = .{},
 scroll_delta: [2]f32 = .{ 0, 0 },
 chars: []const u21 = &.{},
+text_edits: []const input_types.TextEdit = &.{},
 key_events: []const input_types.KeyEvent = &.{},
 key_down: *const [input_types.key_count]bool = &input_types.no_keys_down,
 shift_held: bool = false,
@@ -58,6 +59,7 @@ pub fn collect(self: *Input, raw: input_types.Input, now_ms: i64) void {
     self.super_held = raw.super_held;
 
     self.chars = raw.chars;
+    self.text_edits = raw.text_edits;
     self.key_events = raw.key_events;
     self.key_down = raw.key_down;
 }

@@ -12,6 +12,7 @@ const State = @import("State.zig");
 const Input = @import("Input.zig");
 const InputScope = @import("InputScope.zig");
 const Accessibility = @import("Accessibility.zig");
+const Composition = @import("Composition.zig");
 const animation = @import("animation.zig");
 
 const Decoration = @import("decoration.zig").Decoration;
@@ -105,7 +106,14 @@ culled_count: u32 = 0,
 content_scale: f32,
 scroll_line_size: FontSize.Input,
 anim_active: bool,
-text_input_requested: bool,
+/// The focused field's platform text input, published by the field this frame.
+text_session: ?input_types.TextInputSession = null,
+/// The field the platform last saw, and the session id it knows it by.
+text_session_owner: Element.Id = Element.INVALID_ID,
+text_session_id: u64 = 0,
+composition: Composition = .{},
+/// The composing field opened this frame.
+composition_seen: bool = false,
 theme: Theme,
 last_stats: Stats,
 cursor_shape: input_types.CursorShape,
@@ -136,7 +144,6 @@ pub fn init(allocator: Allocator, cfg: Config) !UI {
         .content_scale = 1.0,
         .scroll_line_size = cfg.scroll_line_size,
         .anim_active = false,
-        .text_input_requested = false,
         .theme = cfg.theme,
         .last_stats = .{},
         .cursor_shape = .default,
@@ -168,6 +175,7 @@ pub fn deinit(self: *UI) void {
     self.cull_prev.deinit(self.allocator);
     self.cull_next.deinit(self.allocator);
     self.cull_ancestors.deinit(self.allocator);
+    self.composition.deinit(self.allocator);
 }
 
 pub fn open(self: *UI, key: Key, element: Element.Config, decoration: Decoration) !Element.Id {
@@ -545,8 +553,21 @@ pub fn requestCursor(self: *UI, shape: input_types.CursorShape) void {
     self.cursor_shape = shape;
 }
 
-pub fn requestTextInput(self: *UI) void {
-    self.text_input_requested = true;
+/// The session id the platform knows field `id` by; edits for any other id are stale.
+pub fn textSessionId(self: *const UI, id: Element.Id) ?u64 {
+    if (id == Element.INVALID_ID or id != self.text_session_owner) return null;
+    return self.text_session_id;
+}
+
+/// Publishes the focused field `id` to the platform text input. `session.id` is assigned here.
+pub fn publishTextInput(self: *UI, id: Element.Id, session: input_types.TextInputSession) void {
+    if (id != self.text_session_owner) {
+        self.text_session_owner = id;
+        self.text_session_id +%= 1;
+    }
+    var published = session;
+    published.id = self.text_session_id;
+    self.text_session = published;
 }
 
 /// Drive a time-based animation toward `target` for the given (element_id, channel)

@@ -6,6 +6,7 @@ const drop_paths = @import("window_drop_paths");
 const gpu = @import("gpu");
 
 const events = @import("events.zig");
+const ime = @import("ime.zig");
 const keymap = @import("keymap.zig");
 
 const class_name = std.unicode.utf8ToUtf16LeStringLiteral("KnotsWindow");
@@ -105,6 +106,7 @@ pub const Backend = struct {
     hwnd: win32.HWND,
     hinstance: win32.HINSTANCE,
     high_surrogate: u16 = 0,
+    ime: ime.Ime = .{},
     cursor_visible: bool = true,
     cursor_shape: input_types.CursorShape = .default,
     is_fullscreen: bool = false,
@@ -131,6 +133,12 @@ pub const Backend = struct {
 
     pub fn startCapture(self: *Self, owner: *window.Window) void {
         _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWLP_USERDATA, @bitCast(@as(usize, @intFromPtr(owner))));
+        // No field has focus yet, so keys go straight to the UI.
+        _ = win32.ImmAssociateContextEx(self.hwnd, null, 0);
+    }
+
+    pub fn updateTextInput(self: *Self, owner: *window.Window, change: window.TextInputState.Change) void {
+        ime.update(self.hwnd, owner, change);
     }
 
     pub fn pollEvents(_: *const Self, _: std.Io) void {
@@ -848,6 +856,27 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             if (ownerOf(hwnd)) |o| events.onKey(o, wparam, lparam, false);
             if (msg == win32.WM_SYSKEYUP) return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
             return 0;
+        },
+        win32.WM_IME_SETCONTEXT => return ime.onSetContext(hwnd, msg, wparam, lparam),
+        win32.WM_IME_STARTCOMPOSITION => {
+            if (ownerOf(hwnd)) |o| if (ime.onStartComposition(hwnd, o)) return 0;
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        win32.WM_IME_COMPOSITION => {
+            if (ownerOf(hwnd)) |o| if (ime.onComposition(hwnd, o, lparam)) return 0;
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        win32.WM_IME_ENDCOMPOSITION => {
+            if (ownerOf(hwnd)) |o| if (ime.onEndComposition(o)) return 0;
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        win32.WM_IME_REQUEST => {
+            if (ownerOf(hwnd)) |o| if (ime.onRequest(hwnd, o, wparam, lparam)) |result| return result;
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+        win32.WM_DEADCHAR => {
+            if (ownerOf(hwnd)) |o| if (ime.onDeadChar(o, @truncate(wparam))) return 0;
+            return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
         win32.WM_CHAR => {
             if (ownerOf(hwnd)) |o| {

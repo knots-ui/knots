@@ -188,15 +188,24 @@ fn keyDown(self: c.id, _: c.SEL, event_id: c.id) callconv(.c) void {
     const key = shortcutKey(event, kc);
     const mods = modsFromFlags(flags);
     const typed = eventChar(event, flags & (ak.NSEventModifierFlagShift | ak.NSEventModifierFlagOption)) orelse 0;
-    owner.pushKeyText(@backingInt(key), .press, mods, typed);
 
     const skip_chars = (flags & ak.NSEventModifierFlagCommand) != 0 or
         (flags & ak.NSEventModifierFlagControl) != 0;
-    if (skip_chars) return;
+    if (skip_chars) {
+        owner.pushKeyText(@backingInt(key), .press, mods, typed);
+        return;
+    }
 
+    // Keys the input method composes with (Return to convert, Backspace inside the
+    // composition) belong to it, not to the field.
+    const was_composing = owner.text_input.composition != null;
     const view = objc.Object.fromId(self);
     const input_context = view.msgSend(objc.Object, "inputContext", .{});
-    if (input_context.value != null and input_context.msgSend(bool, "handleEvent:", .{event})) return;
+    const handled = input_context.value != null and input_context.msgSend(bool, "handleEvent:", .{event});
+    if (!was_composing and owner.text_input.composition == null) {
+        owner.pushKeyText(@backingInt(key), .press, mods, typed);
+    }
+    if (handled) return;
 
     const characters = event.msgSend(objc.Object, "characters", .{});
     if (characters.value == null) return;

@@ -4,6 +4,7 @@ const win32 = @import("win32").everything;
 const window = @import("window");
 
 const keymap = @import("keymap.zig");
+const ime = @import("ime.zig");
 
 const Backend = @import("root.zig").Backend;
 
@@ -22,8 +23,13 @@ pub fn modsFromKeyState() input_types.Mods {
 
 pub fn onKey(owner: *window.Window, wparam: win32.WPARAM, lparam: win32.LPARAM, pressed: bool) void {
     const vk: u32 = @intCast(wparam);
+    // The input method took the key, or it belongs to its composition.
+    if (pressed and (vk == @backingInt(win32.VK_PROCESSKEY) or owner.backend.ime.composing)) return;
     const key = keymap.translateVk(vk, lparam);
     const lp: u64 = @bitCast(@as(i64, lparam));
+    // After a dead key, a key that types nothing (an arrow, Escape) ends it.
+    if (pressed and owner.backend.ime.dead_key and !isModifier(vk) and
+        typedChar(vk, @intCast((lp >> 16) & 0xFF)) == null) ime.endDeadKey(owner);
     const repeat_bit: u1 = @intCast((lp >> 30) & 1);
     const action: input_types.KeyAction =
         if (!pressed)
@@ -35,6 +41,13 @@ pub fn onKey(owner: *window.Window, wparam: win32.WPARAM, lparam: win32.LPARAM, 
 
     const typed = if (pressed) typedChar(vk, @intCast((lp >> 16) & 0xFF)) orelse 0 else 0;
     owner.pushKeyText(@backingInt(key), action, modsFromKeyState(), typed);
+}
+
+fn isModifier(vk: u32) bool {
+    inline for (.{ win32.VK_SHIFT, win32.VK_CONTROL, win32.VK_MENU, win32.VK_LSHIFT, win32.VK_RSHIFT, win32.VK_LCONTROL, win32.VK_RCONTROL, win32.VK_LMENU, win32.VK_RMENU, win32.VK_CAPITAL, win32.VK_LWIN, win32.VK_RWIN }) |modifier| {
+        if (vk == @backingInt(modifier)) return true;
+    }
+    return false;
 }
 
 fn typedChar(vk: u32, scancode: u32) ?u21 {
@@ -81,6 +94,14 @@ pub fn onChar(owner: *window.Window, high_surrogate: *u16, w: u16) void {
     const ctrl = keyDown(win32.VK_CONTROL);
     const alt = keyDown(win32.VK_MENU);
     if ((ctrl and !alt) or keyDown(win32.VK_LWIN) or keyDown(win32.VK_RWIN)) return;
+    // The composed character replaces the dead key's accent.
+    owner.backend.ime.dead_key = false;
+    if (owner.text_input.active) {
+        var encoded: [4]u8 = undefined;
+        const n = std.unicode.utf8Encode(cp, &encoded) catch return;
+        owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = owner.text_input.target(), .text = encoded[0..n] });
+        return;
+    }
     owner.pushChar(cp);
 }
 

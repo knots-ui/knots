@@ -186,6 +186,77 @@ pub const HitRegion = struct {
     }
 };
 
+/// Byte offsets into UTF-8 text, `start <= end`.
+pub const TextRange = struct {
+    start: u32,
+    end: u32,
+
+    pub fn at(byte: u32) TextRange {
+        return .{ .start = byte, .end = byte };
+    }
+
+    pub fn len(self: TextRange) u32 {
+        return self.end - self.start;
+    }
+};
+
+/// Logical pixels, relative to the window's top-left corner.
+pub const TextRect = struct {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+};
+
+pub const TextInputPurpose = enum { text, multiline };
+
+/// One clause of a composition, in bytes of the composed text. The active
+/// clause is the one the input method is converting.
+pub const CompositionSegment = struct {
+    start: u32,
+    end: u32,
+    active: bool = false,
+};
+
+/// The focused text field, as the platform text input sees it.
+///
+/// The UI publishes one per frame in `Frame.Output.text_input`. The host keeps
+/// a copy to answer the input method's queries until the next frame, and sends
+/// the input method's changes back as `TextEdit`s.
+pub const TextInputSession = struct {
+    /// Changes when a different field takes focus; the host then resets the input method.
+    id: u64,
+    /// The whole field, with any composition in place.
+    text: []const u8,
+    selection: TextRange,
+    /// The uncommitted text the input method is composing, inside `text`.
+    composition: ?TextRange,
+    composition_segments: []const CompositionSegment = &.{},
+    purpose: TextInputPurpose,
+    caret: TextRect,
+    /// One rectangle per line the composition covers, for candidate windows.
+    composition_rects: []const TextRect = &.{},
+};
+
+/// A change the platform text input makes to the field of session `session`.
+/// Ranges are bytes of `TextInputSession.text`, before the edit.
+pub const TextEdit = struct {
+    session: u64,
+    replace: TextRange,
+    text: []const u8,
+    /// When set, the inserted text becomes the composition; otherwise it is committed.
+    compose: ?Compose = null,
+    /// Selection after the edit, in bytes of the edited text. Without it the caret
+    /// goes to the composition's caret, or after the inserted text.
+    selection: ?TextRange = null,
+
+    pub const Compose = struct {
+        /// Caret inside the composed text.
+        caret: TextRange,
+        segments: []const CompositionSegment = &.{},
+    };
+};
+
 pub fn hitRegionAt(regions: []const HitRegion, pos: [2]f64) HitRegion.Kind {
     var i = regions.len;
     while (i > 0) {
@@ -206,6 +277,8 @@ pub const Input = struct {
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
     chars: []const u21 = &.{},
+    /// Changes from the platform text input, in order. See `TextInputSession`.
+    text_edits: []const TextEdit = &.{},
     key_events: []const KeyEvent = &.{},
     key_down: *const [key_count]bool = &no_keys_down,
     shift_held: bool = false,

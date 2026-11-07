@@ -49,7 +49,8 @@ pub const Output = struct {
     cursor_shape: input_types.CursorShape,
     capture_pointer: bool,
     capture_keyboard: bool,
-    text_input: bool,
+    /// The focused text field, for the platform text input. Hand it to the window every frame.
+    text_input: ?input_types.TextInputSession,
     redraw: bool,
     close: bool,
     clipboard_write: ?[]const u8,
