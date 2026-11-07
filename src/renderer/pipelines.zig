@@ -1,5 +1,9 @@
 const gpu = @import("gpu");
-const shaders = @import("render").shaders;
+const render = @import("render");
+const Vertex = render.Vertex;
+const Instance = render.Instance;
+const SlugInstance = render.SlugInstance;
+const shaders = render.shaders;
 
 pub const SlugUniforms = extern struct {
     mvp_row0: [4]f32,
@@ -23,24 +27,24 @@ const premultiplied_blend = gpu.Pipeline.BlendState{
     .alpha = .{ .src_factor = .one, .dst_factor = .one_minus_src_alpha, .op = .add },
 };
 
-const vertex_attrs = gpu.Pipeline.attrsFromStruct(gpu.Vertex);
-const instance_attrs = gpu.Pipeline.attrsFromStruct(gpu.Instance);
-const slug_attrs = gpu.Pipeline.attrsFromStruct(gpu.SlugInstance);
+const vertex_attrs = gpu.Pipeline.attrsFromStruct(Vertex);
+const instance_attrs = gpu.Pipeline.attrsFromStruct(Instance);
+const slug_attrs = gpu.Pipeline.attrsFromStruct(SlugInstance);
 
 const vertex_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
-    .stride = @sizeOf(gpu.Vertex),
+    .stride = @sizeOf(Vertex),
     .step_mode = .vertex,
     .attributes = &vertex_attrs,
 }};
 
 const instance_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
-    .stride = @sizeOf(gpu.Instance),
+    .stride = @sizeOf(Instance),
     .step_mode = .instance,
     .attributes = &instance_attrs,
 }};
 
 const slug_buffers = [_]gpu.Pipeline.VertexBufferLayout{.{
-    .stride = @sizeOf(gpu.SlugInstance),
+    .stride = @sizeOf(SlugInstance),
     .step_mode = .instance,
     .attributes = &slug_attrs,
 }};

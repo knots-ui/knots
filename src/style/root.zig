@@ -5,7 +5,8 @@ pub const Color = @import("Color.zig");
 pub const Radius = @import("Radius.zig");
 pub const BorderWidth = @import("BorderWidth.zig");
 pub const FontSize = @import("FontSize.zig");
-pub const Material = @import("render_types").Material;
+const render = @import("render");
+pub const Material = render.Material;
 pub const Theme = @import("Theme.zig");
 
 pub const Tone = Color.Tone;

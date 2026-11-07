@@ -3,7 +3,8 @@
 
 const std = @import("std");
 const unicode = @import("unicode");
-const FontProgram = @import("font").FontProgram;
+const font = @import("font");
+const FontProgram = font.FontProgram;
 const Buffer = @import("Buffer.zig");
 const props = @import("props.zig");
 

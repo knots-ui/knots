@@ -1,14 +1,18 @@
 const std = @import("std");
 const gpu = @import("gpu");
+const render = @import("render");
+const Vertex = render.Vertex;
+const Instance = render.Instance;
+const SlugInstance = render.SlugInstance;
 const gpu_impl = @import("gpu_impl");
-const Packet = @import("render").Packet;
-const GlyphAtlas = @import("render").GlyphAtlas;
+const Packet = render.Packet;
+const GlyphAtlas = render.GlyphAtlas;
 const GlyphAtlasCache = @import("GlyphAtlasCache.zig");
 const math = @import("math");
 
-const Command = @import("render").Command;
-const TextureSource = @import("render").TextureSource;
-const Clip = @import("render").Clip;
+const Command = render.Command;
+const TextureSource = render.TextureSource;
+const Clip = render.Clip;
 const pipelines = @import("pipelines.zig");
 const FrameUploads = @import("FrameUploads.zig");
 const Context = @import("Context.zig");
@@ -565,17 +569,17 @@ fn uploadFrameData(context: *Context, uploads: *FrameUploads, dl: *const Packet)
     const text_instances = dl.textInstances();
     const empty_clip_nodes = [_]Clip.Node{Clip.Node.empty};
     const clip_nodes = if (dl.clipNodes().len > 0) dl.clipNodes() else empty_clip_nodes[0..];
-    try ensureAndLoad(&uploads.vertex_buf, gpu.Vertex, verts);
-    try ensureAndLoad(&uploads.instance_buf, gpu.Instance, insts);
+    try ensureAndLoad(&uploads.vertex_buf, Vertex, verts);
+    try ensureAndLoad(&uploads.instance_buf, Instance, insts);
     try ensureAndLoad(&uploads.index_buf, u32, dl.primitiveIndices());
-    try ensureAndLoad(&uploads.text_instance_buf, gpu.SlugInstance, text_instances);
+    try ensureAndLoad(&uploads.text_instance_buf, SlugInstance, text_instances);
     try uploads.ensureClipNodeCapacity(context, clip_nodes.len * @sizeOf(Clip.Node));
     uploads.clip_node_buf.load(Clip.Node, clip_nodes);
     return .{
-        .verts_bytes = verts.len * @sizeOf(gpu.Vertex),
-        .insts_bytes = insts.len * @sizeOf(gpu.Instance),
+        .verts_bytes = verts.len * @sizeOf(Vertex),
+        .insts_bytes = insts.len * @sizeOf(Instance),
         .indices_bytes = dl.primitiveIndices().len * @sizeOf(u32),
-        .text_instances_bytes = text_instances.len * @sizeOf(gpu.SlugInstance),
+        .text_instances_bytes = text_instances.len * @sizeOf(SlugInstance),
     };
 }
 

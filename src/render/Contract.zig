@@ -1,7 +1,10 @@
 //! Vertex layouts, resource bindings, texture formats, and uniform contracts.
 
 const std = @import("std");
-const types = @import("render_types");
+const gpu = @import("gpu");
+const Vertex = @import("Vertex.zig");
+const Instance = @import("Instance.zig");
+const SlugInstance = @import("SlugInstance.zig");
 
 /// All packet geometry uses logical pixels with the origin at the top-left.
 /// Commands are triangle lists, use `u32` indices, disable culling, and must be
@@ -13,8 +16,8 @@ const types = @import("render_types");
 /// skip it; the element's own surface is emitted separately.
 pub const geometry = struct {
     pub const text_quad_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
-    pub const front_face: types.Pipeline.FrontFace = .ccw;
-    pub const cull_mode: types.Pipeline.CullMode = .none;
+    pub const front_face: gpu.Pipeline.FrontFace = .ccw;
+    pub const cull_mode: gpu.Pipeline.CullMode = .none;
 };
 
 /// Resource-group and binding numbers shared by the bundled shaders.
@@ -48,13 +51,13 @@ pub const TextUniform = extern struct {
 };
 
 pub const formats = struct {
-    pub const offscreen_color: types.Texture.Format = .rgba8;
+    pub const offscreen_color: gpu.Texture.Format = .rgba8;
     pub const index_size_bytes: u8 = @sizeOf(u32);
 };
 
 /// Primitive output uses straight alpha. Text output is premultiplied alpha.
 pub const blending = struct {
-    pub const primitives = types.Pipeline.BlendState{
+    pub const primitives = gpu.Pipeline.BlendState{
         .color = .{
             .src_factor = .src_alpha,
             .dst_factor = .one_minus_src_alpha,
@@ -66,7 +69,7 @@ pub const blending = struct {
             .op = .add,
         },
     };
-    pub const text = types.Pipeline.BlendState{
+    pub const text = gpu.Pipeline.BlendState{
         .color = .{
             .src_factor = .one,
             .dst_factor = .one_minus_src_alpha,
@@ -81,14 +84,14 @@ pub const blending = struct {
 };
 
 pub const layouts = struct {
-    pub const primitive_stride_bytes: u32 = @sizeOf(types.Vertex);
-    pub const instance_stride_bytes: u32 = @sizeOf(types.Instance);
-    pub const text_stride_bytes: u32 = @sizeOf(types.SlugInstance);
-    pub const text_step_mode: types.Pipeline.VertexStepMode = .instance;
+    pub const primitive_stride_bytes: u32 = @sizeOf(Vertex);
+    pub const instance_stride_bytes: u32 = @sizeOf(Instance);
+    pub const text_stride_bytes: u32 = @sizeOf(SlugInstance);
+    pub const text_step_mode: gpu.Pipeline.VertexStepMode = .instance;
 
-    pub const primitive_attributes = types.Pipeline.attrsFromStruct(types.Vertex);
-    pub const instance_attributes = types.Pipeline.attrsFromStruct(types.Instance);
-    pub const text_attributes = types.Pipeline.attrsFromStruct(types.SlugInstance);
+    pub const primitive_attributes = gpu.Pipeline.attrsFromStruct(Vertex);
+    pub const instance_attributes = gpu.Pipeline.attrsFromStruct(Instance);
+    pub const text_attributes = gpu.Pipeline.attrsFromStruct(SlugInstance);
 };
 
 comptime {

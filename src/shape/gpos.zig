@@ -6,10 +6,11 @@ const apply = @import("apply.zig");
 const Buffer = @import("Buffer.zig");
 const Plan = @import("Plan.zig");
 const props = @import("props.zig");
-const FontProgram = @import("font").FontProgram;
-const Layout = @import("font").Layout;
-const Kern = @import("font").Kern;
-const coverage = @import("font").coverage;
+const font = @import("font");
+const FontProgram = font.FontProgram;
+const Layout = font.Layout;
+const Kern = font.Kern;
+const coverage = font.coverage;
 
 pub const attach_type_mark: u8 = 1;
 pub const attach_type_cursive: u8 = 2;

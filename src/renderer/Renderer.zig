@@ -1,7 +1,9 @@
 const std = @import("std");
 const gpu = @import("gpu");
+const render_mod = @import("render");
+const Instance = render_mod.Instance;
 const gpu_impl = @import("gpu_impl");
-const Packet = @import("render").Packet;
+const Packet = render_mod.Packet;
 
 const FrameUploads = @import("FrameUploads.zig");
 const Context = @import("Context.zig");
@@ -416,7 +418,7 @@ fn compositeSceneTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl
     const height = self.surface.cfg.window_height;
     const logical_w: f32 = @as(f32, @floatFromInt(width)) / content_scale;
     const logical_h: f32 = @as(f32, @floatFromInt(height)) / content_scale;
-    const inst = gpu.Instance{
+    const inst = Instance{
         .pos = .{ 0, 0 },
         .size = .{ logical_w, logical_h },
         .uv0 = .{ 0, 0 },
@@ -427,7 +429,7 @@ fn compositeSceneTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl
         .border_width = .{ 0, 0, 0, 0 },
         .prim_type = 2.0,
     };
-    uploads.composite_instance_buf.load(gpu.Instance, &.{inst});
+    uploads.composite_instance_buf.load(Instance, &.{inst});
 
     var pass = try frame_ctx.beginRenderPass(.{
         .label = "ui_composite",
@@ -441,7 +443,7 @@ fn compositeSceneTarget(self: *Renderer, context: *Context, frame_ctx: *gpu_impl
     pass.setBindGroup(0, &uploads.instance_uniform_bg);
     pass.setBindGroup(1, &self.scene_target_bg.?);
     pass.setBindGroup(2, &uploads.instance_clip_bg);
-    pass.setVertexBuffer(0, &uploads.composite_instance_buf, 0, @sizeOf(gpu.Instance));
+    pass.setVertexBuffer(0, &uploads.composite_instance_buf, 0, @sizeOf(Instance));
     pass.setIndexBuffer(&context.unit_index_buf, 0, 6 * @sizeOf(u32));
     pass.setScissorRect(0, 0, width, height);
     pass.drawIndexed(6, 1, 0, 0, 0);

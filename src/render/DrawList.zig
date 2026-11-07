@@ -1,7 +1,10 @@
 //! Mutable tessellation storage. `Packet` is its immutable, ordered projection.
 
 const std = @import("std");
-const types = @import("render_types");
+const Vertex = @import("Vertex.zig");
+const Instance = @import("Instance.zig");
+const SlugInstance = @import("SlugInstance.zig");
+const Material = @import("Material.zig");
 const math = @import("math");
 const Clip = @import("Clip.zig");
 const Packet = @import("Packet.zig");
@@ -22,10 +25,10 @@ pub const TextBatch = struct {
 };
 
 allocator: std.mem.Allocator,
-vertices: std.ArrayList(types.Vertex),
+vertices: std.ArrayList(Vertex),
 indices: std.ArrayList(u32),
-instances: std.ArrayList(types.Instance),
-text_instances: std.ArrayList(types.SlugInstance),
+instances: std.ArrayList(Instance),
+text_instances: std.ArrayList(SlugInstance),
 /// Ink box per text instance, for overlap tests. Instances carry no bounds of their own.
 text_ink: std.ArrayList(math.Rect),
 clip_nodes: std.ArrayList(Clip.Node),
@@ -37,8 +40,8 @@ current_layer: u8,
 backdrop_groups: std.ArrayList(BackdropGroup),
 /// Packet streams in batched draw order; `vertices` is shared unchanged.
 packet_indices: std.ArrayList(u32),
-packet_instances: std.ArrayList(types.Instance),
-packet_text_instances: std.ArrayList(types.SlugInstance),
+packet_instances: std.ArrayList(Instance),
+packet_text_instances: std.ArrayList(SlugInstance),
 /// Layers whose data is in the packet streams since the last reset.
 packet_layers: std.StaticBitSet(MAX_LAYERS),
 batch_entries: std.ArrayList(BatchEntry),
@@ -519,7 +522,7 @@ fn lastCommand(self: *DrawList) *Command {
 
 pub fn push(
     self: *DrawList,
-    vertices: []const types.Vertex,
+    vertices: []const Vertex,
     indices: []const u32,
     texture: TextureSource,
     clip: Clip.State,
@@ -548,7 +551,7 @@ pub fn push(
 
 pub fn pushInstances(
     self: *DrawList,
-    insts: []const types.Instance,
+    insts: []const Instance,
     texture: TextureSource,
     clip: Clip.State,
 ) !void {
@@ -590,7 +593,7 @@ pub fn pushBackdrop(
     self: *DrawList,
     bounds: math.Rect,
     corner_radius: [4]f32,
-    material: types.Material,
+    material: Material,
     clip: Clip.State,
 ) !void {
     std.debug.assert(material.isValid());
@@ -623,7 +626,7 @@ pub fn reserveTextInstances(self: *DrawList, count: usize) !void {
     try self.text_ink.ensureUnusedCapacity(self.allocator, count);
 }
 
-pub fn pushTextInstance(self: *DrawList, batch: TextBatch, ink: math.Rect, instance: types.SlugInstance) !void {
+pub fn pushTextInstance(self: *DrawList, batch: TextBatch, ink: math.Rect, instance: SlugInstance) !void {
     std.debug.assert(self.text_instances.items.len < self.text_instances.capacity);
     std.debug.assert(instance.size > 0);
     if (!self.lastCmdMatches(.text, .atlas, batch.clip)) {
@@ -646,7 +649,7 @@ test "packet preserves layer order, images, and custom callbacks" {
     var packet_commands: std.ArrayList(Command) = .empty;
     defer packet_commands.deinit(std.testing.allocator);
 
-    const vertex: types.Vertex = std.mem.zeroes(types.Vertex);
+    const vertex: Vertex = std.mem.zeroes(Vertex);
     draw_list.setLayer(2);
     try draw_list.push(&.{vertex}, &.{0}, .atlas, .{ .node = 2 });
     draw_list.setLayer(0);
@@ -701,7 +704,7 @@ test "backdrops group per layer and blur" {
 
     draw_list.setLayer(3);
     try draw_list.pushBackdrop(rect, radii, .{ .blur = 4 }, .{});
-    try draw_list.push(&.{std.mem.zeroes(types.Vertex)}, &.{0}, .atlas, .{});
+    try draw_list.push(&.{std.mem.zeroes(Vertex)}, &.{0}, .atlas, .{});
     try draw_list.pushBackdrop(rect, radii, .{ .blur = 4 }, .{});
     try draw_list.pushBackdrop(rect, radii, .{ .blur = 8 }, .{});
     draw_list.setLayer(1);
@@ -720,15 +723,15 @@ test "backdrops group per layer and blur" {
     try std.testing.expectEqualSlices(u32, &.{ 2, 0, 0, 1 }, groups.items);
 }
 
-fn testRect(x: f32, y: f32, w: f32, h: f32) types.Instance {
-    var inst = std.mem.zeroes(types.Instance);
+fn testRect(x: f32, y: f32, w: f32, h: f32) Instance {
+    var inst = std.mem.zeroes(Instance);
     inst.pos = .{ x, y };
     inst.size = .{ w, h };
     return inst;
 }
 
-fn testGlyph(x: f32, y: f32) types.SlugInstance {
-    var inst = std.mem.zeroes(types.SlugInstance);
+fn testGlyph(x: f32, y: f32) SlugInstance {
+    var inst = std.mem.zeroes(SlugInstance);
     inst.origin = .{ x, y };
     inst.size = 10;
     return inst;

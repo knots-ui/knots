@@ -2,9 +2,10 @@ const input_types = @import("input");
 const std = @import("std");
 const math = @import("math");
 const layout = @import("layout");
-const types = @import("render_types");
-const DrawList = @import("render").DrawList;
-const Clip = @import("render").Clip;
+const render_mod = @import("render");
+const Instance = render_mod.Instance;
+const DrawList = render_mod.DrawList;
+const Clip = render_mod.Clip;
 
 const Element = layout.Element;
 const State = @import("State.zig");
@@ -279,7 +280,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
         for (sg.geom.bars) |maybe_bar| {
             const bar = maybe_bar orelse continue;
 
-            const track_inst = types.Instance{
+            const track_inst = Instance{
                 .pos = .{ bar.track.x(), bar.track.y() },
                 .size = .{ bar.track.w(), bar.track.h() },
                 .uv0 = .{ 0, 0 },
@@ -290,14 +291,14 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]types.Instance{track_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]Instance{track_inst}, .atlas, sg.parent_clip);
 
             const dragging = if (ui.state.get(.scroll, el.id)) |s| s.drag_axis == bar.axis else false;
             const hovered = ui.state.hovered == sb_id or dragging;
             const hover_t = ui.anim(sb_id, "sb_hover", if (hovered) 1.0 else 0.0, .{ .duration_ms = 100 });
             const thumb_color: [4]f32 = math.lerp(base, hi, hover_t);
 
-            const thumb_inst = types.Instance{
+            const thumb_inst = Instance{
                 .pos = .{ bar.thumb.x(), bar.thumb.y() },
                 .size = .{ bar.thumb.w(), bar.thumb.h() },
                 .uv0 = .{ 0, 0 },
@@ -308,13 +309,13 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]types.Instance{thumb_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]Instance{thumb_inst}, .atlas, sg.parent_clip);
         }
 
         // Corner fill when both bars are present.
         if (sg.geom.bars[0] != null and sg.geom.bars[1] != null) {
             const thickness = ui.theme.scrollbar_thickness;
-            const corner_inst = types.Instance{
+            const corner_inst = Instance{
                 .pos = .{ el.box.x() + el.box.w() - thickness, el.box.y() + el.box.h() - thickness },
                 .size = .{ thickness, thickness },
                 .uv0 = .{ 0, 0 },
@@ -325,7 +326,7 @@ pub fn render(ui: *UI, draw_list: *DrawList, layer: Layer) !void {
                 .border_width = BorderWidth.zero.value,
                 .prim_type = 0.0,
             };
-            try draw_list.pushInstances(&[_]types.Instance{corner_inst}, .atlas, sg.parent_clip);
+            try draw_list.pushInstances(&[_]Instance{corner_inst}, .atlas, sg.parent_clip);
         }
     }
 }

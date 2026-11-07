@@ -2,7 +2,8 @@
 
 const std = @import("std");
 const unicode = @import("unicode");
-const FontProgram = @import("font").FontProgram;
+const font = @import("font");
+const FontProgram = font.FontProgram;
 
 pub const chain_length_max = 16;
 

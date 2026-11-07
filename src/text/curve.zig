@@ -1,5 +1,6 @@
 const std = @import("std");
-const Outline = @import("font").Outline;
+const font = @import("font");
+const Outline = font.Outline;
 
 pub const Curve = struct {
     p1: [2]f32,

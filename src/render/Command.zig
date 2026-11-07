@@ -1,4 +1,5 @@
-const types = @import("render_types");
+const gpu = @import("gpu");
+const Material = @import("Material.zig");
 const math = @import("math");
 const Clip = @import("Clip.zig");
 
@@ -41,7 +42,7 @@ pub const TextureSource = union(enum) {
         data: []const u8,
         width: u32,
         height: u32,
-        format: types.Texture.Format,
+        format: gpu.Texture.Format,
         bytes_per_row: ?u32,
         version: u64,
         force_upload: bool,
@@ -97,7 +98,7 @@ pub const Command = struct {
     pub const Backdrop = struct {
         bounds: math.Rect,
         corner_radius: [4]f32,
-        material: types.Material,
+        material: Material,
         /// Below `groups_max`.
         group: u32,
 

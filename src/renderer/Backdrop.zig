@@ -336,7 +336,7 @@ test "plan unions members, clamps to the surface, and keeps glass order" {
     const allocator = std.testing.allocator;
     var glass: std.ArrayList(pipelines.GlassInstance) = .empty;
     defer glass.deinit(allocator);
-    const material: render.types.Material = .{ .blur = 2 };
+    const material: render.Material = .{ .blur = 2 };
     const commands = [_]Command{
         .{ .clip = .{}, .payload = .{ .backdrop = .{ .bounds = .init(10, 10, 20, 20), .corner_radius = @splat(0), .material = material, .group = 0 } } },
         .{ .clip = .{ .node = 3 }, .payload = .{ .backdrop = .{ .bounds = .init(40, 10, 20, 20), .corner_radius = @splat(4), .material = .{ .saturation = 1.5, .refraction = 1, .bezel = 2, .dispersion = 0.5, .specular = 0.25 }, .group = 0 } } },

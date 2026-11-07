@@ -38,7 +38,8 @@ comptime {
 }
 
 /// GPU layout of one slot, shared with the renderer.
-pub const Entry = @import("render_types").GlyphEntry;
+const render = @import("render");
+pub const Entry = render.GlyphAtlas.Entry;
 
 const SlotInfo = struct {
     blob: u32,

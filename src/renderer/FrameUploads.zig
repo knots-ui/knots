@@ -1,8 +1,10 @@
 const std = @import("std");
 const gpu = @import("gpu");
+const render = @import("render");
+const Instance = render.Instance;
 const gpu_impl = @import("gpu_impl");
 const pipelines = @import("pipelines.zig");
-const Clip = @import("render").Clip;
+const Clip = render.Clip;
 const Context = @import("Context.zig");
 
 const INIT_VERTEX_BYTES = 256 * 1024;
@@ -102,7 +104,7 @@ pub fn init(ctx: *Context) !FrameUploads {
     errdefer vertex_buf.deinit();
     var instance_buf = try ctx.device.createBuffer(.{ .size = INIT_INSTANCE_BYTES, .usage = .{ .vertex = true, .copy_dst = true }, .label = "ui_instances" });
     errdefer instance_buf.deinit();
-    var composite_instance_buf = try ctx.device.createBuffer(.{ .size = @sizeOf(gpu.Instance), .usage = .{ .vertex = true, .copy_dst = true }, .label = "composite_instance" });
+    var composite_instance_buf = try ctx.device.createBuffer(.{ .size = @sizeOf(Instance), .usage = .{ .vertex = true, .copy_dst = true }, .label = "composite_instance" });
     errdefer composite_instance_buf.deinit();
     var text_instance_buf = try ctx.device.createBuffer(.{ .size = INIT_TEXT_INSTANCE_BYTES, .usage = .{ .vertex = true, .copy_dst = true }, .label = "text_instances" });
     errdefer text_instance_buf.deinit();
