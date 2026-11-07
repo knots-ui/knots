@@ -1,7 +1,7 @@
 //! Per-glyph property bits, mirroring hb-ot-layout.hh.
 
-const unicode = @import("../unicode/root.zig");
-const Gdef = @import("../font/Gdef.zig");
+const unicode = @import("unicode");
+const Gdef = @import("font").Gdef;
 
 pub const general_category_mask: u16 = 0x001F;
 pub const ignorable: u16 = 0x0020;

@@ -2,8 +2,8 @@
 //! in its default mode (composed diacritics, short-circuiting simple clusters).
 
 const std = @import("std");
-const unicode = @import("../unicode/root.zig");
-const FontProgram = @import("../font/FontProgram.zig");
+const unicode = @import("unicode");
+const FontProgram = @import("font").FontProgram;
 const Buffer = @import("Buffer.zig");
 const props = @import("props.zig");
 

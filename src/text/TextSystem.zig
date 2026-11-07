@@ -1,13 +1,13 @@
 const std = @import("std");
-const FontProgram = @import("font/FontProgram.zig");
-const Outline = @import("font/Outline.zig");
+const FontProgram = @import("font").FontProgram;
+const Outline = @import("font").Outline;
 const GlyphStore = @import("GlyphStore.zig");
 const TextLayout = @import("TextLayout.zig");
 const curve = @import("curve.zig");
 const glyph = @import("glyph.zig");
-const shape = @import("shape/root.zig");
+const shape = @import("shape");
 const itemize = @import("itemize.zig");
-const unicode = @import("unicode/root.zig");
+const unicode = @import("unicode");
 const ClockCache = @import("ClockCache.zig").ClockCache;
 
 gpa: std.mem.Allocator,

@@ -274,13 +274,43 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/math/root.zig"),
     });
 
+    const test_font = b.path("src/ui/fonts/default.ttf");
+
+    const unicode_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/unicode/root.zig"),
+    });
+
+    const font_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/font/root.zig"),
+    });
+    font_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
+
+    const shape_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/shape/root.zig"),
+        .imports = &.{
+            .{ .name = "font", .module = font_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+        },
+    });
+
     const text_mod = b.addModule("text", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/text/root.zig"),
-        .imports = &.{.{ .name = "render_types", .module = render_types_mod }},
+        .imports = &.{
+            .{ .name = "font", .module = font_mod },
+            .{ .name = "shape", .module = shape_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+            .{ .name = "render_types", .module = render_types_mod },
+        },
     });
-    text_mod.addAnonymousImport("test_font", .{ .root_source_file = b.path("src/ui/fonts/default.ttf") });
+    text_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
 
     const render_mod = b.addModule("render", .{
         .target = target,
@@ -402,6 +432,9 @@ pub fn build(b: *std.Build) void {
     const style_tests = b.addTest(.{ .root_module = style_mod });
     const ui_tests = b.addTest(.{ .root_module = ui_mod });
     const text_tests = b.addTest(.{ .root_module = text_mod });
+    const unicode_tests = b.addTest(.{ .root_module = unicode_mod });
+    const font_tests = b.addTest(.{ .root_module = font_mod });
+    const shape_tests = b.addTest(.{ .root_module = shape_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
     const input_tests = b.addTest(.{ .root_module = input_mod });
     const public_render_consumer_tests = b.addTest(.{
@@ -445,6 +478,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(style_tests).step);
     test_step.dependOn(&b.addRunArtifact(ui_tests).step);
     test_step.dependOn(&b.addRunArtifact(text_tests).step);
+    test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
+    test_step.dependOn(&b.addRunArtifact(font_tests).step);
+    test_step.dependOn(&b.addRunArtifact(shape_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
     test_step.dependOn(&b.addRunArtifact(input_tests).step);
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);

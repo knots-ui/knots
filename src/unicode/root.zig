@@ -300,6 +300,7 @@ fn composeHangul(first: u32, second: u32) ?u32 {
 
 test {
     _ = grapheme;
+    _ = linebreak;
 }
 
 test "properties of common characters" {

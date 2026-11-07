@@ -6,9 +6,9 @@
 //! scheduler applies without running the lookup.
 
 const std = @import("std");
-const FontProgram = @import("../font/FontProgram.zig");
-const Layout = @import("../font/Layout.zig");
-const Partition = @import("../font/Partition.zig");
+const FontProgram = @import("font").FontProgram;
+const Layout = @import("font").Layout;
+const Partition = @import("font").Partition;
 const max_context_length = 64;
 
 /// The next glyph cannot decide the attempt: run the lookup.

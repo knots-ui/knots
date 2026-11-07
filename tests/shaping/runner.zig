@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
 fn checkFont(io: Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, root: Io.Dir, font: manifest.FontEntry, digests: []const u8) !usize {
     const path = try font.fontPath(arena);
     const data = try root.readFileAlloc(io, path, arena, .unlimited);
-    var program = text.FontProgram.init(gpa, data, 0) catch |err| {
+    var program = text.font.FontProgram.init(gpa, data, 0) catch |err| {
         std.debug.print("{s}: FontProgram failed: {t}\n", .{ font.name, err });
         return 1;
     };
@@ -256,8 +256,8 @@ const FontCache = struct {
     root: Io.Dir,
     fonts: []const manifest.FontEntry,
     data: std.StringHashMapUnmanaged([]const u8) = .empty,
-    programs: std.StringHashMapUnmanaged(*text.FontProgram) = .empty,
-    follows: std.AutoHashMapUnmanaged(*const text.FontProgram, *text.shape.follow.Store) = .empty,
+    programs: std.StringHashMapUnmanaged(*text.font.FontProgram) = .empty,
+    follows: std.AutoHashMapUnmanaged(*const text.font.FontProgram, *text.shape.follow.Store) = .empty,
     plans: std.StringHashMapUnmanaged(*text.shape.Plan) = .empty,
     harfbuzz_fonts: std.StringHashMapUnmanaged(*harfbuzz.Font) = .empty,
 
@@ -278,10 +278,10 @@ const FontCache = struct {
         return result;
     }
 
-    fn get(self: *FontCache, name: []const u8) !*text.FontProgram {
+    fn get(self: *FontCache, name: []const u8) !*text.font.FontProgram {
         if (self.programs.get(name)) |program| return program;
-        const program = try self.arena.create(text.FontProgram);
-        program.* = try text.FontProgram.init(self.gpa, try self.file(name), 0);
+        const program = try self.arena.create(text.font.FontProgram);
+        program.* = try text.font.FontProgram.init(self.gpa, try self.file(name), 0);
         try self.programs.put(self.arena, name, program);
         const follow = try self.arena.create(text.shape.follow.Store);
         follow.* = try text.shape.follow.Store.init(self.gpa, program);
@@ -368,7 +368,7 @@ fn expectedGlyphs(cache: *FontCache, oracle: *harfbuzz.Oracle, arena: std.mem.Al
     if (std.mem.findScalar(u8, case.font, '+') == null) {
         return oracle.shape(arena, try cache.harfbuzzFont(case.font), case.script, features, case.text);
     }
-    var programs: std.ArrayList(*const text.FontProgram) = .empty;
+    var programs: std.ArrayList(*const text.font.FontProgram) = .empty;
     var names: std.ArrayList([]const u8) = .empty;
     var parts = std.mem.splitScalar(u8, case.font, '+');
     while (parts.next()) |name| {
@@ -409,7 +409,7 @@ fn findXfail(xfails: []const manifest.Xfail, suite: []const u8, line: u32, confi
 }
 
 fn shapeChain(buffer: *text.shape.Buffer, gpa: std.mem.Allocator, cache: *FontCache, case: manifest.Case, config: manifest.Config, glyphs: *std.ArrayList(text.shape.ShapedGlyph)) !void {
-    var programs: std.ArrayList(*const text.FontProgram) = .empty;
+    var programs: std.ArrayList(*const text.font.FontProgram) = .empty;
     defer programs.deinit(gpa);
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(gpa);
@@ -522,7 +522,7 @@ fn sameLookups(expected: []const u16, actual: []const text.shape.Plan.LookupMap)
     return true;
 }
 
-fn checkPartition(gpa: std.mem.Allocator, name: []const u8, program: *const text.FontProgram) !usize {
+fn checkPartition(gpa: std.mem.Allocator, name: []const u8, program: *const text.font.FontProgram) !usize {
     const partition = &program.partition;
     const domain = partition.class_of.len;
     const signatures = try gpa.alloc(u64, domain + 1);
@@ -531,8 +531,8 @@ fn checkPartition(gpa: std.mem.Allocator, name: []const u8, program: *const text
         var hasher = std.hash.Wyhash.init(0);
         for (partition.predicates) |predicate| {
             const value: u32 = switch (predicate.source) {
-                .coverage => |table| @intFromBool(text.coverage.contains(table, @intCast(glyph))),
-                .class_def => |table| text.class_def.value(table, @intCast(glyph)),
+                .coverage => |table| @intFromBool(text.font.coverage.contains(table, @intCast(glyph))),
+                .class_def => |table| text.font.class_def.value(table, @intCast(glyph)),
                 .glyph => |named| @intFromBool(named == glyph),
             };
             hasher.update(std.mem.asBytes(&value));
@@ -557,8 +557,8 @@ fn checkPartition(gpa: std.mem.Allocator, name: []const u8, program: *const text
         for (0..domain) |glyph| {
             const class = partition.class_of[glyph];
             const ok = switch (predicate.source) {
-                .coverage => |table| text.coverage.contains(table, @intCast(glyph)) == partition.contains(@intCast(id), class),
-                .class_def => |table| text.class_def.value(table, @intCast(glyph)) == partition.value(@intCast(id), class),
+                .coverage => |table| text.font.coverage.contains(table, @intCast(glyph)) == partition.contains(@intCast(id), class),
+                .class_def => |table| text.font.class_def.value(table, @intCast(glyph)) == partition.value(@intCast(id), class),
                 .glyph => |named| (named == glyph) == partition.contains(@intCast(id), class),
             };
             if (ok) continue;
@@ -570,22 +570,22 @@ fn checkPartition(gpa: std.mem.Allocator, name: []const u8, program: *const text
     return 0;
 }
 
-const RawReader = text.Reader;
+const RawReader = text.font.Reader;
 
-fn rawLayout(program: *const text.FontProgram, table: usize) ?RawReader {
+fn rawLayout(program: *const text.font.FontProgram, table: usize) ?RawReader {
     return switch (table) {
         0 => program.directory.table("GSUB"),
         else => program.directory.table("GPOS"),
     };
 }
 
-fn bruteSpaceParticipates(program: *const text.FontProgram, lookups: harfbuzz.Oracle.Lookups, apply_kern: bool) bool {
+fn bruteSpaceParticipates(program: *const text.font.FontProgram, lookups: harfbuzz.Oracle.Lookups, apply_kern: bool) bool {
     const space = program.space_glyph;
     if (apply_kern) {
         for (program.kern.subtables) |subtable| {
             for (0..program.glyph_count) |other| {
-                if (text.Kern.value(subtable, space, @intCast(other)) != 0) return true;
-                if (text.Kern.value(subtable, @intCast(other), space) != 0) return true;
+                if (text.font.Kern.value(subtable, space, @intCast(other)) != 0) return true;
+                if (text.font.Kern.value(subtable, @intCast(other), space) != 0) return true;
             }
         }
     }
@@ -604,7 +604,7 @@ fn rawLookup(layout_table: RawReader, index: u16) ?RawReader {
     return list.sub(list.u16At(2 + @as(usize, index) * 2) catch return null) catch null;
 }
 
-fn bruteLookup(program: *const text.FontProgram, layout_table: RawReader, table: usize, index: u16, space: u32, visited: *std.StaticBitSet(1 << 16), depth: u32) bool {
+fn bruteLookup(program: *const text.font.FontProgram, layout_table: RawReader, table: usize, index: u16, space: u32, visited: *std.StaticBitSet(1 << 16), depth: u32) bool {
     if (depth > 64 or visited.isSet(index)) return false;
     visited.set(index);
     const lookup = rawLookup(layout_table, index) orelse return false;
@@ -651,7 +651,7 @@ fn withCounts(subtable: RawSubtable) RawSubtable {
     return result;
 }
 
-fn spansGlyphs(kind: text.Layout.Kind) bool {
+fn spansGlyphs(kind: text.font.Layout.Kind) bool {
     return switch (kind) {
         .none, .single_subst, .multiple_subst, .alternate_subst, .single_pos => false,
         else => true,
@@ -661,7 +661,7 @@ fn spansGlyphs(kind: text.Layout.Kind) bool {
 /// A subtable read straight from the font, for the brute-force oracles.
 const RawSubtable = struct {
     reader: RawReader,
-    kind: text.Layout.Kind,
+    kind: text.font.Layout.Kind,
     format: u16,
     backtrack_count: u16 = 0,
     input_count: u16 = 0,
@@ -723,7 +723,7 @@ const Rules = struct {
     }
 };
 
-fn parseRule(kind: text.Layout.Kind, rule: RawReader, first_class: usize) ?RawRule {
+fn parseRule(kind: text.font.Layout.Kind, rule: RawReader, first_class: usize) ?RawRule {
     if (kind == .context) {
         const glyph_count = rule.u16At(0) catch return null;
         const lookup_count = rule.u16At(2) catch return null;
@@ -801,9 +801,9 @@ fn format3Records(subtable: RawSubtable) ?Sequence {
     return .{ .reader = reader, .position = position + 2, .count = lookup_count };
 }
 
-fn rawKind(table: usize, lookup_type: u16) text.Layout.Kind {
-    const gsub = [_]text.Layout.Kind{ .none, .single_subst, .multiple_subst, .alternate_subst, .ligature_subst, .context, .chain_context, .none, .reverse_chain_subst };
-    const gpos = [_]text.Layout.Kind{ .none, .single_pos, .pair_pos, .cursive_pos, .mark_base_pos, .mark_ligature_pos, .mark_mark_pos, .context, .chain_context };
+fn rawKind(table: usize, lookup_type: u16) text.font.Layout.Kind {
+    const gsub = [_]text.font.Layout.Kind{ .none, .single_subst, .multiple_subst, .alternate_subst, .ligature_subst, .context, .chain_context, .none, .reverse_chain_subst };
+    const gpos = [_]text.font.Layout.Kind{ .none, .single_pos, .pair_pos, .cursive_pos, .mark_base_pos, .mark_ligature_pos, .mark_mark_pos, .context, .chain_context };
     if (lookup_type >= 9) return .none;
     return switch (table) {
         0 => gsub[lookup_type],
@@ -815,17 +815,17 @@ fn coveredAt(reader: RawReader, position: usize, glyph: u32) bool {
     const offset = reader.u16At(position) catch return false;
     if (offset == 0) return false;
     const table = reader.sub(offset) catch return false;
-    if (!text.coverage.validate(table)) return false;
-    return text.coverage.contains(table, glyph);
+    if (!text.font.coverage.validate(table)) return false;
+    return text.font.coverage.contains(table, glyph);
 }
 
 fn classAt(reader: RawReader, position: usize, glyph: u32) u16 {
     const offset = reader.u16At(position) catch return 0;
     if (offset == 0) return 0;
-    return text.class_def.value(reader.sub(offset) catch return 0, glyph);
+    return text.font.class_def.value(reader.sub(offset) catch return 0, glyph);
 }
 
-fn bruteSubtable(program: *const text.FontProgram, subtable: RawSubtable, space: u32) bool {
+fn bruteSubtable(program: *const text.font.FontProgram, subtable: RawSubtable, space: u32) bool {
     if (program.directory.table("GSUB") == null and program.directory.table("GPOS") == null) return false;
     const reader = subtable.reader;
     const format = subtable.format;
@@ -860,8 +860,8 @@ fn bruteSubtable(program: *const text.FontProgram, subtable: RawSubtable, space:
         .mark_base_pos, .mark_ligature_pos, .mark_mark_pos => return coveredAt(reader, 2, space) or coveredAt(reader, 4, space),
         .pair_pos => {
             if (coveredAt(reader, 2, space)) return true;
-            const size1 = text.Layout.valueRecordSize(reader.u16At(4) catch 0);
-            const size2 = text.Layout.valueRecordSize(reader.u16At(6) catch 0);
+            const size1 = text.font.Layout.valueRecordSize(reader.u16At(4) catch 0);
+            const size2 = text.font.Layout.valueRecordSize(reader.u16At(6) catch 0);
             if (format == 1) {
                 const sets = reader.u16At(8) catch return false;
                 for (0..sets) |set_index| {
@@ -977,7 +977,7 @@ fn sameGlyphs(a: []const text.shape.ShapedGlyph, b: []const text.shape.ShapedGly
     return true;
 }
 
-fn checkWords(buffer: *text.shape.Buffer, gpa: std.mem.Allocator, program: *const text.FontProgram, plan: *const text.shape.Plan, case: manifest.Case, totals: *PropertyTotals) !void {
+fn checkWords(buffer: *text.shape.Buffer, gpa: std.mem.Allocator, program: *const text.font.FontProgram, plan: *const text.shape.Plan, case: manifest.Case, totals: *PropertyTotals) !void {
     if (plan.space_participates or std.mem.findScalar(u8, case.text, ' ') == null) return;
     var whole: std.ArrayList(text.shape.ShapedGlyph) = .empty;
     defer whole.deinit(gpa);

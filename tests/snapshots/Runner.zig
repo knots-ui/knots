@@ -64,7 +64,7 @@ pub fn deinit(self: *Runner) void {
 
 /// `base` plus COLRv0/CPAL tables drawing "O" as a red O, a blue + and a text-colored dot.
 fn colorFont(allocator: std.mem.Allocator, base: []const u8) ![]u8 {
-    var program = try ui.text.FontProgram.init(allocator, base, 0);
+    var program = try ui.text.font.FontProgram.init(allocator, base, 0);
     defer program.deinit();
     const o = program.cmap.glyph('O');
     const plus = program.cmap.glyph('+');
