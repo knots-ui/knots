@@ -262,8 +262,12 @@ fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4u, quant: ve
         let p3 = glyph_point(curve, 2u, quant) - render_coord;
         let p12 = vec4f(p1, p2);
 
+        // Curves are sorted by descending extent, so none after this one can
+        // cross. End the loop through its condition: a `break` here makes
+        // Mesa's lavapipe skip the following loop for some fragments.
         if max(max(p12.x, p12.z), p3.x) * pixels_per_em.x < -0.5 {
-            break;
+            i = hcount;
+            continue;
         }
 
         let code = calc_root_code(p12.y, p12.w, p3.y);
@@ -294,8 +298,12 @@ fn slug_render(render_coord: vec2f, banding: vec4f, glyph_data: vec4u, quant: ve
         let p3 = glyph_point(curve, 2u, quant) - render_coord;
         let p12 = vec4f(p1, p2);
 
+        // Curves are sorted by descending extent, so none after this one can
+        // cross. End the loop through its condition: a `break` here makes
+        // Mesa's lavapipe skip the following loop for some fragments.
         if max(max(p12.y, p12.w), p3.y) * pixels_per_em.y < -0.5 {
-            break;
+            i = vcount;
+            continue;
         }
 
         let code = calc_root_code(p12.x, p12.z, p3.x);
