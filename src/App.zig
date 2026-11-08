@@ -364,7 +364,7 @@ fn renderFrame(
         dropped_paths,
     );
 
-    if (input_types.pasteRequested(input.key_events)) {
+    if (input_types.pasteRequested(input.events)) {
         try viewport.window.requestPaste();
     }
     const paste_text = viewport.window.takePaste();
@@ -412,6 +412,7 @@ fn renderFrame(
     viewport.window.setCursorShape(
         output.cursor_shape,
     );
+    try viewport.window.setTextInput(output.text_input);
 
     try viewport.window.setHitRegions(output.hit_regions);
 

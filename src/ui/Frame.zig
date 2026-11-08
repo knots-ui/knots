@@ -49,7 +49,8 @@ pub const Output = struct {
     cursor_shape: input_types.CursorShape,
     capture_pointer: bool,
     capture_keyboard: bool,
-    text_input: bool,
+    /// Pass to `Window.setTextInput` every frame, including null.
+    text_input: ?input_types.TextInputSession,
     redraw: bool,
     close: bool,
     clipboard_write: ?[]const u8,

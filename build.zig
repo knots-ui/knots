@@ -206,6 +206,7 @@ pub fn build(b: *std.Build) void {
                 buildTool(scanner.run.producer.?);
                 scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
                 scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
+                scanner.addSystemProtocol("unstable/text-input/text-input-unstable-v3.xml");
                 scanner.generate("wl_compositor", 6);
                 scanner.generate("wl_shm", 1);
                 scanner.generate("wl_seat", 8);
@@ -213,6 +214,7 @@ pub fn build(b: *std.Build) void {
                 scanner.generate("wl_data_device_manager", 3);
                 scanner.generate("xdg_wm_base", 3);
                 scanner.generate("zxdg_decoration_manager_v1", 1);
+                scanner.generate("zwp_text_input_manager_v3", 1);
 
                 const wayland_mod = b.createModule(.{
                     .target = target,
@@ -285,6 +287,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .root_source_file = b.path("src/unicode/root.zig"),
     });
+
+    const text_edit_mod = b.addModule("text_edit", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/text_edit/root.zig"),
+        .imports = &.{
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+        },
+    });
+    window_mod.addImport("text_edit", text_edit_mod);
 
     const font_mod = b.createModule(.{
         .target = target,
@@ -374,6 +387,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "style", .module = style_mod },
             .{ .name = "text", .module = text_mod },
             .{ .name = "input", .module = input_mod },
+            .{ .name = "text_edit", .module = text_edit_mod },
             .{ .name = "gpu", .module = gpu_mod },
             .{ .name = "render", .module = render_mod },
             .{ .name = "math", .module = math_mod },
@@ -431,6 +445,9 @@ pub fn build(b: *std.Build) void {
     const shape_tests = b.addTest(.{ .root_module = shape_mod });
     const math_tests = b.addTest(.{ .root_module = math_mod });
     const input_tests = b.addTest(.{ .root_module = input_mod });
+    const text_edit_tests = b.addTest(.{ .root_module = text_edit_mod });
+    const window_tests = b.addTest(.{ .root_module = window_mod });
+    const window_impl_tests = b.addTest(.{ .root_module = window_impl_mod });
     const public_render_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
@@ -477,6 +494,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(shape_tests).step);
     test_step.dependOn(&b.addRunArtifact(math_tests).step);
     test_step.dependOn(&b.addRunArtifact(input_tests).step);
+    test_step.dependOn(&b.addRunArtifact(text_edit_tests).step);
+    test_step.dependOn(&b.addRunArtifact(window_tests).step);
+    test_step.dependOn(&b.addRunArtifact(window_impl_tests).step);
     test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
     if (platform == .native) {

@@ -22,6 +22,7 @@ fn registerView() !objc.Class {
         events.keyboard_methods ++ events.drag_methods ++ text_input.text_input_methods;
 
     inline for (methods) |entry| if (!cls.addMethod(entry[0], entry[1])) return error.AddMethodFailed;
+    if (!text_input.adoptProtocol(cls)) return error.AddProtocolFailed;
 
     objc.registerClassPair(cls);
     return cls;

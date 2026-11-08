@@ -47,3 +47,24 @@ pub extern fn xkb_state_key_get_layout(state: *State, key: keycode_t) u32;
 pub extern fn xkb_state_key_get_level(state: *State, key: keycode_t, layout: u32) u32;
 pub extern fn xkb_keymap_key_get_syms_by_level(keymap: *Keymap, key: keycode_t, layout: u32, level: u32, syms_out: *?[*]const u32) c_int;
 pub extern fn xkb_keysym_to_utf32(keysym: u32) u32;
+
+pub extern fn xkb_state_key_get_one_sym(state: *State, key: keycode_t) u32;
+pub extern fn xkb_keysym_to_utf8(keysym: u32, buffer: [*]u8, size: usize) c_int;
+
+pub const ComposeTable = opaque {};
+pub const ComposeState = opaque {};
+
+pub const COMPOSE_COMPILE_NO_FLAGS: u32 = 0;
+pub const COMPOSE_STATE_NO_FLAGS: u32 = 0;
+
+pub const ComposeFeedResult = enum(c_int) { ignored = 0, accepted = 1, _ };
+pub const ComposeStatus = enum(c_int) { nothing = 0, composing = 1, composed = 2, cancelled = 3, _ };
+
+pub extern fn xkb_compose_table_new_from_locale(context: *Context, locale: [*:0]const u8, flags: u32) ?*ComposeTable;
+pub extern fn xkb_compose_table_unref(table: *ComposeTable) void;
+pub extern fn xkb_compose_state_new(table: *ComposeTable, flags: u32) ?*ComposeState;
+pub extern fn xkb_compose_state_unref(state: *ComposeState) void;
+pub extern fn xkb_compose_state_reset(state: *ComposeState) void;
+pub extern fn xkb_compose_state_feed(state: *ComposeState, keysym: u32) ComposeFeedResult;
+pub extern fn xkb_compose_state_get_status(state: *ComposeState) ComposeStatus;
+pub extern fn xkb_compose_state_get_utf8(state: *ComposeState, buffer: [*]u8, size: usize) c_int;

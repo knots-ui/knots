@@ -76,6 +76,7 @@ pub fn main(init: std.process.Init) !void {
 
         const output = try context_ui.endFrame(&frame);
         window.setCursorShape(output.cursor_shape);
+        try window.setTextInput(output.text_input);
 
         if (output.clipboard_write) |value| _ = try window.setClipboardText(init.gpa, value);
         if (output.close) break;

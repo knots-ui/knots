@@ -22,14 +22,20 @@ const mouse_button_count = input.mouse_button_count;
 const MouseButtonState = input.MouseButtonState;
 const key_count = input.key_count;
 const CursorShape = input.CursorShape;
+const TextEdit = input.TextEdit;
+const TextInputSession = input.TextInputSession;
+const TextInputState = @import("TextInputState.zig");
+const EventQueue = @import("EventQueue.zig");
 
 backend: impl.Backend,
 allocator: std.mem.Allocator,
 should_close: bool = false,
 mouse: Mouse = .{},
 scroll: ScrollInput = .{},
-char_buf: std.ArrayList(u21) = .empty,
-key_events: std.ArrayList(KeyEvent) = .empty,
+events: EventQueue = .{},
+/// Handed to the frame in progress; new events go to `events` so its text never moves.
+frame_events: EventQueue = .{},
+text_input: TextInputState = .{},
 key_down: [key_count]bool = @splat(false),
 input_error: ?std.mem.Allocator.Error = null,
 mods: Mods = .{},
@@ -84,8 +90,9 @@ fn initWithPrimary(primary: ?*const Window, io: std.Io, allocator: std.mem.Alloc
 
 pub fn deinit(self: *Window) void {
     self.backend.deinit();
-    self.char_buf.deinit(self.allocator);
-    self.key_events.deinit(self.allocator);
+    self.events.deinit(self.allocator);
+    self.frame_events.deinit(self.allocator);
+    self.text_input.deinit(self.allocator);
     self.hit_regions.deinit(self.allocator);
     if (self.pending_paste) |text| self.allocator.free(text);
 }
@@ -233,10 +240,11 @@ pub fn collectInput(self: *Window) !Input {
         return err;
     }
 
+    self.frame_events.clear();
+    std.mem.swap(EventQueue, &self.events, &self.frame_events);
+    const events = try self.frame_events.resolve(self.allocator);
     const scroll = self.scroll;
     const mouse = self.mouse;
-    const chars = self.char_buf.items;
-    const key_events = self.key_events.items;
     self.input_dirty = false;
     self.scroll = .{};
     for (&self.mouse.buttons) |*button| {
@@ -254,8 +262,7 @@ pub fn collectInput(self: *Window) !Input {
         .native_controls_width = self.backend.nativeControlsWidth(),
         .mouse = mouse.buttons,
         .scroll = scroll,
-        .chars = chars,
-        .key_events = key_events,
+        .events = events,
         .key_down = &self.key_down,
         .shift_held = self.mods.shift,
         .ctrl_held = self.mods.ctrl,
@@ -271,17 +278,19 @@ pub fn setInput(self: *Window, frame: Input) void {
     self.scroll = frame.scroll;
     self.key_down = frame.key_down.*;
     self.mods = .{ .shift = frame.shift_held, .ctrl = frame.ctrl_held, .alt = frame.alt_held, .super = frame.super_held };
-    self.char_buf.appendSlice(self.allocator, frame.chars) catch |err| {
-        self.input_error = err;
-    };
-    self.key_events.appendSlice(self.allocator, frame.key_events) catch |err| {
-        self.input_error = err;
-    };
+    for (frame.events) |event| {
+        const queued = switch (event) {
+            .key => |key| self.queueKey(key),
+            .text => |edit| self.queueText(edit),
+        };
+        queued catch |err| {
+            self.input_error = err;
+        };
+    }
 }
 
 pub fn finishInputFrame(self: *Window) void {
-    self.char_buf.clearRetainingCapacity();
-    self.key_events.clearRetainingCapacity();
+    self.frame_events.clear();
 }
 
 pub fn consumeResize(self: *Window) ?ResizeEvent {
@@ -322,13 +331,40 @@ pub fn setClipboardText(self: *Window, allocator: std.mem.Allocator, text: []con
     return self.backend.setClipboardText(allocator, text);
 }
 
-pub fn pushChar(self: *Window, codepoint: u21) void {
-    self.char_buf.append(self.allocator, codepoint) catch |err| {
+pub fn pushText(self: *Window, text: []const u8) void {
+    self.pushTextEdit(.{ .session = if (self.text_input.active) self.text_input.id else 0, .text = text });
+}
+
+/// Pass `Frame.Output.text_input` every frame.
+pub fn setTextInput(self: *Window, session: ?TextInputSession) !void {
+    const change = try self.text_input.set(self.allocator, if (session) |*s| s else null);
+    if (@hasDecl(impl.Backend, "updateTextInput")) self.backend.updateTextInput(self, change);
+}
+
+/// Ranges are bytes of the session text as earlier events left it. Edits with a
+/// range or composition for another session are dropped.
+pub fn pushTextEdit(self: *Window, edit: TextEdit) void {
+    if (!edit.isTyping() and (!self.text_input.active or edit.session != self.text_input.id)) return;
+    self.queueText(edit) catch |err| {
         self.input_error = err;
-        self.markInputChanged();
-        return;
     };
     self.markInputChanged();
+}
+
+fn queueText(self: *Window, edit: TextEdit) !void {
+    try self.events.pushText(self.allocator, edit);
+    // `edit.text` may point into the copy that `apply` rewrites.
+    if (!self.text_input.active) return;
+    const events = &self.events;
+    const last = events.entries.items[events.entries.items.len - 1].text;
+    var queued = edit;
+    queued.text = events.bytes.items[last.text.start..][0..last.text.len];
+    try self.text_input.apply(self.allocator, queued);
+}
+
+fn queueKey(self: *Window, event: KeyEvent) !void {
+    try self.events.pushKey(self.allocator, event);
+    if (self.text_input.active) try self.text_input.applyKey(self.allocator, event);
 }
 
 pub fn pushKey(self: *Window, key: i32, action: KeyAction, mods: Mods) void {
@@ -343,10 +379,8 @@ pub fn pushKeyText(self: *Window, key: i32, action: KeyAction, mods: Mods, text:
     if (index >= 0 and index < key_count) {
         self.key_down[@intCast(index)] = action != .release;
     }
-    self.key_events.append(self.allocator, .{ .key = translated, .action = action, .mods = mods, .text = text }) catch |err| {
+    self.queueKey(.{ .key = translated, .action = action, .mods = mods, .text = text }) catch |err| {
         self.input_error = err;
-        self.markInputChanged();
-        return;
     };
     self.markInputChanged();
 }
@@ -361,8 +395,7 @@ pub fn setFocused(self: *Window, focused: bool) void {
     if (self.focused == focused) return;
     self.focused = focused;
     if (!focused) {
-        self.char_buf.clearRetainingCapacity();
-        self.key_events.clearRetainingCapacity();
+        self.events.clear();
         self.mods = .{};
         self.key_down = @splat(false);
         self.cancelPointerInput();

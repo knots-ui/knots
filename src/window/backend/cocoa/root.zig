@@ -6,6 +6,7 @@ const window = @import("window");
 const drop_paths = @import("window_drop_paths");
 const ak = @import("appkit.zig");
 const classes = @import("classes.zig");
+const text_input = @import("text_input.zig");
 
 const c = ak.c;
 
@@ -170,6 +171,10 @@ pub const Backend = struct {
             NSCursor.msgSend(void, "hide", .{});
         }
         self.cursor_visible = visible;
+    }
+
+    pub fn updateTextInput(self: *Self, owner: *window.Window, change: window.TextInputState.Change) void {
+        text_input.update(self.ns_view, owner, change);
     }
 
     pub fn setCursorShape(self: *Self, shape: input_types.CursorShape) void {
@@ -425,4 +430,80 @@ fn drainEventQueue(NSApp: objc.Object) void {
         if (event.value == null) break;
         NSApp.msgSend(void, "sendEvent:", .{event});
     }
+}
+
+test "the input method's marked text and commits become text edits" {
+    const testing = std.testing;
+    if (!classes_registered) {
+        const registered = try classes.registerClasses();
+        KnotsView = registered.view;
+        KnotsDelegate = registered.delegate;
+        classes_registered = true;
+    }
+    const view = KnotsView.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+    defer view.msgSend(void, "release", .{});
+    try testing.expect(view.msgSend(objc.Object, "inputContext", .{}).value != null);
+
+    var owner: window.Window = .{ .backend = undefined, .allocator = testing.allocator, .canvas_selector = null };
+    defer {
+        owner.events.deinit(testing.allocator);
+        owner.frame_events.deinit(testing.allocator);
+        owner.text_input.deinit(testing.allocator);
+    }
+    ak.setOwner(view, &owner);
+    _ = try owner.text_input.set(testing.allocator, &.{
+        .id = 9,
+        .text = "ab",
+        .selection = .at(2),
+        .composition = null,
+        .purpose = .text,
+        .bytes_max = 1024,
+        .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
+    });
+
+    // "にほ" with the first clause being converted (thick underline).
+    const NSMutableAttributedString = objc.getClass("NSMutableAttributedString").?;
+    const NSNumber = objc.getClass("NSNumber").?;
+    const marked = NSMutableAttributedString.msgSend(objc.Object, "alloc", .{})
+        .msgSend(objc.Object, "initWithString:", .{ak.nsstring("にほ")});
+    defer marked.msgSend(void, "release", .{});
+    const underline = ak.nsstring("NSUnderline");
+    marked.msgSend(void, "addAttribute:value:range:", .{ underline, NSNumber.msgSend(objc.Object, "numberWithInteger:", .{@as(c_long, 2)}), ak.NSRange{ .location = 0, .length = 1 } });
+    marked.msgSend(void, "addAttribute:value:range:", .{ underline, NSNumber.msgSend(objc.Object, "numberWithInteger:", .{@as(c_long, 1)}), ak.NSRange{ .location = 1, .length = 1 } });
+
+    const not_found: c_ulong = std.math.maxInt(c_long);
+    view.msgSend(void, "setMarkedText:selectedRange:replacementRange:", .{ marked, ak.NSRange{ .location = 2, .length = 0 }, ak.NSRange{ .location = not_found, .length = 0 } });
+    var events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), events.len);
+    const compose = events[0].text;
+    try testing.expectEqualStrings("にほ", compose.text);
+    try testing.expectEqual(null, compose.replace);
+    try testing.expectEqual(input_types.TextRange.at(6), compose.compose.?.caret);
+    try testing.expectEqual(@as(usize, 2), compose.compose.?.segments.len);
+    try testing.expect(compose.compose.?.segments[0].active);
+    try testing.expect(!compose.compose.?.segments[1].active);
+
+    try testing.expect(view.msgSend(bool, "hasMarkedText", .{}));
+    const marked_range = view.msgSend(ak.NSRange, "markedRange", .{});
+    try testing.expectEqual(@as(c_ulong, 2), marked_range.location);
+    try testing.expectEqual(@as(c_ulong, 2), marked_range.length);
+    try testing.expectEqual(@as(c_ulong, 4), view.msgSend(ak.NSRange, "selectedRange", .{}).location);
+
+    view.msgSend(void, "insertText:replacementRange:", .{ ak.nsstring("日本"), ak.NSRange{ .location = not_found, .length = 0 } });
+    events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), events.len);
+    try testing.expectEqual(null, events[1].text.replace);
+    try testing.expectEqual(null, events[1].text.compose);
+    try testing.expectEqualStrings("ab日本", owner.text_input.text.items);
+    try testing.expect(!view.msgSend(bool, "hasMarkedText", .{}));
+
+    // Press and hold `b`, pick `ḃ`: the input method replaces the typed letter.
+    view.msgSend(void, "insertText:replacementRange:", .{ ak.nsstring("ḃ"), ak.NSRange{ .location = 1, .length = 1 } });
+    events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(input_types.TextRange{ .start = 1, .end = 2 }, events[2].text.replace.?);
+    try testing.expectEqualStrings("aḃ日本", owner.text_input.text.items);
+
+    const substring = view.msgSend(objc.Object, "attributedSubstringForProposedRange:actualRange:", .{ ak.NSRange{ .location = 2, .length = 2 }, @as(?*ak.NSRange, null) });
+    const plain = substring.msgSend(objc.Object, "string", .{});
+    try testing.expectEqualStrings("日本", std.mem.sliceTo(plain.msgSend([*:0]const u8, "UTF8String", .{}), 0));
 }

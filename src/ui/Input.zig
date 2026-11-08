@@ -12,8 +12,7 @@ pointer_cancelled: bool = false,
 mouse: [mouse_button_count]input_types.MouseButtonState = @splat(.{}),
 scroll: input_types.ScrollInput = .{},
 scroll_delta: [2]f32 = .{ 0, 0 },
-chars: []const u21 = &.{},
-key_events: []const input_types.KeyEvent = &.{},
+events: []const input_types.Event = &.{},
 key_down: *const [input_types.key_count]bool = &input_types.no_keys_down,
 shift_held: bool = false,
 ctrl_held: bool = false,
@@ -57,14 +56,12 @@ pub fn collect(self: *Input, raw: input_types.Input, now_ms: i64) void {
     self.alt_held = raw.alt_held;
     self.super_held = raw.super_held;
 
-    self.chars = raw.chars;
-    self.key_events = raw.key_events;
+    self.events = raw.events;
     self.key_down = raw.key_down;
 }
 
 pub fn consumeKeyboard(self: *Input) void {
-    self.chars = &.{};
-    self.key_events = &.{};
+    self.events = &.{};
 }
 
 pub fn containsKey(self: *const Input, key: input_types.Key) bool {
@@ -76,18 +73,15 @@ pub fn mouseButton(self: *const Input, button: input_types.MouseButton) *const i
 }
 
 pub fn keyPressed(self: *const Input, key: input_types.Key) bool {
-    for (self.key_events) |event| if (event.key == key and event.action == .press) return true;
-    return false;
+    return input_types.hasKey(self.events, key, .press);
 }
 
 pub fn keyRepeated(self: *const Input, key: input_types.Key) bool {
-    for (self.key_events) |event| if (event.key == key and event.action == .repeat) return true;
-    return false;
+    return input_types.hasKey(self.events, key, .repeat);
 }
 
 pub fn keyReleased(self: *const Input, key: input_types.Key) bool {
-    for (self.key_events) |event| if (event.key == key and event.action == .release) return true;
-    return false;
+    return input_types.hasKey(self.events, key, .release);
 }
 
 pub fn keyDown(self: *const Input, key: input_types.Key) bool {

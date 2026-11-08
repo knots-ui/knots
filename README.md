@@ -29,8 +29,13 @@ Select a backend with the `gpu_backend` dependency option. Read
 - Linux windows use Wayland only. There is no X11 support.
 - Text shaping matches HarfBuzz for simple scripts (ligatures, kerning, marks,
   font fallback, COLRv0 color glyphs). There is no complex-script shaping
-  (Arabic, Indic, …), bidirectional or vertical text, bitmap color glyphs, or IME
-  composition. Variable fonts are used at their default instance.
+  (Arabic, Indic, …), bidirectional or vertical text, or bitmap color glyphs.
+  Variable fonts are used at their default instance.
+- Input methods and dead keys compose inline in text fields on every platform:
+  NSTextInputClient on macOS, IMM32 and `WM_DEADCHAR` on Windows, text-input-v3
+  and xkb compose on Wayland, and EditContext in the browser (a hidden textarea
+  where the browser has no EditContext, which cannot reconvert committed text).
+  Windows has no TSF.
 - Accessibility (AccessKit) is available on macOS, Windows, and Linux. It is
   not available in the browser.
 
@@ -159,6 +164,7 @@ try buildUi(&frame);
 
 const output = try context.endFrame(&frame);
 window.setCursorShape(output.cursor_shape);
+try window.setTextInput(output.text_input);
 if (output.clipboard_write) |value| {
     _ = try window.setClipboardText(allocator, value);
 }
@@ -195,6 +201,11 @@ reads the packet directly. `Painter` uses the bundled backend types. See
 - `Frame.deinit` aborts a frame that did not end. It is safe on copied handles.
 - Apply cursor and clipboard effects one time. The host decides when to redraw
   or close a window.
+- Pass `output.text_input` to the window every frame, including `null`, so the
+  input method follows focus. A host with its own window answers its input
+  method from that session and sends keys and text back, in order, as
+  `Input.events`. The `text_edit` module edits a copy of the field the way the
+  UI will, so the host can answer the input method between frames.
 - Custom backends must validate packet extensions and reject unsupported
   commands.
 
