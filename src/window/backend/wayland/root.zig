@@ -352,11 +352,10 @@ const Shared = struct {
         self.ime.text_input = ti;
     }
 
-    /// Types a character into the focused field, or as a character event.
     fn typeChar(owner: *window.Window, cp: u21) void {
         var buf: [4]u8 = undefined;
         const n = std.unicode.utf8Encode(cp, &buf) catch return;
-        text_input.typeText(owner, buf[0..n]);
+        owner.pushText(buf[0..n]);
     }
 
     fn offerMime(self: *Shared, data_offer: *wl.DataOffer, mime: [*:0]const u8) void {
@@ -751,8 +750,7 @@ pub const Backend = struct {
     }
 
     pub fn updateTextInput(self: *Self, owner: *window.Window, change: window.TextInputState.Change) void {
-        // The UI committed or dropped the dead-key preedit, so the sequence ends
-        // here; otherwise the next key would type the accent a second time.
+        // The UI ended the preedit; without a reset the next key types the accent again.
         if (change.any()) self.state.shared.compose.reset();
         self.state.shared.ime.sync(self.state.surface, owner, change);
     }

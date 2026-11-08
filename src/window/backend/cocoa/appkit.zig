@@ -138,6 +138,6 @@ pub fn pushUtf8Chars(owner: *Window, slice: []const u8, comptime filter_function
 
         // 0xF700-0xF8FF is the NSFunctionKey range AppKit emits for arrow keys, F-keys, etc, those must stay out of the chars channel.
         if (filter_function_keys and cp >= 0xF700 and cp <= 0xF8FF) continue;
-        owner.pushChar(cp);
+        owner.pushText(slice[i - len .. i]);
     }
 }

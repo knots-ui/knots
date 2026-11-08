@@ -478,8 +478,7 @@ fn renderText(self: *Runner, app: *ui.Frame) !void {
     const input_key = ui.Key.str("text-edit");
     app.ui().state.focused = input_key.hash();
     const edit_state = try app.ui().state.getOrCreate(.text_input, app.ui().allocator, input_key.hash());
-    edit_state.cursor = 7;
-    edit_state.sel_anchor = 7;
+    edit_state.selection = .at(7);
     const mono: ui.Style = .{ .font = "mono", .font_size = .lg };
     try app.e(.{
         page(),

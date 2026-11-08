@@ -1,4 +1,5 @@
 const std = @import("std");
+const text_edit = @import("text_edit");
 const Element = @import("layout").Element;
 const math = @import("math");
 const animation = @import("animation.zig");
@@ -6,8 +7,7 @@ const style = @import("style");
 const Layer = @import("layout").Layer;
 
 pub const TextInput = struct {
-    cursor: u32 = 0,
-    sel_anchor: u32 = 0,
+    selection: text_edit.Selection = .{},
     dragging: bool = false,
     last_click_ms: ?i64 = null,
     last_click_byte: u32 = 0,
@@ -502,8 +502,8 @@ test "getOrCreate returns default state" {
     defer state.deinit();
 
     const s = try state.getOrCreate(.text_input, testing.allocator, 42);
-    try testing.expectEqual(s.cursor, 0);
-    try testing.expectEqual(s.sel_anchor, 0);
+    try testing.expectEqual(s.selection.caret, 0);
+    try testing.expectEqual(s.selection.anchor, 0);
 }
 
 test "get returns null before creation" {
@@ -518,10 +518,10 @@ test "getOrCreate is idempotent" {
     defer state.deinit();
 
     const a = try state.getOrCreate(.text_input, testing.allocator, 42);
-    a.cursor = 7;
+    a.selection.caret = 7;
 
     const b = try state.getOrCreate(.text_input, testing.allocator, 42);
-    try testing.expectEqual(b.cursor, 7);
+    try testing.expectEqual(b.selection.caret, 7);
 }
 
 test "separate ids are independent" {
@@ -530,11 +530,11 @@ test "separate ids are independent" {
 
     const a = try state.getOrCreate(.text_input, testing.allocator, 1);
     const b = try state.getOrCreate(.text_input, testing.allocator, 2);
-    a.cursor = 3;
-    b.cursor = 9;
+    a.selection.caret = 3;
+    b.selection.caret = 9;
 
-    try testing.expectEqual((try state.getOrCreate(.text_input, testing.allocator, 1)).cursor, 3);
-    try testing.expectEqual((try state.getOrCreate(.text_input, testing.allocator, 2)).cursor, 9);
+    try testing.expectEqual((try state.getOrCreate(.text_input, testing.allocator, 1)).selection.caret, 3);
+    try testing.expectEqual((try state.getOrCreate(.text_input, testing.allocator, 2)).selection.caret, 9);
 }
 
 test "ttl=1: untouched entry evicted after one endFrame, touched entry survives" {
@@ -558,12 +558,12 @@ test "endFrame preserves mutated values across frames" {
     defer state.deinit();
 
     const s = try state.getOrCreate(.text_input, testing.allocator, 99);
-    s.cursor = 5;
+    s.selection.caret = 5;
 
     try state.endFrame();
 
     const after = try state.getOrCreate(.text_input, testing.allocator, 99);
-    try testing.expectEqual(after.cursor, 5);
+    try testing.expectEqual(after.selection.caret, 5);
 }
 
 test "state survives ttl skipped frames" {
@@ -573,12 +573,12 @@ test "state survives ttl skipped frames" {
     defer state.deinit();
 
     const s = try state.getOrCreate(.text_input, testing.allocator, 1);
-    s.cursor = 42;
+    s.selection.caret = 42;
 
     var i: u32 = 0;
     while (i < 5) : (i += 1) try state.endFrame();
     try testing.expect(state.get(.text_input, 1) != null);
-    try testing.expectEqual(state.get(.text_input, 1).?.cursor, 42);
+    try testing.expectEqual(state.get(.text_input, 1).?.selection.caret, 42);
 
     try state.endFrame();
     try testing.expectEqual(state.get(.text_input, 1), null);
@@ -659,9 +659,9 @@ test "pools are independent per type" {
     const t = try state.getOrCreate(.text_input, testing.allocator, 1);
     const s = try state.getOrCreate(.scroll, testing.allocator, 1);
 
-    t.cursor = 42;
+    t.selection.caret = 42;
     s.offset = .{ 100, 200 };
 
-    try testing.expectEqual(state.get(.text_input, 1).?.cursor, 42);
+    try testing.expectEqual(state.get(.text_input, 1).?.selection.caret, 42);
     try testing.expectEqual(state.get(.scroll, 1).?.offset[0], 100);
 }

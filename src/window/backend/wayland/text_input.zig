@@ -1,8 +1,4 @@
-//! Composed text on Wayland: dead keys and compose sequences through
-//! xkb_compose, and input methods through text-input-unstable-v3.
-//!
-//! Both turn into `TextEdit`s against the window's copy of the focused field,
-//! so the UI sees one kind of input whichever produced it.
+//! Dead keys and compose sequences (xkb_compose), and input methods (text-input-v3).
 const std = @import("std");
 const wayland = @import("wayland");
 const input_types = @import("input");
@@ -18,22 +14,10 @@ const TextRange = input_types.TextRange;
 /// Wayland caps surrounding text at 4000 bytes.
 const surrounding_max = 4000;
 
-/// Types `text` into the focused field, or as characters when no field has focus.
-pub fn typeText(owner: *Window, text: []const u8) void {
-    if (owner.text_input.active) {
-        owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = owner.text_input.target(), .text = text });
-        return;
-    }
-    const view = std.unicode.Utf8View.init(text) catch return;
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| owner.pushChar(cp);
-}
-
 fn showPreedit(owner: *Window, text: []const u8, caret: TextRange) void {
     if (!owner.text_input.active) return;
     owner.pushTextEdit(.{
         .session = owner.text_input.id,
-        .replace = owner.text_input.target(),
         .text = text,
         .compose = .{ .caret = caret },
     });
@@ -44,7 +28,6 @@ fn clearPreedit(owner: *Window) void {
     owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = composition, .text = "", .compose = .{ .caret = .at(0) } });
 }
 
-/// Dead keys and the Compose key, from the user's locale.
 pub const Compose = struct {
     table: ?*xkb.ComposeTable = null,
     state: ?*xkb.ComposeState = null,
@@ -53,9 +36,7 @@ pub const Compose = struct {
     preedit_len: usize = 0,
 
     pub const Result = enum {
-        /// Not part of a sequence: handle the key as usual.
         pass,
-        /// Part of a sequence: the key is consumed.
         consumed,
     };
 
@@ -96,7 +77,7 @@ pub const Compose = struct {
                 const n = xkb.xkb_compose_state_get_utf8(state, &buf, buf.len);
                 self.reset();
                 if (n > 0) {
-                    typeText(owner, buf[0..@intCast(@min(n, buf.len - 1))]);
+                    owner.pushText(buf[0..@intCast(@min(n, buf.len - 1))]);
                 } else {
                     clearPreedit(owner);
                 }
@@ -154,8 +135,7 @@ pub const Compose = struct {
     }
 };
 
-/// One text-input-v3 object for the seat, enabled while a field of the
-/// surface it entered has focus.
+/// One text-input-v3 object per seat.
 pub const Ime = struct {
     allocator: std.mem.Allocator,
     text_input: ?*zwp.TextInputV3 = null,
@@ -185,7 +165,7 @@ pub const Ime = struct {
         self.text_input = null;
     }
 
-    /// Records one event; `done` applies everything received since the last one.
+    /// `done` applies the events since the last one.
     pub fn handle(self: *Ime, event: zwp.TextInputV3.Event, owner: ?*Window) void {
         switch (event) {
             .enter => |e| {
@@ -228,11 +208,14 @@ pub const Ime = struct {
         if (!owner.text_input.active) return;
         const p = &self.pending;
         const state = &owner.text_input;
-        const target = state.target();
-        const len: u32 = @intCast(state.text.items.len);
-        const replace: TextRange = .{
-            .start = target.start -| p.delete_before,
-            .end = @min(target.end +| p.delete_after, len),
+        // Only deleting around the cursor needs a range.
+        const replace: ?TextRange = if (p.delete_before == 0 and p.delete_after == 0) null else blk: {
+            const target = state.target();
+            const len: u32 = @intCast(state.text.items.len);
+            break :blk .{
+                .start = target.start -| p.delete_before,
+                .end = @min(target.end +| p.delete_after, len),
+            };
         };
         if (state.composition != null or p.commit_set or p.delete_before > 0 or p.delete_after > 0) {
             owner.pushTextEdit(.{ .session = state.id, .replace = replace, .text = p.commit.items });
@@ -250,7 +233,6 @@ pub const Ime = struct {
         self.edited = true;
     }
 
-    /// Sends the focused field to the input method after a frame, when it changed.
     pub fn sync(self: *Ime, surface: *wl.Surface, owner: *Window, change: State.Change) void {
         const ti = self.text_input orelse return;
         if (self.entered != surface) return;

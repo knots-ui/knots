@@ -21,7 +21,7 @@ pub const Backend = struct {
     cursor_shape: input_types.CursorShape = .default,
     owner_addr: usize = 0,
     capture: ?Capture = null,
-    /// What was last handed to the browser's text input, to skip unchanged frames.
+    /// Skips frames that changed nothing for the browser.
     text_input_digest: u64 = 0,
 
     const Self = @This();
@@ -789,9 +789,8 @@ fn onKeyDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     if (!shouldHandleEvent(backend, event)) return;
     // A composition, or a dead key starting one, belongs to the input method.
     if (isImeKey(event)) return;
-    // With a field focused, typed text reaches it through the browser's text
-    // input, so the input method sees it; the key event still goes to the UI.
-    // While focus is elsewhere (the paste catcher), the text is typed here instead.
+    // With a field focused, text arrives through the browser's text input so the
+    // input method sees it; with focus elsewhere (the paste catcher) it is typed here.
     const codepoint: ?u21 = if (eventTextCodepoint(event)) |cp|
         if (cp >= 0x20 and cp != 0x7F and cp <= std.math.maxInt(u21)) @intCast(cp) else null
     else
@@ -822,13 +821,9 @@ fn onKeyDown(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     }
     if (codepoint) |cp| {
         if (!typed_by_browser) {
-            if (owner.text_input.active) {
-                var encoded: [4]u8 = undefined;
-                const n = std.unicode.utf8Encode(cp, &encoded) catch return;
-                owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = owner.text_input.target(), .text = encoded[0..n] });
-            } else {
-                owner.pushChar(cp);
-            }
+            var encoded: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(cp, &encoded) catch return;
+            owner.pushText(encoded[0..n]);
             preventDefault(event);
         }
     }
@@ -868,8 +863,8 @@ fn onTextInput(context: ?*anyopaque, args: js.Value, args_len: u32) void {
     defer backend.allocator.free(text);
 
     const state = &owner.text_input;
-    const replace: input_types.TextRange = if (start < 0)
-        state.target()
+    const replace: ?input_types.TextRange = if (start < 0)
+        null
     else
         State.byteRange(state.text.items, .{ .start = @intCast(start), .end = @intCast(@max(start, end)) });
 
@@ -883,7 +878,8 @@ fn onTextInput(context: ?*anyopaque, args: js.Value, args_len: u32) void {
         var selection: ?input_types.TextRange = null;
         if (a >= 0) {
             // The selection is in the edited text, which only exists once applied.
-            const edited = std.mem.concat(backend.allocator, u8, &.{ state.text.items[0..replace.start], text, state.text.items[replace.end..] }) catch return;
+            const r = replace orelse state.target();
+            const edited = std.mem.concat(backend.allocator, u8, &.{ state.text.items[0..r.start], text, state.text.items[r.end..] }) catch return;
             defer backend.allocator.free(edited);
             selection = State.byteRange(edited, .{ .start = @intCast(a), .end = @intCast(@max(a, b)) });
         }
@@ -965,7 +961,7 @@ fn onPaste(context: ?*anyopaque, args: js.Value, args_len: u32) void {
 
     owner.pushPaste(text);
     preventDefault(event);
-    // Give focus back to the field's text input, so typing that follows reaches it.
+    // Give focus back to the field's text input.
     if (backend.capture) |*capture| {
         capture.catcher.callVoid("blur", &.{}) catch {};
         if (owner.text_input.active) capture.text_input.callVoid("focus", &.{}) catch {};

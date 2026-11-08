@@ -1,10 +1,5 @@
-//! IMM32 input method support.
-//!
-//! The input method's composition is drawn inline by the UI, so the default
-//! composition window is hidden; only the candidate window is positioned, next
-//! to the composition. Queries (`WM_IME_REQUEST`) are answered from the window's
-//! copy of the text input session. IMM32 speaks UTF-16 offsets; they are
-//! converted to bytes here and nowhere else.
+//! IMM32. The UI draws the composition, so only the candidate window is placed.
+//! IMM32's UTF-16 offsets become bytes here.
 const std = @import("std");
 const win32 = @import("win32").everything;
 const input_types = @import("input");
@@ -17,13 +12,11 @@ const Segment = input_types.CompositionSegment;
 
 const composition_units_max = 1024;
 
-/// Per-window input method state, kept on the backend.
 pub const Ime = struct {
-    /// IMM32 is composing; the keys belong to it.
+    /// While set, keys belong to IMM32.
     composing: bool = false,
-    /// A dead key's accent is showing as the composition, waiting for the next character.
+    /// A dead key's accent is the composition.
     dead_key: bool = false,
-    /// Where the candidate window was last placed, to skip placing it again.
     placed: ?win32.RECT = null,
 };
 
@@ -48,8 +41,7 @@ pub fn onSetContext(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: wi
     return win32.DefWindowProcW(hwnd, msg, wparam, lparam & ~flags);
 }
 
-/// Places the candidate window under the composition, or under the caret,
-/// when that moved since it was last placed or `force` is set.
+/// Places the candidate window under the composition or caret, when it moved or `force` is set.
 pub fn position(hwnd: win32.HWND, owner: *Window, force: bool) void {
     if (!owner.text_input.active) return;
     const anchor = if (owner.text_input.composition_rects.items.len > 0)
@@ -84,8 +76,7 @@ pub fn onStartComposition(hwnd: win32.HWND, owner: *Window) bool {
     return true;
 }
 
-/// Turns IMM32's composition and result strings into edits. Returns false to
-/// let the default window procedure handle it (no field has focus).
+/// False when no field has focus, for the default window procedure.
 pub fn onComposition(hwnd: win32.HWND, owner: *Window, lparam: win32.LPARAM) bool {
     if (!owner.text_input.active) return false;
     const himc = win32.ImmGetContext(hwnd) orelse return true;
@@ -97,7 +88,7 @@ pub fn onComposition(hwnd: win32.HWND, owner: *Window, lparam: win32.LPARAM) boo
     var utf8_buf: [composition_units_max * 3]u8 = undefined;
     if (flags & result_flag != 0) {
         const text = compositionString(himc, win32.GCS_RESULTSTR, &utf8_buf) orelse "";
-        owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = owner.text_input.target(), .text = text });
+        owner.pushTextEdit(.{ .session = owner.text_input.id, .text = text });
     }
     if (flags & comp_flag != 0) {
         const text = compositionString(himc, win32.GCS_COMPSTR, &utf8_buf) orelse "";
@@ -107,7 +98,6 @@ pub fn onComposition(hwnd: win32.HWND, owner: *Window, lparam: win32.LPARAM) boo
         const caret = State.byteOffset(text, @intCast(@max(cursor_units, 0)));
         owner.pushTextEdit(.{
             .session = owner.text_input.id,
-            .replace = owner.text_input.target(),
             .text = text,
             .compose = .{ .caret = .at(caret), .segments = segments },
         });
@@ -126,15 +116,13 @@ pub fn onEndComposition(owner: *Window) bool {
     return true;
 }
 
-/// A dead key: shows its accent as the composition until `WM_CHAR` brings the
-/// composed character, which replaces it. Returns false when no field has focus.
+/// Shows a dead key's accent as the composition until `WM_CHAR` replaces it.
 pub fn onDeadChar(owner: *Window, w: u16) bool {
     if (!owner.text_input.active) return false;
     var encoded: [4]u8 = undefined;
     const n = std.unicode.utf8Encode(w, &encoded) catch return false;
     owner.pushTextEdit(.{
         .session = owner.text_input.id,
-        .replace = owner.text_input.target(),
         .text = encoded[0..n],
         .compose = .{ .caret = .at(@intCast(n)) },
     });
@@ -142,15 +130,13 @@ pub fn onDeadChar(owner: *Window, w: u16) bool {
     return true;
 }
 
-/// A key that types nothing followed the dead key, which the keyboard layout
-/// has already dropped; drop its accent too.
+/// A key that types nothing followed the dead key, which the layout already dropped.
 pub fn endDeadKey(owner: *Window) void {
     owner.backend.ime.dead_key = false;
     cancel(owner);
 }
 
-/// Clears a dead key the keyboard layout still holds, after the UI committed or
-/// dropped its accent, so the next key does not type it again.
+/// Clears the layout's pending dead key after the UI committed its accent.
 fn flushDeadKey() void {
     var state: [256]u8 = @splat(0);
     var buf: [4]u16 = undefined;
@@ -194,8 +180,7 @@ fn clauses(himc: win32.HIMC, text: []const u8, out: []Segment) []const Segment {
     return out[0..count];
 }
 
-/// Answers the input method's questions about the field. Returns null to fall
-/// back to the default window procedure.
+/// Null falls back to the default window procedure.
 pub fn onRequest(hwnd: win32.HWND, owner: *Window, wparam: win32.WPARAM, lparam: win32.LPARAM) ?win32.LRESULT {
     if (!owner.text_input.active) return null;
     const state = &owner.text_input;
@@ -235,8 +220,7 @@ pub fn onRequest(hwnd: win32.HWND, owner: *Window, wparam: win32.WPARAM, lparam:
     }
 }
 
-/// RECONVERTSTRING over the whole field, with `target` as the composition.
-/// With `lparam == 0` the input method asks only for the size.
+/// The whole field with `target` as the composition; `lparam == 0` asks for the size.
 fn reconvertString(owner: *Window, lparam: win32.LPARAM, target: TextRange) win32.LRESULT {
     const text = owner.text_input.text.items;
     const units = State.utf16Offset(text, @intCast(text.len));
@@ -262,8 +246,7 @@ fn reconvertString(owner: *Window, lparam: win32.LPARAM, target: TextRange) win3
     return @intCast(size);
 }
 
-/// Enables the input method only while a field has focus, and drops its
-/// composition when focus moves or the UI committed it.
+/// Enables IMM32 only while a field has focus.
 pub fn update(hwnd: win32.HWND, owner: *Window, change: State.Change) void {
     const state = &owner.backend.ime;
     if (change.any()) {

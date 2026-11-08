@@ -6,6 +6,7 @@ pub const TextInputState = @import("TextInputState.zig");
 test {
     _ = @import("window_drop_paths");
     _ = TextInputState;
+    _ = @import("EventQueue.zig");
 }
 
 pub const Config = struct {

@@ -446,10 +446,9 @@ test "the input method's marked text and commits become text edits" {
 
     var owner: window.Window = .{ .backend = undefined, .allocator = testing.allocator, .canvas_selector = null };
     defer {
-        owner.finishInputFrame();
-        owner.text_edits.deinit(testing.allocator);
+        owner.events.deinit(testing.allocator);
+        owner.frame_events.deinit(testing.allocator);
         owner.text_input.deinit(testing.allocator);
-        owner.char_buf.deinit(testing.allocator);
     }
     ak.setOwner(view, &owner);
     _ = try owner.text_input.set(testing.allocator, &.{
@@ -458,6 +457,7 @@ test "the input method's marked text and commits become text edits" {
         .selection = .at(2),
         .composition = null,
         .purpose = .text,
+        .bytes_max = 1024,
         .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
     });
 
@@ -473,10 +473,11 @@ test "the input method's marked text and commits become text edits" {
 
     const not_found: c_ulong = std.math.maxInt(c_long);
     view.msgSend(void, "setMarkedText:selectedRange:replacementRange:", .{ marked, ak.NSRange{ .location = 2, .length = 0 }, ak.NSRange{ .location = not_found, .length = 0 } });
-    try testing.expectEqual(@as(usize, 1), owner.text_edits.items.len);
-    const compose = owner.text_edits.items[0];
+    var events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), events.len);
+    const compose = events[0].text;
     try testing.expectEqualStrings("にほ", compose.text);
-    try testing.expectEqual(input_types.TextRange.at(2), compose.replace);
+    try testing.expectEqual(null, compose.replace);
     try testing.expectEqual(input_types.TextRange.at(6), compose.compose.?.caret);
     try testing.expectEqual(@as(usize, 2), compose.compose.?.segments.len);
     try testing.expect(compose.compose.?.segments[0].active);
@@ -489,15 +490,17 @@ test "the input method's marked text and commits become text edits" {
     try testing.expectEqual(@as(c_ulong, 4), view.msgSend(ak.NSRange, "selectedRange", .{}).location);
 
     view.msgSend(void, "insertText:replacementRange:", .{ ak.nsstring("日本"), ak.NSRange{ .location = not_found, .length = 0 } });
-    try testing.expectEqual(@as(usize, 2), owner.text_edits.items.len);
-    try testing.expectEqual(input_types.TextRange{ .start = 2, .end = 8 }, owner.text_edits.items[1].replace);
-    try testing.expectEqual(null, owner.text_edits.items[1].compose);
+    events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), events.len);
+    try testing.expectEqual(null, events[1].text.replace);
+    try testing.expectEqual(null, events[1].text.compose);
     try testing.expectEqualStrings("ab日本", owner.text_input.text.items);
     try testing.expect(!view.msgSend(bool, "hasMarkedText", .{}));
 
     // Press and hold `b`, pick `ḃ`: the input method replaces the typed letter.
     view.msgSend(void, "insertText:replacementRange:", .{ ak.nsstring("ḃ"), ak.NSRange{ .location = 1, .length = 1 } });
-    try testing.expectEqual(input_types.TextRange{ .start = 1, .end = 2 }, owner.text_edits.items[2].replace);
+    events = try owner.events.resolve(testing.allocator);
+    try testing.expectEqual(input_types.TextRange{ .start = 1, .end = 2 }, events[2].text.replace.?);
     try testing.expectEqualStrings("aḃ日本", owner.text_input.text.items);
 
     const substring = view.msgSend(objc.Object, "attributedSubstringForProposedRange:actualRange:", .{ ak.NSRange{ .location = 2, .length = 2 }, @as(?*ak.NSRange, null) });

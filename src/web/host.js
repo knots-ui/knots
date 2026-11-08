@@ -291,7 +291,6 @@ class KnotsBrowserHost {
     return chars[0].codePointAt(0) ?? 0;
   }
 
-  /// Keys that belong to an input method: a composition in progress, or a dead key starting one.
   isImeKey(event) {
     return event.isComposing ||
       event.keyCode === 229 ||
@@ -301,8 +300,7 @@ class KnotsBrowserHost {
       : 0;
   }
 
-  /// The browser end of the focused field: an EditContext on the canvas where the
-  /// browser has one, else a hidden textarea at the caret. Offsets are UTF-16.
+  /// An EditContext on the canvas, else a hidden textarea at the caret. Offsets are UTF-16.
   /// `callback(kind, start, end, text, a, b, formats)` reports edits:
   /// - "commit": replace start..end (-1: the composition or selection) with text;
   ///   a..b is the selection after it, or -1.
@@ -415,8 +413,7 @@ class KnotsBrowserHost {
       });
     }
 
-    /// `reset`: focus moved to another field, or the UI committed the composition,
-    /// so the browser's input method must drop the composition it holds.
+    /// `reset`: the browser must drop its composition (focus moved, or the UI committed it).
     ti.sync = (active, reset, text, selectionStart, selectionEnd, x, y, w, h, cx, cy, cw, ch) => {
       const caret = toClient(x, y, w, h);
       ti.caretRect = caret;

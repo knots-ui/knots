@@ -42,7 +42,7 @@ pub const Decoration = union(enum) {
         start: u32,
         end: u32,
         color: ?[4]f32 = null,
-        /// Twice the font's underline thickness, as for the active clause of a composition.
+        /// Twice the font's underline thickness.
         thick: bool = false,
     };
 

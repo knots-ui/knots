@@ -96,13 +96,9 @@ pub fn onChar(owner: *window.Window, high_surrogate: *u16, w: u16) void {
     if ((ctrl and !alt) or keyDown(win32.VK_LWIN) or keyDown(win32.VK_RWIN)) return;
     // The composed character replaces the dead key's accent.
     owner.backend.ime.dead_key = false;
-    if (owner.text_input.active) {
-        var encoded: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(cp, &encoded) catch return;
-        owner.pushTextEdit(.{ .session = owner.text_input.id, .replace = owner.text_input.target(), .text = encoded[0..n] });
-        return;
-    }
-    owner.pushChar(cp);
+    var encoded: [4]u8 = undefined;
+    const n = std.unicode.utf8Encode(cp, &encoded) catch return;
+    owner.pushText(encoded[0..n]);
 }
 
 pub fn onDropFiles(self: *Backend, owner: *window.Window, hdrop: win32.HDROP) void {

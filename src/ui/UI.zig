@@ -12,7 +12,7 @@ const State = @import("State.zig");
 const Input = @import("Input.zig");
 const InputScope = @import("InputScope.zig");
 const Accessibility = @import("Accessibility.zig");
-const Composition = @import("Composition.zig");
+const text_edit = @import("text_edit");
 const animation = @import("animation.zig");
 
 const Decoration = @import("decoration.zig").Decoration;
@@ -106,14 +106,13 @@ culled_count: u32 = 0,
 content_scale: f32,
 scroll_line_size: FontSize.Input,
 anim_active: bool,
-/// The focused field's platform text input, published by the field this frame.
 text_session: ?input_types.TextInputSession = null,
-/// The field the platform last saw, and the session id it knows it by.
+/// The field the platform last saw, and its session id.
 text_session_owner: Element.Id = Element.INVALID_ID,
 text_session_id: u64 = 0,
-composition: Composition = .{},
-/// The composing field opened this frame.
-composition_seen: bool = false,
+/// The platform composes into one field at a time: `composition_owner`.
+composition: text_edit.Composition = .{},
+composition_owner: Element.Id = Element.INVALID_ID,
 theme: Theme,
 last_stats: Stats,
 cursor_shape: input_types.CursorShape,
@@ -553,13 +552,13 @@ pub fn requestCursor(self: *UI, shape: input_types.CursorShape) void {
     self.cursor_shape = shape;
 }
 
-/// The session id the platform knows field `id` by; edits for any other id are stale.
+/// The session id the platform knows field `id` by.
 pub fn textSessionId(self: *const UI, id: Element.Id) ?u64 {
     if (id == Element.INVALID_ID or id != self.text_session_owner) return null;
     return self.text_session_id;
 }
 
-/// Publishes the focused field `id` to the platform text input. `session.id` is assigned here.
+/// Assigns `session.id`.
 pub fn publishTextInput(self: *UI, id: Element.Id, session: input_types.TextInputSession) void {
     if (id != self.text_session_owner) {
         self.text_session_owner = id;

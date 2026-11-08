@@ -49,7 +49,7 @@ pub const Output = struct {
     cursor_shape: input_types.CursorShape,
     capture_pointer: bool,
     capture_keyboard: bool,
-    /// The focused text field, for the platform text input. Hand it to the window every frame.
+    /// Pass to `Window.setTextInput` every frame, including null.
     text_input: ?input_types.TextInputSession,
     redraw: bool,
     close: bool,

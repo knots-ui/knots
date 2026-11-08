@@ -203,7 +203,9 @@ reads the packet directly. `Painter` uses the bundled backend types. See
   or close a window.
 - Pass `output.text_input` to the window every frame, including `null`, so the
   input method follows focus. A host with its own window answers its input
-  method from that session and sends the changes back as `Input.text_edits`.
+  method from that session and sends keys and text back, in order, as
+  `Input.events`. The `text_edit` module edits a copy of the field the way the
+  UI will, so the host can answer the input method between frames.
 - Custom backends must validate packet extensions and reject unsupported
   commands.
 

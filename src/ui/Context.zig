@@ -145,9 +145,10 @@ pub fn enqueueAccessibilityAction(self: *Context, request: Accessibility.ActionR
 }
 
 fn copyRequested(input: *const @import("Input.zig")) bool {
-    for (input.key_events) |event| {
-        if (event.key == .c and event.action != .release and input_types.clipboardModifierHeld(event.mods)) return true;
-    }
+    for (input.events) |event| switch (event) {
+        .key => |key| if (key.key == .c and key.action != .release and input_types.clipboardModifierHeld(key.mods)) return true,
+        .text => {},
+    };
     return false;
 }
 
@@ -204,11 +205,13 @@ pub fn endFrame(self: *Context, frame: *Frame) !Frame.Output {
     };
 }
 
-/// A field that stopped publishing loses its session; a composition whose field
-/// was not drawn this frame is dropped.
+/// Drops the session of a field that stopped publishing, and a composition without a session.
 fn endTextInput(ui: *UI) void {
     if (ui.text_session == null) ui.text_session_owner = UI.INVALID_ID;
-    if (!ui.composition_seen) ui.composition.clear();
+    if (ui.composition_owner != ui.text_session_owner) {
+        ui.composition.clear();
+        ui.composition_owner = UI.INVALID_ID;
+    }
 }
 
 /// Every reachable hit record that overlaps a marked one, so elements on top
@@ -363,7 +366,6 @@ fn reset(ui: *UI) void {
     ui.input_scopes.resetFrame();
     ui.anim_active = false;
     ui.text_session = null;
-    ui.composition_seen = false;
     ui.cursor_shape = .default;
 }
 
@@ -1126,7 +1128,6 @@ test "scroll routing uses previous frame elements" {
     try resolveWindow(&ui, .{
         .pos = .{ 150, 100 },
         .scroll = .{ .pixel = .{ 0, 50 } },
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1203,7 +1204,6 @@ fn wheelInput(delta: math.Vec2) input_types.Input {
     return .{
         .pos = .{ 50, 50 },
         .scroll = .{ .pixel = delta },
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1214,7 +1214,6 @@ fn scrollInput(scroll: input_types.ScrollInput) input_types.Input {
     return .{
         .pos = .{ 50, 50 },
         .scroll = scroll,
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1360,7 +1359,6 @@ test "scrollbar drag moves scroll offset proportionally" {
             break :blk buttons;
         },
         .scroll = .{},
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1382,7 +1380,6 @@ test "scrollbar drag moves scroll offset proportionally" {
             break :blk buttons;
         },
         .scroll = .{},
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1399,7 +1396,6 @@ test "scrollbar drag moves scroll offset proportionally" {
     try resolveWindow(&ui, .{
         .pos = .{ bar.thumb.x() + 1, drag_target_y },
         .scroll = .{},
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1441,7 +1437,6 @@ test "wheel scroll over container updates offset" {
     try resolveWindow(&ui, .{
         .pos = .{ 50, 50 },
         .scroll = .{ .pixel = .{ 0, 25 } },
-        .chars = &.{},
         .shift_held = false,
         .ctrl_held = false,
         .super_held = false,
@@ -1581,14 +1576,14 @@ test "copy shortcut copies the selected text" {
     var view = try Context.init(std.testing.allocator, .{});
     defer view.deinit();
 
-    const copy = [_]input_types.KeyEvent{.{ .key = .c, .action = .press, .mods = .{ .ctrl = true, .super = true } }};
+    const copy = [_]input_types.Event{.{ .key = .{ .key = .c, .action = .press, .mods = .{ .ctrl = true, .super = true } } }};
     var frame = try view.beginFrame(.{
         .now_ms = 0,
         .delta_ns = 0,
         .content_scale = 1,
         .logical_extent = .{ .width = 100, .height = 50 },
         .physical_extent = .{ .width = 100, .height = 50 },
-        .input = .{ .pos = .{ 0, 0 }, .key_events = &copy },
+        .input = .{ .pos = .{ 0, 0 }, .events = &copy },
     });
     view.ui.state.selection_text = "selected";
     const output = try view.endFrame(&frame);
@@ -1705,9 +1700,9 @@ test "every finalization allocation failure releases the frame and permits retry
     try std.testing.expect(failure_offset > 0);
 }
 
-fn textEditTestInput(pos: [2]f64, button: input_types.MouseButtonState, chars: []const u21, key_events: []const input_types.KeyEvent) input_types.FrameInput {
+fn textEditTestInput(pos: [2]f64, button: input_types.MouseButtonState, events: []const input_types.Event) input_types.FrameInput {
     var frame_input: input_types.FrameInput = .{
-        .input = .{ .pos = pos, .chars = chars, .key_events = key_events },
+        .input = .{ .pos = pos, .events = events },
         .now_ms = 0,
         .delta_ns = 0,
         .logical_extent = .{ .width = 400, .height = 100 },
@@ -1720,8 +1715,8 @@ fn textEditTestInput(pos: [2]f64, button: input_types.MouseButtonState, chars: [
 
 fn textEditTestClick(pos: [2]f64) [2]input_types.FrameInput {
     return .{
-        textEditTestInput(pos, .{ .down = true, .pressed = true, .pressed_pos = pos }, &.{}, &.{}),
-        textEditTestInput(pos, .{ .released = true, .released_pos = pos }, &.{}, &.{}),
+        textEditTestInput(pos, .{ .down = true, .pressed = true, .pressed_pos = pos }, &.{}),
+        textEditTestInput(pos, .{ .released = true, .released_pos = pos }, &.{}),
     };
 }
 
@@ -1768,13 +1763,13 @@ test "text input may be cleared after it is emitted in the same frame" {
     const focus = textEditTestClick(input_pos);
     const add = textEditTestClick(add_pos);
     const steps = [_]input_types.FrameInput{
-        textEditTestInput(input_pos, .{}, &.{}, &.{}),
+        textEditTestInput(input_pos, .{}, &.{}),
         focus[0],
         focus[1],
-        textEditTestInput(input_pos, .{}, &.{ 'h', 'i' }, &.{}),
+        textEditTestInput(input_pos, .{}, &.{.{ .text = .{ .text = "hi" } }}),
         add[0],
         add[1],
-        textEditTestInput(add_pos, .{}, &.{}, &.{}),
+        textEditTestInput(add_pos, .{}, &.{}),
     };
     for (steps) |step| {
         var f = try view.beginFrame(step);
@@ -1796,12 +1791,12 @@ test "text area draws the text after enter grows the buffer" {
 
     const pos = [2]f64{ 40, 20 };
     const focus = textEditTestClick(pos);
-    const enter = [_]input_types.KeyEvent{.{ .key = .enter, .action = .press, .mods = .{} }};
+    const enter = [_]input_types.Event{.{ .key = .{ .key = .enter, .action = .press, .mods = .{} } }};
     const steps = [_]input_types.FrameInput{
-        textEditTestInput(pos, .{}, &.{}, &.{}),
+        textEditTestInput(pos, .{}, &.{}),
         focus[0],
         focus[1],
-        textEditTestInput(pos, .{}, &.{}, &enter),
+        textEditTestInput(pos, .{}, &enter),
     };
     for (steps) |step| {
         var f = try view.beginFrame(step);
@@ -1844,7 +1839,7 @@ test "a composition shows in the field and the session but not in the buffer" {
     const pos = [2]f64{ 40, 20 };
     const focus = textEditTestClick(pos);
     var output: Frame.Output = undefined;
-    for ([_]input_types.FrameInput{ textEditTestInput(pos, .{}, &.{}, &.{}), focus[0], focus[1] }) |step| {
+    for ([_]input_types.FrameInput{ textEditTestInput(pos, .{}, &.{}), focus[0], focus[1] }) |step| {
         output = try compositionTestFrame(&view, step, &buf);
     }
     const session = output.text_input.?;
@@ -1852,14 +1847,12 @@ test "a composition shows in the field and the session but not in the buffer" {
     try testing.expectEqual(null, session.composition);
 
     const segments = [_]input_types.CompositionSegment{.{ .start = 0, .end = 6, .active = true }};
-    const compose = [_]input_types.TextEdit{.{
+    const compose = [_]input_types.Event{.{ .text = .{
         .session = session.id,
-        .replace = session.selection,
         .text = "にほ",
         .compose = .{ .caret = .at(6), .segments = &segments },
-    }};
-    var step = textEditTestInput(pos, .{}, &.{}, &.{});
-    step.input.text_edits = &compose;
+    } }};
+    var step = textEditTestInput(pos, .{}, &compose);
     output = try compositionTestFrame(&view, step, &buf);
     try testing.expectEqualStrings("ab", buf.items);
     const composing = output.text_input.?;
@@ -1878,14 +1871,14 @@ test "a composition shows in the field and the session but not in the buffer" {
     };
     try testing.expect(underlined);
 
-    // Edits for a stale session are ignored.
-    const stale = [_]input_types.TextEdit{.{ .session = session.id + 1, .replace = .at(0), .text = "x" }};
-    step.input.text_edits = &stale;
+    // Edits with a range for a stale session are ignored.
+    const stale = [_]input_types.Event{.{ .text = .{ .session = session.id + 1, .replace = .at(0), .text = "x" } }};
+    step.input.events = &stale;
     _ = try compositionTestFrame(&view, step, &buf);
     try testing.expectEqualStrings("ab", buf.items);
 
-    const commit = [_]input_types.TextEdit{.{ .session = session.id, .replace = composing.composition.?, .text = "日本" }};
-    step.input.text_edits = &commit;
+    const commit = [_]input_types.Event{.{ .text = .{ .session = session.id, .replace = composing.composition.?, .text = "日本" } }};
+    step.input.events = &commit;
     output = try compositionTestFrame(&view, step, &buf);
     try testing.expectEqualStrings("ab日本", buf.items);
     try testing.expectEqual(null, output.text_input.?.composition);
@@ -1900,13 +1893,11 @@ test "clicking a composing field commits the composition" {
     const pos = [2]f64{ 40, 20 };
     const focus = textEditTestClick(pos);
     var output: Frame.Output = undefined;
-    for ([_]input_types.FrameInput{ textEditTestInput(pos, .{}, &.{}, &.{}), focus[0], focus[1] }) |step| {
+    for ([_]input_types.FrameInput{ textEditTestInput(pos, .{}, &.{}), focus[0], focus[1] }) |step| {
         output = try compositionTestFrame(&view, step, &buf);
     }
-    const compose = [_]input_types.TextEdit{.{ .session = output.text_input.?.id, .replace = .at(0), .text = "´", .compose = .{ .caret = .at(2) } }};
-    var step = textEditTestInput(pos, .{}, &.{}, &.{});
-    step.input.text_edits = &compose;
-    _ = try compositionTestFrame(&view, step, &buf);
+    const compose = [_]input_types.Event{.{ .text = .{ .session = output.text_input.?.id, .text = "´", .compose = .{ .caret = .at(2) } } }};
+    _ = try compositionTestFrame(&view, textEditTestInput(pos, .{}, &compose), &buf);
     try testing.expectEqual(@as(usize, 0), buf.items.len);
 
     output = try compositionTestFrame(&view, focus[0], &buf);
@@ -1943,19 +1934,48 @@ test "text typed while focus moves to another field lands in the new field" {
     const b_pos = [2]f64{ 40, 45 };
     const focus_a = textEditTestClick(a_pos);
     var output: Frame.Output = undefined;
-    for ([_]input_types.FrameInput{ textEditTestInput(a_pos, .{}, &.{}, &.{}), focus_a[0], focus_a[1] }) |step| {
+    for ([_]input_types.FrameInput{ textEditTestInput(a_pos, .{}, &.{}), focus_a[0], focus_a[1] }) |step| {
         output = try t.frame(&view, step);
     }
     const a_session = output.text_input.?.id;
 
-    // The platform still addresses field a when the press on b arrives.
-    const typed = [_]input_types.TextEdit{.{ .session = a_session, .replace = .at(0), .text = "x" }};
+    // The platform still addresses a: typing follows focus, a ranged edit for a is dropped.
+    const typed = [_]input_types.Event{
+        .{ .text = .{ .session = a_session, .text = "x" } },
+        .{ .text = .{ .session = a_session, .replace = .at(0), .text = "y" } },
+    };
     var press_b = textEditTestClick(b_pos)[0];
-    press_b.input.text_edits = &typed;
+    press_b.input.events = &typed;
     output = try t.frame(&view, press_b);
     try testing.expectEqual(@as(usize, 0), a.items.len);
     try testing.expectEqualStrings("x", b.items);
     try testing.expect(output.text_input.?.id != a_session);
+}
+
+test "keys and text apply in the order they happened" {
+    var view = try Context.init(testing.allocator, .{});
+    defer view.deinit();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    try buf.appendSlice(testing.allocator, "abc");
+
+    const pos = [2]f64{ 40, 20 };
+    const focus = textEditTestClick(pos);
+    for ([_]input_types.FrameInput{ textEditTestInput(pos, .{}, &.{}), focus[0], focus[1] }) |step| {
+        _ = try compositionTestFrame(&view, step, &buf);
+    }
+    const end = [_]input_types.Event{.{ .key = .{ .key = .end, .action = .press, .mods = .{} } }};
+    _ = try compositionTestFrame(&view, textEditTestInput(pos, .{}, &end), &buf);
+
+    // Left, then typing, within one frame: the text lands where Left put the caret.
+    const events = [_]input_types.Event{
+        .{ .key = .{ .key = .left, .action = .press, .mods = .{} } },
+        .{ .text = .{ .text = "x" } },
+        .{ .key = .{ .key = .backspace, .action = .press, .mods = .{} } },
+        .{ .text = .{ .text = "y" } },
+    };
+    _ = try compositionTestFrame(&view, textEditTestInput(pos, .{}, &events), &buf);
+    try testing.expectEqualStrings("abyc", buf.items);
 }
 
 const EdgePopupTest = struct {
@@ -2002,10 +2022,10 @@ test "popups near the right edge end-align to their anchor" {
     const picker_pos = [2]f64{ 370, 62 };
     const open_menu = textEditTestClick(menu_pos);
     const open_picker = textEditTestClick(picker_pos);
-    const settle = textEditTestInput(picker_pos, .{}, &.{}, &.{});
+    const settle = textEditTestInput(picker_pos, .{}, &.{});
 
     const menu_popup = Key.str("menu").indexed(1).hash();
-    const hover_menu = textEditTestInput(menu_pos, .{}, &.{}, &.{});
+    const hover_menu = textEditTestInput(menu_pos, .{}, &.{});
     const steps = [_]input_types.FrameInput{ hover_menu, open_menu[0], open_menu[1], hover_menu };
     for (steps) |step| {
         var f = try view.beginFrame(step);

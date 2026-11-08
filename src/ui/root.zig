@@ -25,7 +25,6 @@ test {
     _ = State;
     _ = UI;
     _ = Context;
-    _ = @import("Composition.zig");
     _ = @import("scrollbar.zig");
     _ = component;
 }

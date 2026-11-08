@@ -364,7 +364,7 @@ fn renderFrame(
         dropped_paths,
     );
 
-    if (input_types.pasteRequested(input.key_events)) {
+    if (input_types.pasteRequested(input.events)) {
         try viewport.window.requestPaste();
     }
     const paste_text = viewport.window.takePaste();

@@ -210,51 +210,57 @@ pub const TextRect = struct {
 
 pub const TextInputPurpose = enum { text, multiline };
 
-/// One clause of a composition, in bytes of the composed text. The active
-/// clause is the one the input method is converting.
+/// A clause of the composition, in bytes of its text; `active` is being converted.
 pub const CompositionSegment = struct {
     start: u32,
     end: u32,
     active: bool = false,
 };
 
-/// The focused text field, as the platform text input sees it.
-///
-/// The UI publishes one per frame in `Frame.Output.text_input`. The host keeps
-/// a copy to answer the input method's queries until the next frame, and sends
-/// the input method's changes back as `TextEdit`s.
+/// The focused field, published by the UI each frame for the platform's input method.
 pub const TextInputSession = struct {
-    /// Changes when a different field takes focus; the host then resets the input method.
+    /// Changes when focus moves to another field. Never 0.
     id: u64,
     /// The whole field, with any composition in place.
     text: []const u8,
     selection: TextRange,
-    /// The uncommitted text the input method is composing, inside `text`.
     composition: ?TextRange,
     composition_segments: []const CompositionSegment = &.{},
     purpose: TextInputPurpose,
+    bytes_max: u32,
     caret: TextRect,
-    /// One rectangle per line the composition covers, for candidate windows.
+    /// One per line of the composition, for candidate windows.
     composition_rects: []const TextRect = &.{},
 };
 
-/// A change the platform text input makes to the field of session `session`.
-/// Ranges are bytes of `TextInputSession.text`, before the edit.
+/// Typed text or an input method's change. Typing (no `replace`, no `compose`)
+/// goes to the focused field; anything else only to the field of `session`.
 pub const TextEdit = struct {
-    session: u64,
-    replace: TextRange,
+    /// 0 for none.
+    session: u64 = 0,
+    /// Bytes of the field's text. Null replaces the composition, else the selection.
+    replace: ?TextRange = null,
     text: []const u8,
-    /// When set, the inserted text becomes the composition; otherwise it is committed.
+    /// When set, the text becomes the composition instead of being committed.
     compose: ?Compose = null,
-    /// Selection after the edit, in bytes of the edited text. Without it the caret
-    /// goes to the composition's caret, or after the inserted text.
+    /// Selection in the edited text; defaults to after the inserted text.
     selection: ?TextRange = null,
 
     pub const Compose = struct {
-        /// Caret inside the composed text.
+        /// Inside the composed text.
         caret: TextRange,
         segments: []const CompositionSegment = &.{},
     };
+
+    pub fn isTyping(self: TextEdit) bool {
+        return self.replace == null and self.compose == null;
+    }
+};
+
+/// Keyboard and text input, in the order it happened.
+pub const Event = union(enum) {
+    key: KeyEvent,
+    text: TextEdit,
 };
 
 pub fn hitRegionAt(regions: []const HitRegion, pos: [2]f64) HitRegion.Kind {
@@ -276,10 +282,7 @@ pub const Input = struct {
     native_controls_width: f32 = 0,
     mouse: [mouse_button_count]MouseButtonState = @splat(.{}),
     scroll: ScrollInput = .{},
-    chars: []const u21 = &.{},
-    /// Changes from the platform text input, in order. See `TextInputSession`.
-    text_edits: []const TextEdit = &.{},
-    key_events: []const KeyEvent = &.{},
+    events: []const Event = &.{},
     key_down: *const [key_count]bool = &no_keys_down,
     shift_held: bool = false,
     ctrl_held: bool = false,
@@ -291,24 +294,15 @@ pub const Input = struct {
     }
 
     pub fn keyPressed(self: Input, key: Key) bool {
-        for (self.key_events) |event| {
-            if (event.key == key and event.action == .press) return true;
-        }
-        return false;
+        return hasKey(self.events, key, .press);
     }
 
     pub fn keyRepeated(self: Input, key: Key) bool {
-        for (self.key_events) |event| {
-            if (event.key == key and event.action == .repeat) return true;
-        }
-        return false;
+        return hasKey(self.events, key, .repeat);
     }
 
     pub fn keyReleased(self: Input, key: Key) bool {
-        for (self.key_events) |event| {
-            if (event.key == key and event.action == .release) return true;
-        }
-        return false;
+        return hasKey(self.events, key, .release);
     }
 
     pub fn keyDown(self: Input, key: Key) bool {
@@ -316,6 +310,14 @@ pub const Input = struct {
         return value >= 0 and value < key_count and self.key_down[@intCast(value)];
     }
 };
+
+pub fn hasKey(events: []const Event, key: Key, action: KeyAction) bool {
+    for (events) |event| switch (event) {
+        .key => |k| if (k.key == key and k.action == action) return true,
+        .text => {},
+    };
+    return false;
+}
 
 pub const KeyAction = enum(u8) { release, press, repeat };
 
@@ -398,15 +400,11 @@ fn keyForChar(ch: u21) ?Key {
     };
 }
 
-pub fn pasteRequested(events: []const KeyEvent) bool {
-    for (events) |event| {
-        if (event.key != .v or event.action == .release)
-            continue;
-
-        if (clipboardModifierHeld(event.mods))
-            return true;
-    }
-
+pub fn pasteRequested(events: []const Event) bool {
+    for (events) |event| switch (event) {
+        .key => |k| if (k.key == .v and k.action != .release and clipboardModifierHeld(k.mods)) return true,
+        .text => {},
+    };
     return false;
 }
 
@@ -457,18 +455,19 @@ test "paste is requested on press and on repeat but not on release" {
     const modifier: Mods = if (is_macos) .{ .super = true } else .{ .ctrl = true };
 
     try std.testing.expect(pasteRequested(&.{
-        .{ .key = .v, .action = .press, .mods = modifier },
+        .{ .key = .{ .key = .v, .action = .press, .mods = modifier } },
     }));
     try std.testing.expect(pasteRequested(&.{
-        .{ .key = .v, .action = .repeat, .mods = modifier },
+        .{ .key = .{ .key = .v, .action = .repeat, .mods = modifier } },
     }));
     try std.testing.expect(!pasteRequested(&.{
-        .{ .key = .v, .action = .release, .mods = modifier },
+        .{ .key = .{ .key = .v, .action = .release, .mods = modifier } },
     }));
     try std.testing.expect(!pasteRequested(&.{
-        .{ .key = .v, .action = .press, .mods = .{} },
+        .{ .key = .{ .key = .v, .action = .press, .mods = .{} } },
     }));
     try std.testing.expect(!pasteRequested(&.{
-        .{ .key = .c, .action = .press, .mods = modifier },
+        .{ .key = .{ .key = .c, .action = .press, .mods = modifier } },
+        .{ .text = .{ .text = "v" } },
     }));
 }

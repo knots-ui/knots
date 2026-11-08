@@ -1,39 +1,43 @@
-//! The window's copy of the focused field's `TextInputSession`.
-//!
-//! Input methods query the field synchronously, between frames, so backends
-//! answer from this copy. Each edit a backend sends is applied here at once,
-//! so the input method's next query sees it before the UI does; the next
-//! frame's session then replaces the copy.
+//! The window's copy of the focused field, which backends answer input method
+//! queries from between frames. It edits through the same `text_edit.Field` as the UI.
 const std = @import("std");
 const input = @import("input");
+const text_edit = @import("text_edit");
 
+const Allocator = std.mem.Allocator;
 const TextRange = input.TextRange;
 const TextRect = input.TextRect;
 const TextEdit = input.TextEdit;
+const KeyEvent = input.KeyEvent;
 const Session = input.TextInputSession;
-const Segment = input.CompositionSegment;
 
 active: bool = false,
 id: u64 = 0,
-text: std.ArrayList(u8) = .empty,
-/// Changes whenever `text` does, so backends can tell a new text without comparing it.
-revision: u64 = 0,
-selection: TextRange = .at(0),
-composition: ?TextRange = null,
-segments: std.ArrayList(Segment) = .empty,
 purpose: input.TextInputPurpose = .text,
+bytes_max: u32 = 0,
 caret: TextRect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
 composition_rects: std.ArrayList(TextRect) = .empty,
 
+buf: std.ArrayList(u8) = .empty,
+edit_selection: text_edit.Selection = .{},
+edit_composition: text_edit.Composition = .{},
+owns_composition: bool = false,
+
+/// The buffer with the composition in place.
+text: std.ArrayList(u8) = .empty,
+/// Changes whenever `text` does.
+revision: u64 = 0,
+/// `selection` and `composition` are bytes of `text`.
+selection: TextRange = .at(0),
+composition: ?TextRange = null,
+
 const TextInputState = @This();
 
-/// What a new session changes, for the backend to tell the input method.
 pub const Change = struct {
-    /// A field gained focus, or focus moved to another field: reset the input method.
+    /// Focus moved to a field: reset the input method.
     started: bool = false,
-    /// No field has focus any more.
     ended: bool = false,
-    /// The UI dropped a composition the input method still has (a click committed it).
+    /// The UI committed a composition the input method still holds.
     composition_dropped: bool = false,
 
     pub fn any(self: Change) bool {
@@ -41,13 +45,14 @@ pub const Change = struct {
     }
 };
 
-pub fn deinit(self: *TextInputState, allocator: std.mem.Allocator) void {
-    self.text.deinit(allocator);
-    self.segments.deinit(allocator);
+pub fn deinit(self: *TextInputState, allocator: Allocator) void {
     self.composition_rects.deinit(allocator);
+    self.buf.deinit(allocator);
+    self.edit_composition.deinit(allocator);
+    self.text.deinit(allocator);
 }
 
-pub fn set(self: *TextInputState, allocator: std.mem.Allocator, session: ?*const Session) !Change {
+pub fn set(self: *TextInputState, allocator: Allocator, session: ?*const Session) !Change {
     const s = session orelse {
         defer self.active = false;
         return .{ .ended = self.active };
@@ -58,58 +63,97 @@ pub fn set(self: *TextInputState, allocator: std.mem.Allocator, session: ?*const
     } else if (self.composition != null and s.composition == null) {
         change.composition_dropped = true;
     }
-    // Most frames publish the text the copy already holds.
-    if (change.started or !std.mem.eql(u8, self.text.items, s.text)) {
-        try self.text.resize(allocator, 0);
-        try self.text.appendSlice(allocator, s.text);
-        self.revision +%= 1;
-    }
-    try self.segments.resize(allocator, 0);
-    try self.segments.appendSlice(allocator, s.composition_segments);
     try self.composition_rects.resize(allocator, 0);
     try self.composition_rects.appendSlice(allocator, s.composition_rects);
     self.active = true;
     self.id = s.id;
-    self.selection = s.selection;
-    self.composition = s.composition;
     self.purpose = s.purpose;
+    self.bytes_max = s.bytes_max;
     self.caret = s.caret;
+
+    // Most frames publish the field the copy already holds.
+    const same = !change.started and std.mem.eql(u8, self.text.items, s.text) and
+        std.meta.eql(self.composition, s.composition) and std.meta.eql(self.selection, s.selection);
+    if (same) return change;
+
+    const doc = s.text;
+    const len: u32 = @intCast(doc.len);
+    const composition = if (s.composition) |c| clampRange(c, len) else null;
+    const cut = composition orelse TextRange.at(len);
+    try self.buf.resize(allocator, 0);
+    try self.buf.appendSlice(allocator, doc[0..cut.start]);
+    try self.buf.appendSlice(allocator, doc[cut.end..]);
+    self.edit_composition.clear();
+    self.owns_composition = composition != null;
+    if (composition) |c| {
+        const comp = &self.edit_composition;
+        try comp.text.appendSlice(allocator, doc[c.start..c.end]);
+        try comp.segments.appendSlice(allocator, s.composition_segments);
+        comp.at = c.start;
+        const sel = clampRange(s.selection, len);
+        comp.caret = .{
+            .start = std.math.clamp(sel.start, c.start, c.end) - c.start,
+            .end = std.math.clamp(sel.end, c.start, c.end) - c.start,
+        };
+        comp.active = true;
+        self.edit_selection = .at(c.start);
+    } else {
+        const sel = clampRange(s.selection, len);
+        self.edit_selection = .{ .anchor = sel.start, .caret = sel.end };
+    }
+    try self.text.resize(allocator, 0);
+    try self.text.appendSlice(allocator, doc);
+    self.selection = s.selection;
+    self.composition = composition;
+    self.revision +%= 1;
     return change;
 }
 
-/// Applies `edit` the way the UI will, so later queries see its result.
-pub fn apply(self: *TextInputState, allocator: std.mem.Allocator, edit: TextEdit) !void {
-    const len: u32 = @intCast(self.text.items.len);
-    const r: TextRange = .{ .start = @min(edit.replace.start, len), .end = @min(edit.replace.end, len) };
-    if (r.start > r.end) return;
-    try self.text.replaceRange(allocator, r.start, r.len(), edit.text);
-    self.revision +%= 1;
-    const text_len: u32 = @intCast(edit.text.len);
-    try self.segments.resize(allocator, 0);
-    if (edit.compose) |compose| {
-        if (text_len == 0) {
-            self.composition = null;
-            self.selection = .at(r.start);
-            return;
-        }
-        self.composition = .{ .start = r.start, .end = r.start + text_len };
-        try self.segments.appendSlice(allocator, compose.segments);
-        self.selection = .{
-            .start = r.start + @min(compose.caret.start, text_len),
-            .end = r.start + @min(compose.caret.end, text_len),
-        };
-    } else {
-        self.composition = null;
-        self.selection = edit.selection orelse .at(r.start + text_len);
-    }
+pub fn apply(self: *TextInputState, allocator: Allocator, edit: TextEdit) !void {
+    var f = self.field(allocator);
+    try f.apply(edit);
+    try self.refresh(allocator, &f);
 }
 
-/// The range the input method writes to when it names none: the composition, else the selection.
+/// Keys that need layout change nothing until the next session.
+pub fn applyKey(self: *TextInputState, allocator: Allocator, event: KeyEvent) !void {
+    const command = text_edit.keyCommand(event, self.purpose == .multiline) orelse return;
+    var f = self.field(allocator);
+    try f.run(command);
+    try self.refresh(allocator, &f);
+}
+
 pub fn target(self: *const TextInputState) TextRange {
     return self.composition orelse self.selection;
 }
 
-/// UTF-16 code units in `text[0..byte]`, for macOS, Windows and the browser.
+fn field(self: *TextInputState, allocator: Allocator) text_edit.Field {
+    return .{
+        .buf = &self.buf,
+        .allocator = allocator,
+        .selection = &self.edit_selection,
+        .composition = &self.edit_composition,
+        .composition_allocator = allocator,
+        .owns_composition = self.owns_composition,
+        .limits = .{ .multiline = self.purpose == .multiline, .bytes_max = self.bytes_max },
+    };
+}
+
+fn refresh(self: *TextInputState, allocator: Allocator, f: *const text_edit.Field) !void {
+    self.owns_composition = f.owns_composition;
+    try f.writeText(allocator, &self.text);
+    const v = f.view();
+    self.selection = v.selection;
+    self.composition = v.composition;
+    self.revision +%= 1;
+}
+
+fn clampRange(r: TextRange, max: u32) TextRange {
+    const end = @min(r.end, max);
+    return .{ .start = @min(r.start, end), .end = end };
+}
+
+/// UTF-16 code units in `text[0..byte]`.
 pub fn utf16Offset(text: []const u8, byte: u32) u32 {
     var units: u32 = 0;
     var i: usize = 0;
@@ -144,7 +188,7 @@ pub fn byteRange(text: []const u8, r: TextRange) TextRange {
     return .{ .start = byteOffset(text, r.start), .end = byteOffset(text, r.end) };
 }
 
-/// The rectangle covering byte `byte`: a composition line when it falls inside one, else the caret.
+/// The composition's first line when `byte` is in it, else the caret.
 pub fn rectFor(self: *const TextInputState, byte: u32) TextRect {
     if (self.composition) |c| {
         if (byte >= c.start and byte <= c.end and self.composition_rects.items.len > 0) {
@@ -156,53 +200,58 @@ pub fn rectFor(self: *const TextInputState, byte: u32) TextRect {
 
 const testing = std.testing;
 
-test "edits apply to the copy before the next frame" {
+fn testSession(id: u64, doc: []const u8, selection: TextRange, composition: ?TextRange) Session {
+    return .{
+        .id = id,
+        .text = doc,
+        .selection = selection,
+        .composition = composition,
+        .purpose = .text,
+        .bytes_max = 1024,
+        .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
+    };
+}
+
+test "edits and keys apply to the copy before the next frame" {
     var state: TextInputState = .{};
     defer state.deinit(testing.allocator);
-    const change = try state.set(testing.allocator, &.{
-        .id = 7,
-        .text = "ab",
-        .selection = .at(1),
-        .composition = null,
-        .purpose = .text,
-        .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
-    });
-    try testing.expect(change.started);
-    const revision = state.revision;
-    _ = try state.set(testing.allocator, &.{
-        .id = 7,
-        .text = "ab",
-        .selection = .at(2),
-        .composition = null,
-        .purpose = .text,
-        .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
-    });
-    try testing.expectEqual(revision, state.revision);
-    try testing.expectEqual(TextRange.at(2), state.selection);
-    state.selection = .at(1);
+    try testing.expect((try state.set(testing.allocator, &testSession(7, "ab", .at(1), null))).started);
 
-    try state.apply(testing.allocator, .{ .session = 7, .replace = state.target(), .text = "に", .compose = .{ .caret = .at(3) } });
+    try state.apply(testing.allocator, .{ .text = "に", .compose = .{ .caret = .at(3) } });
     try testing.expectEqualStrings("aにb", state.text.items);
     try testing.expectEqual(TextRange{ .start = 1, .end = 4 }, state.composition.?);
     try testing.expectEqual(TextRange.at(4), state.selection);
 
-    try state.apply(testing.allocator, .{ .session = 7, .replace = state.target(), .text = "日" });
+    try state.apply(testing.allocator, .{ .text = "日" });
     try testing.expectEqualStrings("a日b", state.text.items);
     try testing.expectEqual(null, state.composition);
     try testing.expectEqual(TextRange.at(4), state.selection);
+
+    // Editing keys change the copy too.
+    try state.applyKey(testing.allocator, .{ .key = .backspace, .action = .press, .mods = .{} });
+    try state.apply(testing.allocator, .{ .text = "x" });
+    try testing.expectEqualStrings("axb", state.text.items);
+}
+
+test "a session in the middle of a composition splits the field" {
+    var state: TextInputState = .{};
+    defer state.deinit(testing.allocator);
+    _ = try state.set(testing.allocator, &testSession(1, "aにb", .at(4), .{ .start = 1, .end = 4 }));
+    try testing.expectEqualStrings("ab", state.buf.items);
+    try testing.expectEqualStrings("に", state.edit_composition.text.items);
+
+    const revision = state.revision;
+    _ = try state.set(testing.allocator, &testSession(1, "aにb", .at(4), .{ .start = 1, .end = 4 }));
+    try testing.expectEqual(revision, state.revision);
+
+    try state.apply(testing.allocator, .{ .text = "日" });
+    try testing.expectEqualStrings("a日b", state.text.items);
 }
 
 test "a new field restarts and a dropped composition is reported" {
     var state: TextInputState = .{};
     defer state.deinit(testing.allocator);
-    var session: Session = .{
-        .id = 1,
-        .text = "x",
-        .selection = .at(1),
-        .composition = .{ .start = 0, .end = 1 },
-        .purpose = .text,
-        .caret = .{ .x = 0, .y = 0, .w = 1, .h = 10 },
-    };
+    var session = testSession(1, "x", .at(1), .{ .start = 0, .end = 1 });
     try testing.expect((try state.set(testing.allocator, &session)).started);
     session.composition = null;
     try testing.expect((try state.set(testing.allocator, &session)).composition_dropped);
@@ -213,11 +262,11 @@ test "a new field restarts and a dropped composition is reported" {
 }
 
 test "utf-16 offsets count surrogate pairs" {
-    const text = "a\u{1F600}é";
-    try testing.expectEqual(@as(u32, 3), utf16Offset(text, 5));
-    try testing.expectEqual(@as(u32, 4), utf16Offset(text, 7));
-    try testing.expectEqual(@as(u32, 5), byteOffset(text, 3));
+    const doc = "a\u{1F600}é";
+    try testing.expectEqual(@as(u32, 3), utf16Offset(doc, 5));
+    try testing.expectEqual(@as(u32, 4), utf16Offset(doc, 7));
+    try testing.expectEqual(@as(u32, 5), byteOffset(doc, 3));
     // Inside a surrogate pair rounds down.
-    try testing.expectEqual(@as(u32, 1), byteOffset(text, 2));
-    try testing.expectEqual(@as(u32, 7), byteOffset(text, 99));
+    try testing.expectEqual(@as(u32, 1), byteOffset(doc, 2));
+    try testing.expectEqual(@as(u32, 7), byteOffset(doc, 99));
 }

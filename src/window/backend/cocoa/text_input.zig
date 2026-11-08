@@ -1,8 +1,4 @@
-//! NSTextInputClient for KnotsView.
-//!
-//! The input method queries the focused field synchronously, so every answer
-//! comes from the window's copy of the text input session. AppKit speaks UTF-16
-//! offsets into the whole field; they are converted to bytes here and nowhere else.
+//! NSTextInputClient for KnotsView. AppKit's UTF-16 offsets become bytes here.
 const std = @import("std");
 const objc = @import("objc");
 const input_types = @import("input");
@@ -43,7 +39,6 @@ pub fn adoptProtocol(cls: objc.Class) bool {
     };
 }
 
-/// Owner whose focused field the input method may edit.
 fn session(self: c.id) ?*Window {
     const owner = ak.unwrapOwner(self) orelse return null;
     return if (owner.text_input.active) owner else null;
@@ -60,12 +55,18 @@ fn utf8(ns_str: objc.Object) []const u8 {
     return std.mem.sliceTo(ptr orelse return "", 0);
 }
 
-/// Bytes of the field an AppKit range names; `not_found` means the composition, else the selection.
+/// `not_found` means the composition, else the selection.
 fn byteRange(state: *const State, r: ak.NSRange) TextRange {
     if (r.location == not_found) return state.target();
     const start: u32 = @intCast(@min(r.location, std.math.maxInt(u32)));
     const end: u32 = @intCast(@min(r.location +| r.length, std.math.maxInt(u32)));
     return State.byteRange(state.text.items, .{ .start = start, .end = end });
+}
+
+/// `not_found` leaves the range to the field.
+fn editRange(state: *const State, r: ak.NSRange) ?TextRange {
+    if (r.location == not_found) return null;
+    return byteRange(state, r);
 }
 
 fn nsRange(text: []const u8, r: TextRange) ak.NSRange {
@@ -81,7 +82,7 @@ fn insertText(self: c.id, _: c.SEL, string_id: c.id, replacement: ak.NSRange) ca
     };
     owner.pushTextEdit(.{
         .session = owner.text_input.id,
-        .replace = byteRange(&owner.text_input, replacement),
+        .replace = editRange(&owner.text_input, replacement),
         .text = text,
     });
 }
@@ -101,7 +102,7 @@ fn setMarkedText(self: c.id, _: c.SEL, string_id: c.id, selected: ak.NSRange, re
     const caret_end: u32 = @intCast(@min(selected.location +| selected.length, std.math.maxInt(u32)));
     owner.pushTextEdit(.{
         .session = owner.text_input.id,
-        .replace = byteRange(&owner.text_input, replacement),
+        .replace = editRange(&owner.text_input, replacement),
         .text = text,
         .compose = .{
             .caret = State.byteRange(text, .{ .start = caret_start, .end = caret_end }),
@@ -138,7 +139,6 @@ fn clauseSegments(string: objc.Object, text: []const u8, out: []Segment) []const
     return out[0..n];
 }
 
-/// Commits the composition as it stands.
 fn unmarkText(self: c.id, _: c.SEL) callconv(.c) void {
     const owner = session(self) orelse return;
     const composition = owner.text_input.composition orelse return;
@@ -184,7 +184,7 @@ fn characterIndexForPoint(_: c.id, _: c.SEL, _: ak.NSPoint) callconv(.c) c_ulong
     return not_found;
 }
 
-/// Screen rectangle of a range, for the candidate window: the composition line it falls on, else the caret.
+/// For the candidate window: the composition line, else the caret.
 fn firstRectForCharacterRange(self: c.id, _: c.SEL, range: ak.NSRange, actual: ?*ak.NSRange) callconv(.c) ak.NSRect {
     const zero: ak.NSRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } };
     const owner = session(self) orelse return zero;
@@ -200,7 +200,6 @@ fn firstRectForCharacterRange(self: c.id, _: c.SEL, range: ak.NSRange, actual: ?
     return ns_window.msgSend(ak.NSRect, "convertRectToScreen:", .{in_window});
 }
 
-/// Tells the input method what changed outside it: focus moved, or the UI committed its composition.
 pub fn update(view: objc.Object, owner: *Window, change: State.Change) void {
     const context = view.msgSend(objc.Object, "inputContext", .{});
     if (context.value == null) return;

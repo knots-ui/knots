@@ -243,50 +243,55 @@ fn handlePickerInput(self: *const ColorPicker, frame: *Frame, s: *State.ColorPic
     if (hex_focused) {
         var changed = false;
         var commit = false;
-        for (ui.input.chars) |ch| {
-            if (ch == 0) break;
-            if (s.hex_len >= @as(u32, s.hex_buf.len)) continue;
+        for (ui.input.events) |event| switch (event) {
+            .text => |typed| {
+                if (!typed.isTyping()) continue;
+                const view = std.unicode.Utf8View.init(typed.text) catch continue;
+                var it = view.iterator();
+                while (it.nextCodepoint()) |ch| {
+                    if (s.hex_len >= @as(u32, s.hex_buf.len)) continue;
 
-            const c: u8 = switch (ch) {
-                '#' => '#',
-                '0'...'9' => @intCast(ch),
-                'a'...'f' => @as(u8, @intCast(ch)) - 'a' + 'A',
-                'A'...'F' => @intCast(ch),
-                else => continue,
-            };
+                    const c: u8 = switch (ch) {
+                        '#' => '#',
+                        '0'...'9' => @intCast(ch),
+                        'a'...'f' => @as(u8, @intCast(ch)) - 'a' + 'A',
+                        'A'...'F' => @intCast(ch),
+                        else => continue,
+                    };
 
-            if (c == '#' and s.hex_len != 0) continue;
-            if (s.hex_len == 0 and c != '#') s.hex_buf[s.hex_len] = '#';
-            if (s.hex_len == 0 and c != '#') s.hex_len += 1;
-            if (s.hex_len < @as(u32, s.hex_buf.len)) {
-                s.hex_buf[s.hex_len] = c;
-                s.hex_len += 1;
-                changed = true;
-            }
-        }
-
-        for (ui.input.key_events) |event| {
-            if (event.action == .release) continue;
-            switch (event.key) {
-                .backspace => if (s.hex_len > 0) {
-                    s.hex_len -= 1;
-                    changed = true;
-                },
-                .delete => {
-                    s.hex_len = 0;
-                    changed = true;
-                },
-                .enter => commit = true,
-                .escape => {
-                    s.editing_hex = false;
-                    var buf: [10]u8 = undefined;
-                    const hex = formatHex(&buf, self.value.*, true);
-                    @memcpy(s.hex_buf[0..hex.len], hex);
-                    s.hex_len = @intCast(hex.len);
-                },
-                else => {},
-            }
-        }
+                    if (c == '#' and s.hex_len != 0) continue;
+                    if (s.hex_len == 0 and c != '#') s.hex_buf[s.hex_len] = '#';
+                    if (s.hex_len == 0 and c != '#') s.hex_len += 1;
+                    if (s.hex_len < @as(u32, s.hex_buf.len)) {
+                        s.hex_buf[s.hex_len] = c;
+                        s.hex_len += 1;
+                        changed = true;
+                    }
+                }
+            },
+            .key => |key| {
+                if (key.action == .release) continue;
+                switch (key.key) {
+                    .backspace => if (s.hex_len > 0) {
+                        s.hex_len -= 1;
+                        changed = true;
+                    },
+                    .delete => {
+                        s.hex_len = 0;
+                        changed = true;
+                    },
+                    .enter => commit = true,
+                    .escape => {
+                        s.editing_hex = false;
+                        var buf: [10]u8 = undefined;
+                        const hex = formatHex(&buf, self.value.*, true);
+                        @memcpy(s.hex_buf[0..hex.len], hex);
+                        s.hex_len = @intCast(hex.len);
+                    },
+                    else => {},
+                }
+            },
+        };
 
         if (changed) try commitHexInput(self, frame, s, false);
         if (commit) try commitHexInput(self, frame, s, true);
