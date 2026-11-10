@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .web_threads = web_threads,
-        .gpu_backend = gpu_backend,
+        .backend = knots.Backend.fromGpu(gpu_backend),
     });
 
     const exe = buildExecutable(b, target, optimize, gpu_backend, knots_dep, "playground");

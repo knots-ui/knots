@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
     const knots_dep = b.dependency("knots", .{
         .target = target,
         .optimize = optimize,
-        .gpu_backend = b.option(@import("knots").GPUBackend, "gpu_backend", "GPU backend to compile into knots."),
+        .backend = b.option(@import("knots").Backend, "backend", "What knots builds around its UI core: vulkan or webgpu. Default: the target's."),
     });
 
     const exe = b.addExecutable(.{

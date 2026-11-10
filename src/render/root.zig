@@ -16,6 +16,7 @@ test {
 pub const Command = @import("Command.zig").Command;
 pub const TextureHandle = @import("Command.zig").TextureHandle;
 pub const TextureSource = @import("Command.zig").TextureSource;
+pub const PixelFormat = @import("Command.zig").PixelFormat;
 pub const CustomDrawCallback = @import("Command.zig").CustomDrawCallback;
 pub const Extension = @import("Command.zig").Extension;
 pub const PaintCallback = @import("Command.zig").PaintCallback;

@@ -3,7 +3,8 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const release = b.dependency("release", .{});
+    // Lazy: the release archive is large, and a knots build without accessibility never needs it.
+    const release = b.lazyDependency("release", .{}) orelse return;
 
     const translated = b.addTranslateC(.{
         .root_source_file = if (target.result.os.tag == .windows) b.addWriteFiles().add("accesskit_windows.h",

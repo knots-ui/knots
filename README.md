@@ -21,7 +21,8 @@ Knots in your own window or renderer.
 | Windows             | Vulkan          | WebGPU            |
 | WASM (freestanding) | WebGPU          | —                 |
 
-Select a backend with the `gpu_backend` dependency option. Read
+Select a backend with the `backend` dependency option (`none`, `vulkan` or
+`webgpu`). Read
 [GPU backends](https://knotsui.com/docs/gpu-backends.html).
 
 ## Known limitations
@@ -50,6 +51,9 @@ Select a backend with the `gpu_backend` dependency option. Read
 - For the browser: a browser with WebGPU.
 
 ## Dependencies
+
+All dependencies are lazy. A build fetches only the ones that its target, GPU
+backend and options need. A `.backend = .none` build fetches none.
 
 | Dependency | Used for | Linking |
 | --- | --- | --- |
@@ -153,6 +157,24 @@ app_module.addImport("input", knots_dep.module("input"));
 app_module.addImport("render", knots_dep.module("render"));
 app_module.addImport("renderer", knots_dep.module("renderer"));
 ```
+
+If your host also has its own renderer, set `.backend = .none`. Knots then builds only
+the modules that need no window system, graphics API or other package: `ui`,
+`input`, `text_edit`, `text`, `render` and `math`. It skips `knots`, `window`,
+`gpu` and `renderer`, and it fetches no dependency.
+
+```zig
+const knots_dep = b.dependency("knots", .{
+    .target = target,
+    .optimize = optimize,
+    .backend = .none,
+});
+```
+
+Your renderer draws `render.Packet`. `render.contract` states its vertex
+layouts, bindings, uniforms and blending. `render.shaders` has the bundled
+shader sources (WGSL and Vulkan Zig) to read or translate. Image pixels use
+`render.PixelFormat`.
 
 ```zig
 var context = try ui.Context.init(allocator, .{});

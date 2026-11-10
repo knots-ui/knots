@@ -1,9 +1,10 @@
+const std = @import("std");
 const gpu = @import("gpu");
 const render = @import("render");
 const Vertex = render.Vertex;
 const Instance = render.Instance;
 const SlugInstance = render.SlugInstance;
-const shaders = render.shaders;
+const shaders = @import("shaders.zig");
 
 pub const SlugUniforms = extern struct {
     mvp_row0: [4]f32,
@@ -17,15 +18,30 @@ pub const ViewportUniform = [2]f32;
 
 pub const PrimitivesKind = enum { vertex, instance };
 
-const standard_blend = gpu.Pipeline.BlendState{
-    .color = .{ .src_factor = .src_alpha, .dst_factor = .one_minus_src_alpha, .op = .add },
-    .alpha = .{ .src_factor = .one, .dst_factor = .one_minus_src_alpha, .op = .add },
-};
+const standard_blend = blendState(render.contract.blending.primitives);
+const premultiplied_blend = blendState(render.contract.blending.text);
 
-const premultiplied_blend = gpu.Pipeline.BlendState{
-    .color = .{ .src_factor = .one, .dst_factor = .one_minus_src_alpha, .op = .add },
-    .alpha = .{ .src_factor = .one, .dst_factor = .one_minus_src_alpha, .op = .add },
-};
+comptime {
+    std.debug.assert(@sizeOf(SlugUniforms) == @sizeOf(render.contract.TextUniform));
+    std.debug.assert(@sizeOf(ViewportUniform) == @sizeOf(render.contract.PrimitiveUniform));
+}
+
+/// The packet contract states blending without a graphics API; this maps it to `gpu`.
+fn blendState(comptime blend: render.contract.Blend) gpu.Pipeline.BlendState {
+    return .{
+        .color = .{ .src_factor = blendFactor(blend.color.source), .dst_factor = blendFactor(blend.color.target), .op = .add },
+        .alpha = .{ .src_factor = blendFactor(blend.alpha.source), .dst_factor = blendFactor(blend.alpha.target), .op = .add },
+    };
+}
+
+fn blendFactor(comptime factor: render.contract.BlendFactor) gpu.Pipeline.BlendFactor {
+    return switch (factor) {
+        .zero => .zero,
+        .one => .one,
+        .source_alpha => .src_alpha,
+        .one_minus_source_alpha => .one_minus_src_alpha,
+    };
+}
 
 const vertex_attrs = gpu.Pipeline.attrsFromStruct(Vertex);
 const instance_attrs = gpu.Pipeline.attrsFromStruct(Instance);
