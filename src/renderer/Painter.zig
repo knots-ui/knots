@@ -73,11 +73,26 @@ const PixelTextureEntry = struct {
     len: usize,
     width: u32,
     height: u32,
-    format: gpu.Texture.Format,
+    format: render.PixelFormat,
     bytes_per_row: ?u32,
     version: u64,
     last_seen: u64,
 };
+
+/// Packet pixel formats are API-neutral; each one has a sampled `gpu` format.
+fn gpuTextureFormat(format: render.PixelFormat) gpu.Texture.Format {
+    const result: gpu.Texture.Format = switch (format) {
+        .rgba8 => .rgba8,
+        .rgba8_srgb => .rgba8_srgb,
+        .bgra8 => .bgra8,
+        .bgra8_srgb => .bgra8_srgb,
+        .r8 => .r8,
+        .rgba32f => .rgba32f,
+    };
+    std.debug.assert(result.bytesPerPixel() == format.bytesPerPixel());
+    std.debug.assert(result != .depth24_plus);
+    return result;
+}
 const RetiredGlyphResources = struct {
     bind_group: gpu_impl.BindGroup,
     words: gpu_impl.Buffer,
@@ -408,7 +423,7 @@ fn textureFromPixels(
     data: []const u8,
     width: u32,
     height: u32,
-    format: gpu.Texture.Format,
+    format: render.PixelFormat,
     bytes_per_row: ?u32,
     version: u64,
     force_upload: bool,
@@ -416,7 +431,7 @@ fn textureFromPixels(
     if (self.pixel_textures.getPtr(id)) |entry| {
         if (entry.width != width or entry.height != height or entry.format != format) {
             try self.reserveRetiredResources(1);
-            const replacement = try self.context.createTexture(width, height, format);
+            const replacement = try self.context.createTexture(width, height, gpuTextureFormat(format));
             errdefer replacement.destroyAfterWait();
             try replacement.write(data, width, height, bytes_per_row);
             const old_texture = entry.texture;
@@ -453,7 +468,7 @@ fn textureFromPixels(
     }
 
     if (self.pixel_textures.count() == textures_max) return error.TooManyTextures;
-    const texture = try self.context.createTexture(width, height, format);
+    const texture = try self.context.createTexture(width, height, gpuTextureFormat(format));
     errdefer texture.destroyAfterWait();
     try texture.write(data, width, height, bytes_per_row);
     try self.pixel_textures.put(self.allocator, id, .{

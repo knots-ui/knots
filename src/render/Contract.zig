@@ -1,7 +1,6 @@
 //! Vertex layouts, resource bindings, texture formats, and uniform contracts.
 
 const std = @import("std");
-const gpu = @import("gpu");
 const Vertex = @import("Vertex.zig");
 const Instance = @import("Instance.zig");
 const SlugInstance = @import("SlugInstance.zig");
@@ -16,9 +15,11 @@ const SlugInstance = @import("SlugInstance.zig");
 /// skip it; the element's own surface is emitted separately.
 pub const geometry = struct {
     pub const text_quad_indices = [6]u32{ 0, 1, 2, 0, 2, 3 };
-    pub const front_face: gpu.Pipeline.FrontFace = .ccw;
-    pub const cull_mode: gpu.Pipeline.CullMode = .none;
+    pub const front_face: FrontFace = .counter_clockwise;
+    pub const culling = false;
 };
+
+pub const FrontFace = enum { counter_clockwise, clockwise };
 
 /// Resource-group and binding numbers shared by the bundled shaders.
 pub const bindings = struct {
@@ -51,47 +52,43 @@ pub const TextUniform = extern struct {
 };
 
 pub const formats = struct {
-    pub const offscreen_color: gpu.Texture.Format = .rgba8;
+    pub const offscreen_color: @import("Command.zig").PixelFormat = .rgba8;
     pub const index_size_bytes: u8 = @sizeOf(u32);
 };
 
 /// Primitive output uses straight alpha. Text output is premultiplied alpha.
+/// Both blend with `target * (1 - source alpha)` and add.
 pub const blending = struct {
-    pub const primitives = gpu.Pipeline.BlendState{
-        .color = .{
-            .src_factor = .src_alpha,
-            .dst_factor = .one_minus_src_alpha,
-            .op = .add,
-        },
-        .alpha = .{
-            .src_factor = .one,
-            .dst_factor = .one_minus_src_alpha,
-            .op = .add,
-        },
+    pub const primitives = Blend{
+        .color = .{ .source = .source_alpha, .target = .one_minus_source_alpha },
+        .alpha = .{ .source = .one, .target = .one_minus_source_alpha },
     };
-    pub const text = gpu.Pipeline.BlendState{
-        .color = .{
-            .src_factor = .one,
-            .dst_factor = .one_minus_src_alpha,
-            .op = .add,
-        },
-        .alpha = .{
-            .src_factor = .one,
-            .dst_factor = .one_minus_src_alpha,
-            .op = .add,
-        },
+    pub const text = Blend{
+        .color = .{ .source = .one, .target = .one_minus_source_alpha },
+        .alpha = .{ .source = .one, .target = .one_minus_source_alpha },
     };
+};
+
+/// The blend operation is always addition.
+pub const BlendFactor = enum { zero, one, source_alpha, one_minus_source_alpha };
+
+pub const BlendComponent = struct {
+    source: BlendFactor,
+    target: BlendFactor,
+};
+
+pub const Blend = struct {
+    color: BlendComponent,
+    alpha: BlendComponent,
 };
 
 pub const layouts = struct {
     pub const primitive_stride_bytes: u32 = @sizeOf(Vertex);
     pub const instance_stride_bytes: u32 = @sizeOf(Instance);
     pub const text_stride_bytes: u32 = @sizeOf(SlugInstance);
-    pub const text_step_mode: gpu.Pipeline.VertexStepMode = .instance;
-
-    pub const primitive_attributes = gpu.Pipeline.attrsFromStruct(Vertex);
-    pub const instance_attributes = gpu.Pipeline.attrsFromStruct(Instance);
-    pub const text_attributes = gpu.Pipeline.attrsFromStruct(SlugInstance);
+    /// Instance and text buffers advance once per instance. Each attribute is one
+    /// field of `Vertex`, `Instance` or `SlugInstance`, in declaration order.
+    pub const text_per_instance = true;
 };
 
 comptime {

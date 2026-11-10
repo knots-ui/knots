@@ -1,9 +1,37 @@
 const std = @import("std");
 const web_build = @import("web_build.zig");
 const build_zon = @import("build.zig.zon");
-const WaylandScanner = @import("wayland").Scanner;
 
 pub const GPUBackend = @import("src/gpu/backend/root.zig").Backend;
+
+/// What Knots builds around its UI core (`-Dbackend`). The default is the target's GPU
+/// backend (`defaultGpuBackend`).
+pub const Backend = enum {
+    /// Only the UI core: `ui`, `input`, `text_edit`, `text`, `render` and `math`. No window,
+    /// GPU, renderer or `knots` app module, and no third-party package is fetched. For a host
+    /// that owns its window and renderer and draws `render.Packet` itself.
+    none,
+    /// The core, the window, and the bundled renderer on Vulkan.
+    vulkan,
+    /// The core, the window, and the bundled renderer on WebGPU.
+    webgpu,
+
+    pub fn fromGpu(gpu: GPUBackend) Backend {
+        return switch (gpu) {
+            .vulkan => .vulkan,
+            .webgpu => .webgpu,
+        };
+    }
+
+    /// The GPU backend to compile, or null for `none`.
+    pub fn gpuBackend(backend: Backend) ?GPUBackend {
+        return switch (backend) {
+            .none => null,
+            .vulkan => .vulkan,
+            .webgpu => .webgpu,
+        };
+    }
+};
 
 /// Source files for knots' Vulkan UI-rendering shaders, written as comptime Zig and
 /// compiled to SPIR-V at build time. Consumers driving their own Vulkan renderer for
@@ -50,6 +78,22 @@ pub const Platform = enum {
     browser,
 };
 
+/// Modules that need no window system, graphics API or third-party package. A host
+/// with its own window and renderer uses only these (`-Dbackend=none`).
+const Core = struct {
+    input: *std.Build.Module,
+    math: *std.Build.Module,
+    render: *std.Build.Module,
+    unicode: *std.Build.Module,
+    text_edit: *std.Build.Module,
+    font: *std.Build.Module,
+    shape: *std.Build.Module,
+    text: *std.Build.Module,
+    layout: *std.Build.Module,
+    style: *std.Build.Module,
+    ui: *std.Build.Module,
+};
+
 pub fn build(b: *std.Build) void {
     var target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -59,14 +103,212 @@ pub fn build(b: *std.Build) void {
     const web_threads = web_threads_option and platform == .browser;
     if (platform == .browser) web_build.configureWasmTarget(&target, web_threads, optimize);
 
+    const backend = backendOption(b, target.result);
+
+    const core = addCoreModules(b, target, optimize);
+    const test_step = b.step("test", "Run tests");
+    addCoreTests(b, test_step, &core, target, optimize);
+    // With `none`, the modules of `addBackends` do not exist: `module("knots")`,
+    // `module("window")`, `module("gpu")` and `module("renderer")` fail by name.
+    const gpu_backend = backend.gpuBackend() orelse return;
+
+    addBackends(b, test_step, &core, target, optimize, platform, web_threads, gpu_backend);
+}
+
+/// `-Dbackend`, or the target's default. `-Dgpu_backend` is the older name of the same choice,
+/// without `none`; it stays accepted so that existing builds keep working.
+fn backendOption(b: *std.Build, target: std.Target) Backend {
+    const backend = b.option(Backend, "backend", "What to build around the UI core: none (core only), vulkan or webgpu. Default: the target's GPU backend.");
+    const legacy = b.option(GPUBackend, "gpu_backend", "Deprecated: use -Dbackend.");
+    if (backend) |chosen| {
+        if (legacy) |old| {
+            if (Backend.fromGpu(old) != chosen) std.debug.panic("knots: -Dbackend={t} and -Dgpu_backend={t} disagree; set only -Dbackend", .{ chosen, old });
+        }
+        return chosen;
+    }
+    if (legacy) |old| return .fromGpu(old);
+    return .fromGpu(defaultGpuBackend(target));
+}
+
+fn addCoreModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) Core {
+    const test_font = b.path("src/ui/fonts/default.ttf");
+
+    const input_mod = b.addModule("input", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/input/root.zig"),
+    });
+
+    const math_mod = b.addModule("math", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/math/root.zig"),
+    });
+
+    const render_mod = b.addModule("render", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/render/root.zig"),
+        .imports = &.{
+            .{ .name = "math", .module = math_mod },
+        },
+    });
+    addRenderShaderSources(b, render_mod);
+
+    const unicode_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/unicode/root.zig"),
+    });
+
+    const text_edit_mod = b.addModule("text_edit", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/text_edit/root.zig"),
+        .imports = &.{
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+        },
+    });
+
+    const font_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/font/root.zig"),
+    });
+    font_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
+
+    const shape_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/shape/root.zig"),
+        .imports = &.{
+            .{ .name = "font", .module = font_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+        },
+    });
+
+    const text_mod = b.addModule("text", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/text/root.zig"),
+        .imports = &.{
+            .{ .name = "font", .module = font_mod },
+            .{ .name = "shape", .module = shape_mod },
+            .{ .name = "unicode", .module = unicode_mod },
+            .{ .name = "render", .module = render_mod },
+        },
+    });
+    text_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
+
+    const layout_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/layout/root.zig"),
+        .imports = &.{.{ .name = "math", .module = math_mod }},
+    });
+
+    const style_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/style/root.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = layout_mod },
+            .{ .name = "math", .module = math_mod },
+            .{ .name = "render", .module = render_mod },
+        },
+    });
+
+    const ui_mod = b.addModule("ui", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/ui/root.zig"),
+        .imports = &.{
+            .{ .name = "layout", .module = layout_mod },
+            .{ .name = "style", .module = style_mod },
+            .{ .name = "text", .module = text_mod },
+            .{ .name = "input", .module = input_mod },
+            .{ .name = "text_edit", .module = text_edit_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "math", .module = math_mod },
+        },
+    });
+
+    return .{
+        .input = input_mod,
+        .math = math_mod,
+        .render = render_mod,
+        .unicode = unicode_mod,
+        .text_edit = text_edit_mod,
+        .font = font_mod,
+        .shape = shape_mod,
+        .text = text_mod,
+        .layout = layout_mod,
+        .style = style_mod,
+        .ui = ui_mod,
+    };
+}
+
+fn addCoreTests(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    core: *const Core,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const modules = [_]*std.Build.Module{
+        core.render,
+        core.layout,
+        core.style,
+        core.ui,
+        core.text,
+        core.unicode,
+        core.font,
+        core.shape,
+        core.math,
+        core.input,
+        core.text_edit,
+    };
+    for (modules) |module| {
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
+    }
+
+    const public_render_consumer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/public_render_consumer.zig"),
+            .imports = &.{
+                .{ .name = "render", .module = core.render },
+            },
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
+}
+
+/// The window, GPU and renderer modules, the `knots` app module and their tests.
+/// Each third-party package here is lazy, so a `-Dbackend=none` build never fetches it.
+fn addBackends(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    core: *const Core,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    platform: Platform,
+    web_threads: bool,
+    gpu_backend: GPUBackend,
+) void {
+    const input_mod = core.input;
+    const math_mod = core.math;
+    const render_mod = core.render;
+    const text_mod = core.text;
+    const layout_mod = core.layout;
+    const ui_mod = core.ui;
+
     const accesskit_dep = if (platform == .native)
         b.dependency("accesskit", .{ .target = target, .optimize = optimize })
     else
         null;
-
-    const gpu_backend =
-        b.option(GPUBackend, "gpu_backend", "GPU backend to compile into knots.") orelse
-        defaultGpuBackend(target.result);
 
     const js_bridge_mod = if (platform == .browser)
         b.dependency("js_bridge", .{ .target = target, .optimize = optimize }).module("js-bridge")
@@ -153,12 +395,6 @@ pub fn build(b: *std.Build) void {
     });
     gpu_impl_mod.addImport("gpu", gpu_mod);
 
-    const input_mod = b.addModule("input", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/input/root.zig"),
-    });
-
     var gpu_opts = b.addOptions();
     gpu_opts.addOption(GPUBackend, "backend", gpu_backend);
     gpu_mod.addOptions("config", gpu_opts);
@@ -202,7 +438,9 @@ pub fn build(b: *std.Build) void {
                 });
             },
             .linux => {
-                const scanner = WaylandScanner.create(b, .{});
+                // Lazy, so that a `-Dbackend=none` build never fetches zig-wayland.
+                const wayland_build = b.lazyImport(@This(), "wayland") orelse return;
+                const scanner = wayland_build.Scanner.create(b, .{});
                 buildTool(scanner.run.producer.?);
                 scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
                 scanner.addSystemProtocol("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml");
@@ -264,70 +502,7 @@ pub fn build(b: *std.Build) void {
     window_impl_mod.addImport("input", input_mod);
     window_mod.addImport("input", input_mod);
 
-    const math_mod = b.addModule("math", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/math/root.zig"),
-    });
-
-    const render_mod = b.addModule("render", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/render/root.zig"),
-        .imports = &.{
-            .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "math", .module = math_mod },
-        },
-    });
-
-    const test_font = b.path("src/ui/fonts/default.ttf");
-
-    const unicode_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/unicode/root.zig"),
-    });
-
-    const text_edit_mod = b.addModule("text_edit", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/text_edit/root.zig"),
-        .imports = &.{
-            .{ .name = "input", .module = input_mod },
-            .{ .name = "unicode", .module = unicode_mod },
-        },
-    });
-    window_mod.addImport("text_edit", text_edit_mod);
-
-    const font_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/font/root.zig"),
-    });
-    font_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
-
-    const shape_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/shape/root.zig"),
-        .imports = &.{
-            .{ .name = "font", .module = font_mod },
-            .{ .name = "unicode", .module = unicode_mod },
-        },
-    });
-
-    const text_mod = b.addModule("text", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/text/root.zig"),
-        .imports = &.{
-            .{ .name = "font", .module = font_mod },
-            .{ .name = "shape", .module = shape_mod },
-            .{ .name = "unicode", .module = unicode_mod },
-            .{ .name = "render", .module = render_mod },
-        },
-    });
-    text_mod.addAnonymousImport("test_font", .{ .root_source_file = test_font });
+    window_mod.addImport("text_edit", core.text_edit);
 
     const renderer_mod = b.addModule("renderer", .{
         .target = target,
@@ -345,54 +520,20 @@ pub fn build(b: *std.Build) void {
     // Shader sources are always attached and gated by lazy analysis; only the
     // build-step SPIR-V blobs need a compile-time flag.
     render_shader_opts.addOption(bool, "has_spirv_shaders", gpu_backend == .vulkan);
-    render_mod.addOptions("shader_config", render_shader_opts);
+    renderer_mod.addOptions("shader_config", render_shader_opts);
 
-    addRenderShaderSources(b, render_mod);
     if (gpu_backend == .vulkan) {
-        embedSpirV(b, optimize, render_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
-        embedSpirV(b, optimize, render_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
-        embedSpirV(b, optimize, render_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
-        embedSpirV(b, optimize, render_mod, "primitives_frag_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_fragment.zig"));
-        embedSpirV(b, optimize, render_mod, "slug_frag_spv", b.path("src/gpu/backend/vulkan/shaders/slug_fragment.zig"));
-        embedSpirV(b, optimize, render_mod, "backdrop_blur_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_vertex.zig"));
-        embedSpirV(b, optimize, render_mod, "backdrop_blur_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_fragment.zig"));
-        embedSpirV(b, optimize, render_mod, "backdrop_glass_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_vertex.zig"));
-        embedSpirV(b, optimize, render_mod, "backdrop_glass_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_fragment.zig"));
+        embedSpirV(b, optimize, renderer_mod, "primitives_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_vertex.zig"));
+        embedSpirV(b, optimize, renderer_mod, "primitives_instance_vert_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_instance_vertex.zig"));
+        embedSpirV(b, optimize, renderer_mod, "slug_vert_spv", b.path("src/gpu/backend/vulkan/shaders/slug_vertex.zig"));
+        embedSpirV(b, optimize, renderer_mod, "primitives_frag_spv", b.path("src/gpu/backend/vulkan/shaders/ui_primitives_fragment.zig"));
+        embedSpirV(b, optimize, renderer_mod, "slug_frag_spv", b.path("src/gpu/backend/vulkan/shaders/slug_fragment.zig"));
+        embedSpirV(b, optimize, renderer_mod, "backdrop_blur_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_vertex.zig"));
+        embedSpirV(b, optimize, renderer_mod, "backdrop_blur_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_blur_fragment.zig"));
+        embedSpirV(b, optimize, renderer_mod, "backdrop_glass_vert_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_vertex.zig"));
+        embedSpirV(b, optimize, renderer_mod, "backdrop_glass_frag_spv", b.path("src/gpu/backend/vulkan/shaders/backdrop_glass_fragment.zig"));
     }
 
-    const layout_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/layout/root.zig"),
-        .imports = &.{.{ .name = "math", .module = math_mod }},
-    });
-
-    const style_mod = b.createModule(.{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/style/root.zig"),
-        .imports = &.{
-            .{ .name = "layout", .module = layout_mod },
-            .{ .name = "math", .module = math_mod },
-            .{ .name = "render", .module = render_mod },
-        },
-    });
-
-    const ui_mod = b.addModule("ui", .{
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("src/ui/root.zig"),
-        .imports = &.{
-            .{ .name = "layout", .module = layout_mod },
-            .{ .name = "style", .module = style_mod },
-            .{ .name = "text", .module = text_mod },
-            .{ .name = "input", .module = input_mod },
-            .{ .name = "text_edit", .module = text_edit_mod },
-            .{ .name = "gpu", .module = gpu_mod },
-            .{ .name = "render", .module = render_mod },
-            .{ .name = "math", .module = math_mod },
-        },
-    });
     const native_accessibility_mod = if (accesskit_dep) |accesskit| blk: {
         const native_accessibility = b.addModule("native_accessibility", .{
             .target = target,
@@ -436,29 +577,8 @@ pub fn build(b: *std.Build) void {
     if (native_accessibility_mod) |native_accessibility| mod.addImport("native_accessibility", native_accessibility);
 
     const mod_tests = b.addTest(.{ .root_module = mod });
-    const layout_tests = b.addTest(.{ .root_module = layout_mod });
-    const style_tests = b.addTest(.{ .root_module = style_mod });
-    const ui_tests = b.addTest(.{ .root_module = ui_mod });
-    const text_tests = b.addTest(.{ .root_module = text_mod });
-    const unicode_tests = b.addTest(.{ .root_module = unicode_mod });
-    const font_tests = b.addTest(.{ .root_module = font_mod });
-    const shape_tests = b.addTest(.{ .root_module = shape_mod });
-    const math_tests = b.addTest(.{ .root_module = math_mod });
-    const input_tests = b.addTest(.{ .root_module = input_mod });
-    const text_edit_tests = b.addTest(.{ .root_module = text_edit_mod });
     const window_tests = b.addTest(.{ .root_module = window_mod });
     const window_impl_tests = b.addTest(.{ .root_module = window_impl_mod });
-    const public_render_consumer_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-            .root_source_file = b.path("tests/public_render_consumer.zig"),
-            .imports = &.{
-                .{ .name = "render", .module = render_mod },
-            },
-        }),
-    });
-
     const embedded_view_consumer_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .target = target,
@@ -472,11 +592,8 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const render_tests = b.addTest(.{ .root_module = render_mod });
     const renderer_tests = b.addTest(.{ .root_module = renderer_mod });
 
-    const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&b.addRunArtifact(render_tests).step);
     test_step.dependOn(&b.addRunArtifact(renderer_tests).step);
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     if (platform == .native and gpu_backend == .vulkan) {
@@ -485,19 +602,8 @@ pub fn build(b: *std.Build) void {
     if (native_accessibility_mod) |native_accessibility| {
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = native_accessibility })).step);
     }
-    test_step.dependOn(&b.addRunArtifact(layout_tests).step);
-    test_step.dependOn(&b.addRunArtifact(style_tests).step);
-    test_step.dependOn(&b.addRunArtifact(ui_tests).step);
-    test_step.dependOn(&b.addRunArtifact(text_tests).step);
-    test_step.dependOn(&b.addRunArtifact(unicode_tests).step);
-    test_step.dependOn(&b.addRunArtifact(font_tests).step);
-    test_step.dependOn(&b.addRunArtifact(shape_tests).step);
-    test_step.dependOn(&b.addRunArtifact(math_tests).step);
-    test_step.dependOn(&b.addRunArtifact(input_tests).step);
-    test_step.dependOn(&b.addRunArtifact(text_edit_tests).step);
     test_step.dependOn(&b.addRunArtifact(window_tests).step);
     test_step.dependOn(&b.addRunArtifact(window_impl_tests).step);
-    test_step.dependOn(&b.addRunArtifact(public_render_consumer_tests).step);
     test_step.dependOn(&b.addRunArtifact(embedded_view_consumer_tests).step);
     if (platform == .native) {
         const snapshot_exe = b.addExecutable(.{

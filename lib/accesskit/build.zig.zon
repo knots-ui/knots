@@ -6,6 +6,7 @@
         .release = .{
             .url = "https://github.com/AccessKit/accesskit-c/releases/download/0.23.0/accesskit-c-0.23.0.zip",
             .hash = "N-V-__8AAEFGZhErLHq9UH3Pw21WPLBLfjYaqLIboPjbQHTB",
+            .lazy = true,
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "patch_archive.zig" },

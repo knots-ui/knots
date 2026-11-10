@@ -165,7 +165,7 @@ fn check(self: *Runner, name: []const u8, capture: capture_utils.Frame) !bool {
     const cwd = std.Io.Dir.cwd();
     const baseline_data = cwd.readFileAlloc(self.io, baseline_path, self.allocator, .limited(64 * 1024 * 1024)) catch |err| {
         if (err == error.FileNotFound) {
-            std.log.err("missing snapshot '{s}'; run: zig build update-snapshots -Dgpu_backend={s}", .{ baseline_path, self.backend });
+            std.log.err("missing snapshot '{s}'; run: zig build update-snapshots -Dbackend={s}", .{ baseline_path, self.backend });
             return false;
         }
         return err;
