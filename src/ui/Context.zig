@@ -1447,6 +1447,60 @@ test "wheel scroll over container updates offset" {
     try testing.expectApproxEqAbs(25, s.offset[1], 0.001);
 }
 
+const PopupOverScroll = struct {
+    fn build(u: *UI, popup_overflow: Element.Overflow) !void {
+        _ = try u.open(.str("root"), .{ .width = .fixed(300), .height = .fixed(200), .direction = .column, .overflow = .scroll_y }, .none);
+        {
+            _ = try u.open(.str("child"), .{ .width = .grow(), .height = .fixed(1000) }, .none);
+            u.close();
+        }
+        u.close();
+        _ = try u.open(.str("popup"), .{ .width = .fixed(100), .height = .fixed(100), .direction = .column, .overflow = popup_overflow, .z_index = Layer.popup.z }, .none);
+        {
+            _ = try u.open(.str("item"), .{ .width = .grow(), .height = .fixed(400) }, .none);
+            u.close();
+        }
+        u.close();
+    }
+
+    fn wheel(ui: *UI, pos: [2]f64) !void {
+        try resolveWindow(ui, .{
+            .pos = pos,
+            .scroll = .{ .pixel = .{ 0, 25 } },
+            .shift_held = false,
+            .ctrl_held = false,
+            .super_held = false,
+        }, 0, 0);
+    }
+
+    fn offset(ui: *UI, key: []const u8) f32 {
+        const s = ui.state.get(.scroll, Key.str(key).hash()) orelse return 0;
+        return s.offset[1];
+    }
+};
+
+test "wheel scroll over a popup does not scroll the container under it" {
+    var ui = try UI.init(testing.allocator, .{});
+    defer ui.deinit();
+    try PopupOverScroll.build(&ui, .visible);
+    try resolve(&ui);
+    try PopupOverScroll.wheel(&ui, .{ 50, 50 });
+    try testing.expectApproxEqAbs(0, PopupOverScroll.offset(&ui, "root"), 0.001);
+    // Outside the popup, the container scrolls.
+    try PopupOverScroll.wheel(&ui, .{ 200, 150 });
+    try testing.expectApproxEqAbs(25, PopupOverScroll.offset(&ui, "root"), 0.001);
+}
+
+test "wheel scroll over a scrolling popup scrolls the popup" {
+    var ui = try UI.init(testing.allocator, .{});
+    defer ui.deinit();
+    try PopupOverScroll.build(&ui, .scroll_y);
+    try resolve(&ui);
+    try PopupOverScroll.wheel(&ui, .{ 50, 50 });
+    try testing.expectApproxEqAbs(25, PopupOverScroll.offset(&ui, "popup"), 0.001);
+    try testing.expectApproxEqAbs(0, PopupOverScroll.offset(&ui, "root"), 0.001);
+}
+
 const CullingTest = struct {
     const rows = 100;
     const row_height = 40;
