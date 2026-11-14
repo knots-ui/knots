@@ -2065,6 +2065,44 @@ const EdgePopupTest = struct {
     }
 };
 
+fn wheelTestInput(pos: [2]f64) input_types.FrameInput {
+    var frame_input = textEditTestInput(pos, .{}, &.{});
+    frame_input.input.scroll = .{ .pixel = .{ 0, 25 } };
+    return frame_input;
+}
+
+test "a wheel outside an open menu closes it, and a wheel on its popup keeps it open" {
+    var view = try Context.init(testing.allocator, .{});
+    defer view.deinit();
+    var color: @import("style").Color = .rgba(255, 0, 0, 255);
+    const t: EdgePopupTest = .{ .color = &color };
+    const menu_pos = [2]f64{ 358, 14 };
+    const open_menu = textEditTestClick(menu_pos);
+    const hover_menu = textEditTestInput(menu_pos, .{}, &.{});
+    const menu_id = Key.str("menu").hash();
+    for ([_]input_types.FrameInput{ hover_menu, open_menu[0], open_menu[1], hover_menu }) |step| {
+        var f = try view.beginFrame(step);
+        try t.frame(&f);
+        _ = try view.endFrame(&f);
+    }
+    const s = view.ui.state.get(.menu_button, menu_id).?;
+    try testing.expect(s.open);
+    const popup = s.popup_box;
+    try testing.expect(popup.w() > 0);
+
+    const inside = [2]f64{ popup.x() + popup.w() / 2, popup.y() + popup.h() / 2 };
+    var f = try view.beginFrame(wheelTestInput(inside));
+    try t.frame(&f);
+    _ = try view.endFrame(&f);
+    try testing.expect(view.ui.state.get(.menu_button, menu_id).?.open);
+
+    // Over the menu button: the button scrolls with its row, so the menu closes too.
+    f = try view.beginFrame(wheelTestInput(menu_pos));
+    try t.frame(&f);
+    _ = try view.endFrame(&f);
+    try testing.expect(!view.ui.state.get(.menu_button, menu_id).?.open);
+}
+
 test "popups near the right edge end-align to their anchor" {
     var view = try Context.init(testing.allocator, .{});
     defer view.deinit();

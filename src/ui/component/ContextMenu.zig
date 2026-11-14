@@ -38,6 +38,12 @@ pub fn ContextMenu(comptime Menu: type) type {
                 ui.input.consumeKeyboard();
             }
 
+            // The wheel moves what is under the menu; the menu does not follow it, so it closes.
+            if (s.open and !ui.input.scroll.isZero() and !containsInputPoint(s.popup_box, ui.input.mouse_pos)) {
+                s.open = false;
+                frame.requestRedraw();
+            }
+
             if (ui.input.mouseButton(.right).pressed and ui.isHoveredWithin(id)) {
                 openAtPointer(s, ui.input.mouse_pos);
                 frame.requestRedraw();

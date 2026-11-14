@@ -37,6 +37,12 @@ pub fn MenuButton(comptime Menu: type) type {
                 frame.requestRedraw();
             }
 
+            // The wheel moves what is under the menu, the button too; the menu does not follow it, so it closes.
+            if (s.open and !ui.input.scroll.isZero() and !containsInputPoint(s.popup_box, ui.input.mouse_pos)) {
+                s.open = false;
+                frame.requestRedraw();
+            }
+
             if (ui.leftPressed(id, .exact)) {
                 s.open = !s.open;
                 frame.requestRedraw();
