@@ -339,16 +339,22 @@ fn renderFrame(
     viewport.timer.tick(self.io);
 
     if (viewport.window.consumeResize()) |event| {
-        if (event.physical.width == 0 or
-            event.physical.height == 0)
-        {
-            return;
+        if (event.physical.width != 0 and event.physical.height != 0) {
+            try viewport.renderer.resize(
+                event.physical.width,
+                event.physical.height,
+            );
         }
+    }
 
-        try viewport.renderer.resize(
-            event.physical.width,
-            event.physical.height,
-        );
+    // A minimized window reports a zero extent on every frame, not only on the
+    // one that consumes its resize.
+    const logical_extent = viewport.window.getSize();
+    const physical_extent = viewport.window.getFramebufferSize();
+    if (logical_extent.width == 0 or logical_extent.height == 0 or
+        physical_extent.width == 0 or physical_extent.height == 0)
+    {
+        return;
     }
 
     viewport.applyRendererReconfigure();
@@ -379,8 +385,8 @@ fn renderFrame(
                 viewport.timer.delta.nanoseconds,
             ),
         ),
-        .logical_extent = viewport.window.getSize(),
-        .physical_extent = viewport.window.getFramebufferSize(),
+        .logical_extent = logical_extent,
+        .physical_extent = physical_extent,
         .content_scale = viewport.window.getContentScale(),
         .paste_text = paste_text,
         .dropped_paths = dropped_paths,

@@ -164,6 +164,11 @@ pub const Backend = struct {
     }
 
     pub fn requestFrame(self: *const Self, _: *window.Window) void {
+        // Windows still sends WM_PAINT to a minimized window, whose frames are
+        // skipped. Restoring it sends WM_SIZE, which requests the next frame.
+        if (win32.IsIconic(self.hwnd) != 0) {
+            return;
+        }
         _ = win32.InvalidateRect(self.hwnd, null, 0);
     }
 
