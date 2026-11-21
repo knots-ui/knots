@@ -68,6 +68,20 @@ fn backgroundBrush(hwnd: win32.HWND) ?win32.HBRUSH {
     return @ptrFromInt(raw);
 }
 
+/// HTMAXBUTTON from hitTestClient is the app's own button, inside the client
+/// area. A native caption's maximize button is outside it and belongs to
+/// DefWindowProc.
+fn isAppMaxButton(hwnd: win32.HWND, wparam: win32.WPARAM, lparam: win32.LPARAM) bool {
+    if (wparam != win32.HTMAXBUTTON) {
+        return false;
+    }
+    var pt = lparamPoint(lparam);
+    _ = win32.ScreenToClient(hwnd, &pt);
+    var client: win32.RECT = undefined;
+    _ = win32.GetClientRect(hwnd, &client);
+    return win32.PtInRect(&client, pt) != 0;
+}
+
 fn resizeBorder(hwnd: win32.HWND) i32 {
     const dpi = win32.GetDpiForWindow(hwnd);
     return win32.GetSystemMetricsForDpi(@intCast(@backingInt(win32.SM_CYSIZEFRAME)), dpi) +
@@ -729,7 +743,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
         },
         win32.WM_NCMOUSEMOVE => {
             const o = ownerOf(hwnd) orelse return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
-            if (wparam != win32.HTMAXBUTTON) {
+            if (!isAppMaxButton(hwnd, wparam, lparam)) {
                 o.pointerLeft();
                 return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
             }
@@ -741,7 +755,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             return 0;
         },
         win32.WM_NCLBUTTONDOWN, win32.WM_NCLBUTTONDBLCLK => {
-            if (wparam != win32.HTMAXBUTTON) {
+            if (!isAppMaxButton(hwnd, wparam, lparam)) {
                 return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
             }
 
@@ -754,7 +768,7 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             return 0;
         },
         win32.WM_NCLBUTTONUP => {
-            if (wparam != win32.HTMAXBUTTON) {
+            if (!isAppMaxButton(hwnd, wparam, lparam)) {
                 return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
             }
 
