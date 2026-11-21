@@ -15,6 +15,8 @@ const system_theme_registry_key = std.unicode.utf8ToUtf16LeStringLiteral("Softwa
 const WHEEL_PAGESCROLL: u32 = std.math.maxInt(u32);
 // Set before the owner is attached, since WM_NCCALCSIZE runs during creation.
 const extra_undecorated: win32.WINDOW_LONG_PTR_INDEX = @fromBackingInt(@intCast(0));
+// Read from the window because the first WM_ERASEBKGND comes from UpdateWindow in init.
+const extra_background: win32.WINDOW_LONG_PTR_INDEX = @fromBackingInt(@intCast(@sizeOf(usize)));
 const WheelAxis = enum { x, y };
 var class_registered: bool = false;
 
@@ -56,6 +58,14 @@ fn screenMousePos(hwnd: win32.HWND, lparam: win32.LPARAM) [2]f64 {
 
 fn isUndecorated(hwnd: win32.HWND) bool {
     return win32.GetWindowLongPtrW(hwnd, extra_undecorated) != 0;
+}
+
+fn backgroundBrush(hwnd: win32.HWND) ?win32.HBRUSH {
+    const raw: usize = @bitCast(win32.GetWindowLongPtrW(hwnd, extra_background));
+    if (raw == 0) {
+        return null;
+    }
+    return @ptrFromInt(raw);
 }
 
 fn resizeBorder(hwnd: win32.HWND) i32 {
@@ -127,8 +137,12 @@ pub const Backend = struct {
     const Self = @This();
 
     pub fn deinit(self: *const Self) void {
+        const brush = backgroundBrush(self.hwnd);
         _ = win32.SetWindowLongPtrW(self.hwnd, win32.GWLP_USERDATA, 0);
         _ = win32.DestroyWindow(self.hwnd);
+        if (brush) |b| {
+            _ = win32.DeleteObject(b);
+        }
     }
 
     pub fn startCapture(self: *Self, owner: *window.Window) void {
@@ -448,7 +462,7 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
             .style = .{ .HREDRAW = 1, .VREDRAW = 1 },
             .lpfnWndProc = wndProc,
             .cbClsExtra = 0,
-            .cbWndExtra = @sizeOf(usize),
+            .cbWndExtra = 2 * @sizeOf(usize),
             .hInstance = hinstance,
             .hIcon = null,
             .hCursor = win32.LoadCursorW(null, win32.IDC_ARROW),
@@ -503,6 +517,13 @@ pub fn init(_: std.Io, allocator: std.mem.Allocator, cfg: window.Config) !Backen
         hinstance,
         null,
     ) orelse return error.CreateWindowFailed;
+
+    if (cfg.background) |rgb| {
+        const color: win32.COLORREF = @as(u32, rgb[0]) | (@as(u32, rgb[1]) << 8) | (@as(u32, rgb[2]) << 16);
+        if (win32.CreateSolidBrush(color)) |brush| {
+            _ = win32.SetWindowLongPtrW(hwnd, extra_background, @bitCast(@intFromPtr(brush)));
+        }
+    }
 
     if (cfg.decorations == .none) {
         _ = win32.SetWindowLongPtrW(hwnd, extra_undecorated, 1);
@@ -628,6 +649,13 @@ fn wndProc(hwnd: win32.HWND, msg: u32, wparam: win32.WPARAM, lparam: win32.LPARA
             return 0;
         },
         win32.WM_DESTROY => return 0,
+        win32.WM_ERASEBKGND => {
+            const brush = backgroundBrush(hwnd) orelse return win32.DefWindowProcW(hwnd, msg, wparam, lparam);
+            var rect: win32.RECT = undefined;
+            _ = win32.GetClientRect(hwnd, &rect);
+            _ = win32.FillRect(@ptrFromInt(wparam), &rect, brush);
+            return 1;
+        },
         win32.WM_PAINT => {
             var paint: win32.PAINTSTRUCT = undefined;
             _ = win32.BeginPaint(hwnd, &paint);

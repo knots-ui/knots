@@ -364,6 +364,16 @@ fn initWindow(cfg: window.Config) !Backend {
         .width = @floatFromInt(size.width),
         .height = @floatFromInt(size.height),
     }});
+    if (cfg.background) |rgb| {
+        const NSColor = objc.getClass("NSColor").?;
+        const color = NSColor.msgSend(objc.Object, "colorWithSRGBRed:green:blue:alpha:", .{
+            @as(f64, @floatFromInt(rgb[0])) / 255.0,
+            @as(f64, @floatFromInt(rgb[1])) / 255.0,
+            @as(f64, @floatFromInt(rgb[2])) / 255.0,
+            @as(f64, 1.0),
+        });
+        ns_window.msgSend(void, "setBackgroundColor:", .{color});
+    }
     ns_window.msgSend(void, "setReleasedWhenClosed:", .{ak.boolParam(false)});
     ns_window.msgSend(void, "setAcceptsMouseMovedEvents:", .{ak.boolParam(true)});
     ns_window.msgSend(void, "center", .{});

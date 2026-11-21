@@ -18,6 +18,9 @@ pub const Config = struct {
     max_size: ?input.Size = null,
     canvas_selector: ?[:0]const u8 = null,
     decorations: Decorations = .native,
+    /// sRGB color the window shows until its first frame is presented.
+    /// `App` fills it from the UI theme's background when left null.
+    background: ?[3]u8 = null,
     /// Wayland app ID, which desktops match against a .desktop file. Defaults to the executable name.
     app_id: ?[]const u8 = null,
 };
