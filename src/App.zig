@@ -11,6 +11,8 @@ const Window = window.Window;
 const WindowConfig = window.Config;
 const UI = @import("ui").UI;
 const Frame = @import("ui").Frame;
+const Theme = @import("ui").Theme;
+const Color = @import("ui").Color;
 
 const CompletionQueue = @import("CompletionQueue.zig");
 const ReturnType = @import("util.zig").ReturnType;
@@ -57,7 +59,7 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, cfg: Config) !App {
     var main_window = try Window.init(
         io,
         allocator,
-        cfg.window,
+        themedWindowConfig(cfg.window, &cfg.ui.theme),
     );
     var main_window_owned = true;
     errdefer if (main_window_owned) main_window.deinit();
@@ -191,6 +193,7 @@ pub fn openWindow(self: *App, source_id: Viewport.Id, cfg: OpenWindowConfig, fra
     );
 
     const id = try self.allocateViewportId();
+    const ui_cfg = cfg.ui orelse source.ui_cfg;
 
     const viewport = try Viewport.createSecondary(
         self.allocator,
@@ -198,10 +201,10 @@ pub fn openWindow(self: *App, source_id: Viewport.Id, cfg: OpenWindowConfig, fra
         self.render_context,
         &self.main_viewport.window,
         id,
-        cfg.window,
+        themedWindowConfig(cfg.window, &ui_cfg.theme),
         cfg.renderer orelse source.renderer.cfg,
         .{
-            .ui = cfg.ui orelse source.ui_cfg,
+            .ui = ui_cfg,
             .arena_reset_mode = self.cfg.arena_reset_mode,
             .timer_clock = self.cfg.timer_clock,
             .accessibility = self.cfg.accessibility,
@@ -339,16 +342,22 @@ fn renderFrame(
     viewport.timer.tick(self.io);
 
     if (viewport.window.consumeResize()) |event| {
-        if (event.physical.width == 0 or
-            event.physical.height == 0)
-        {
-            return;
+        if (event.physical.width != 0 and event.physical.height != 0) {
+            try viewport.renderer.resize(
+                event.physical.width,
+                event.physical.height,
+            );
         }
+    }
 
-        try viewport.renderer.resize(
-            event.physical.width,
-            event.physical.height,
-        );
+    // A minimized window reports a zero extent on every frame, not only on the
+    // one that consumes its resize.
+    const logical_extent = viewport.window.getSize();
+    const physical_extent = viewport.window.getFramebufferSize();
+    if (logical_extent.width == 0 or logical_extent.height == 0 or
+        physical_extent.width == 0 or physical_extent.height == 0)
+    {
+        return;
     }
 
     viewport.applyRendererReconfigure();
@@ -379,8 +388,8 @@ fn renderFrame(
                 viewport.timer.delta.nanoseconds,
             ),
         ),
-        .logical_extent = viewport.window.getSize(),
-        .physical_extent = viewport.window.getFramebufferSize(),
+        .logical_extent = logical_extent,
+        .physical_extent = physical_extent,
         .content_scale = viewport.window.getContentScale(),
         .paste_text = paste_text,
         .dropped_paths = dropped_paths,
@@ -637,6 +646,18 @@ fn wakeCompletion(context: *anyopaque) void {
     );
 
     main_window.postEmptyEvent();
+}
+
+fn themedWindowConfig(cfg: WindowConfig, theme: *const Theme) WindowConfig {
+    var themed = cfg;
+    if (themed.background == null) {
+        var rgb: [3]u8 = undefined;
+        for (&rgb, theme.bg.value[0..3]) |*out, linear| {
+            out.* = @intFromFloat(@round(std.math.clamp(Color.linearToSrgb(linear), 0, 1) * 255));
+        }
+        themed.background = rgb;
+    }
+    return themed;
 }
 
 fn freeDroppedPaths(allocator: std.mem.Allocator, paths: []const []const u8) void {
